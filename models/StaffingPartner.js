@@ -8,6 +8,7 @@ const staffingPartnerSchema = new mongoose.Schema({
     required: true,
     unique: true
   },
+
   // Basic Info
   firstName: {
     type: String,
@@ -43,6 +44,15 @@ const staffingPartnerSchema = new mongoose.Schema({
 
   // Firm/Organization Details
   firmDetails: {
+    // ✅ NEW: Brand / Trade Name
+    tradeName: { type: String, trim: true },
+
+    // ✅ NEW: Entity Type
+    entityType: {
+      type: String,
+      enum: ['proprietor', 'partnership', 'llp', 'pvt_ltd', 'agency']
+    },
+
     registeredName: String,
     gstNumber: String,
     panNumber: String,
@@ -61,15 +71,31 @@ const staffingPartnerSchema = new mongoose.Schema({
     }
   },
 
-  // Syncro1 Competency
+  // Syncro1 Competency (UPDATED as per doc)
   Syncro1Competency: {
-    industries: [String],
-    functionalAreas: [String],
-    experienceLevels: [{
+    // ✅ RENAMED from industries
+    primaryHiringSectors: [String],
+
+    // ✅ RENAMED from experienceLevels
+    hiringLevels: [{
       type: String,
-      enum: ['Entry', 'Mid', 'Senior', 'Executive', 'C-Suite']
+      enum: ['Entry', 'Mid', 'Senior', 'Leadership']
     }],
-    averagePlacements: Number,
+
+    // ✅ NEW: Avg CTC Range Handled
+    avgCtcRangeHandled: {
+      type: String,
+      enum: ['0-5 LPA', '5-20 LPA', '20-35 LPA', '35+ LPA']
+    },
+
+    // ✅ NEW: Average Monthly Closures
+    averageMonthlyClosures: Number,
+
+    // ✅ NEW: Years of Recruitment Experience
+    yearsOfRecruitmentExperience: Number,
+
+    // Existing / optional fields (still useful)
+    functionalAreas: [String],
     topClients: [String],
     specializations: [String]
   },
@@ -119,15 +145,29 @@ const staffingPartnerSchema = new mongoose.Schema({
     cancelledCheque: String
   },
 
-  // Documents
-  documents: {
-    panCard: String,
-    gstCertificate: String,
-    registrationCertificate: String,
-    addressProof: String,
-    cancelledCheque: String
+  // ✅ NEW: Payout Preferences (Tax + Entity)
+  payoutPreferences: {
+    payoutEntityName: { type: String, trim: true },
+    gstRegistration: {
+      type: String,
+      enum: ['regular', 'composition', 'unregister'],
+      default: 'unregister'
+    },
+    tdsApplicable: {
+      type: Boolean,
+      default: true
+    }
   },
 
+  // Documents
+ documents: {
+  panCard: String,
+  gstCertificate: String,
+  incorporationCertificate: String,     // ✅ NEW
+  cancelledCheque: String,
+  authorizedSignatoryProof: String,     // ✅ NEW
+  addressProof: String
+},
   // Subscription
   subscription: {
     plan: {
@@ -194,7 +234,10 @@ const staffingPartnerSchema = new mongoose.Schema({
     Syncro1Competency: { type: Boolean, default: false },
     geographicReach: { type: Boolean, default: false },
     compliance: { type: Boolean, default: false },
-    financeDetails: { type: Boolean, default: false }
+    financeDetails: { type: Boolean, default: false },
+
+    // ✅ NEW (optional but included)
+    payoutPreferences: { type: Boolean, default: false }
   },
 
   isActive: {

@@ -41,24 +41,44 @@ const limiter = rateLimit({
   legacyHeaders: false,
 });
 
-// Apply rate limiting to API routes
-app.use('/api', limiter);
-
 // More strict rate limiting for auth routes
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60 * 1000, // 15 minutes
   max: 20,
   message: {
     success: false,
     message: 'Too many authentication attempts, please try again after 15 minutes'
-  }
+  },
 });
-app.use('/api/auth', authLimiter);
 
-// Body parser
+// Conditionally apply rate limiting based on environment variable
+const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== 'false';
+
+if (rateLimitEnabled) {
+  app.use('/api', limiter);
+  app.use('/api/auth', authLimiter);
+  console.log('✅ Rate limiting enabled');
+} else {
+  console.log('⏸️ Rate limiting disabled');
+}
+
+
+// ✅ Parse JSON first
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// ✅ Parse cookies BEFORE routes so req.cookies exists
+app.use(cookieParser());
+
+// ✅ Then enable CORS (so same‑origin credentials work)
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 // Serve static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -73,7 +93,7 @@ app.get('/api/health', (req, res) => {
 });
 
 
-app.use(cookieParser());
+
 
 
 // API Routes
@@ -131,12 +151,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Route ${req.originalUrl} not found`
-  });
+// Serve React build (frontend) after all API routes
+app.use(express.static(path.join(__dirname, '../Syncro1_Frontend/build')));
+
+app.get('*', (req, res) => {
+  res.sendFile(path.resolve(__dirname, '../Syncro1_Frontend/build', 'index.html'));
 });
 
 // Start server

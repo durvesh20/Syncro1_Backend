@@ -11,6 +11,7 @@ const {
   updateGeographicReach,
   updateCompliance,
   updateFinanceDetails,
+  updatePayoutPreferences, 
   submitProfile,
   getAvailableJobs,
   getJobDetails,
@@ -44,6 +45,7 @@ router.put('/profile/Syncro1-competency', updateSyncro1Competency);
 router.put('/profile/geographic-reach', updateGeographicReach);
 router.put('/profile/compliance', updateCompliance);
 router.put('/profile/finance', updateFinanceDetails);
+router.put('/profile/payout-preferences', updatePayoutPreferences); 
 router.post('/profile/submit', submitProfile);
 
 // @desc    Upload KYC Documents

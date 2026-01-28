@@ -32,7 +32,7 @@ class EmailService {
     }
 
     const mailOptions = {
-      from: `Syncro1 <${process.env.SMTP_USER}>`,
+from: `Syncro1 <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
       to: options.to,
       subject: options.subject,
       html: options.html

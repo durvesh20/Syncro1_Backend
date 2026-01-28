@@ -31,15 +31,14 @@ const storage = multer.diskStorage({
       case 'logo':
         uploadPath += 'logos/';
         break;
-      case 'panCard':
-      case 'gstCertificate':
-      case 'registrationCertificate':
-      case 'addressProof':
-      case 'cancelledCheque':
-      case 'incorporationCertificate':
-      case 'authorizedSignatoryProof':
-        uploadPath += 'documents/';
-        break;
+     case 'panCard':
+case 'gstCertificate':
+case 'incorporationCertificate':        // ✅ NEW
+case 'authorizedSignatoryProof':        // ✅ NEW
+case 'addressProof':
+case 'cancelledCheque':
+  uploadPath += 'documents/';
+  break;
       default:
         uploadPath += 'others/';
     }
@@ -107,13 +106,14 @@ module.exports = {
   uploadDocument: upload.single('document'),
 
   // Multiple document uploads for KYC
-  uploadPartnerDocuments: upload.fields([
-    { name: 'panCard', maxCount: 1 },
-    { name: 'gstCertificate', maxCount: 1 },
-    { name: 'registrationCertificate', maxCount: 1 },
-    { name: 'addressProof', maxCount: 1 },
-    { name: 'cancelledCheque', maxCount: 1 }
-  ]),
+uploadPartnerDocuments: upload.fields([
+  { name: 'panCard', maxCount: 1 },
+  { name: 'gstCertificate', maxCount: 1 },
+  { name: 'incorporationCertificate', maxCount: 1 },     
+  { name: 'authorizedSignatoryProof', maxCount: 1 },     
+  { name: 'addressProof', maxCount: 1 },
+  { name: 'cancelledCheque', maxCount: 1 }
+]),
 
   uploadCompanyDocuments: upload.fields([
     { name: 'incorporationCertificate', maxCount: 1 },
