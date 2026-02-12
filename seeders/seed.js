@@ -16,7 +16,7 @@ const { SubscriptionPlan } = require("../models/Subscription");
 const seedDatabase = async () => {
   try {
     // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI);
+await mongoose.connect(process.env.MONGO_URI);
     console.log("📦 Connected to MongoDB");
 
     // Clear existing data (optional - comment out in production)
