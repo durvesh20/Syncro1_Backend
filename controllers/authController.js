@@ -12,13 +12,22 @@ const sendTokenResponse = require('../utils/sendTokenResponse');
 // Check if we should skip mobile OTP (for development)
 const skipMobileOTP = process.env.WHATSAPP_ENABLED !== 'true';
 
+// backend/controllers/authController.js
+
 // @desc    Register Staffing Partner - Step 1 (Basic Info + Send OTPs)
 // @route   POST /api/auth/register/staffing-partner/init
 exports.initStaffingPartnerRegistration = async (req, res) => {
   try {
     const { 
-      firstName, lastName, email, mobile, 
-      firmName, designation, linkedinProfile, city, state 
+      firstName, 
+      lastName, 
+      email, 
+      mobile, 
+      firmName,  // This becomes the legal business name
+      designation, 
+      linkedinProfile, 
+      city, 
+      state 
     } = req.body;
 
     // Validate required fields
@@ -59,16 +68,15 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
         expiresAt: otpService.getExpiryTime()
       },
       tempPassword,
-      // Auto-verify mobile if WhatsApp is disabled
       mobileVerified: skipMobileOTP
     });
 
-    // Create staffing partner profile
+    // Create staffing partner profile with minimal required fields
     await StaffingPartner.create({
       user: user._id,
       firstName,
       lastName,
-      firmName,
+      firmName,  // Legal business name
       designation,
       linkedinProfile,
       city,
@@ -92,7 +100,6 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
         email: user.email,
         mobile: user.mobile,
         skipMobileOTP,
-        // In development, return OTPs for easy testing
         ...(process.env.NODE_ENV === 'development' && {
           devInfo: {
             emailOTP,

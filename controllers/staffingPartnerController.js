@@ -93,7 +93,46 @@ exports.updateFirmDetails = async (req, res) => {
       });
     }
 
-    partner.firmDetails = { ...partner.firmDetails, ...req.body };
+    const {
+      registeredName,
+      tradeName,
+      entityType,
+      yearEstablished,
+      website,
+      registeredOfficeAddress,
+      operatingAddress,
+      panNumber,
+      gstNumber,
+      cinNumber,
+      llpinNumber,
+      employeeCount
+    } = req.body;
+
+    // Handle operating address "same as registered" logic
+    let finalOperatingAddress = operatingAddress;
+    if (operatingAddress?.sameAsRegistered && registeredOfficeAddress) {
+      finalOperatingAddress = {
+        ...registeredOfficeAddress,
+        sameAsRegistered: true
+      };
+    }
+
+    partner.firmDetails = {
+      ...partner.firmDetails,
+      registeredName,
+      tradeName,
+      entityType,
+      yearEstablished,
+      website,
+      registeredOfficeAddress,
+      operatingAddress: finalOperatingAddress,
+      panNumber,
+      gstNumber,
+      cinNumber,
+      llpinNumber,
+      employeeCount
+    };
+
     partner.profileCompletion.firmDetails = true;
     await partner.save();
 
@@ -173,7 +212,7 @@ exports.updateGeographicReach = async (req, res) => {
   }
 };
 
-// @desc    Update Compliance & Sign Agreement
+// @desc    Update Compliance & Ethical Declarations
 // @route   PUT /api/staffing-partners/profile/compliance
 exports.updateCompliance = async (req, res) => {
   try {
@@ -186,22 +225,69 @@ exports.updateCompliance = async (req, res) => {
       });
     }
 
-    const { digitalSignature, termsAccepted, ndaSigned } = req.body;
+    const { syncrotechAgreement, digitalSignature } = req.body;
 
-    partner.compliance = {
-      ...partner.compliance,
-      termsAccepted,
-      ndaSigned,
-      digitalSignature,
-      agreementSigned: termsAccepted && ndaSigned,
-      agreementSignedAt: new Date(),
+    // Get IP address
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const timestamp = new Date();
+
+    // Validate all clauses are accepted
+    const requiredClauses = [
+      'noCvRecycling',
+      'noFakeProfiles',
+      'noDoubleRepresentation',
+      'vendorCodeOfConduct',
+      'dataPrivacyPolicy',
+      'candidateConsentPolicy',
+      'nonCircumventionClause',
+      'commissionPayoutTerms',
+      'replacementBackoutLiability'
+    ];
+
+    const allAccepted = requiredClauses.every(
+      clause => syncrotechAgreement && syncrotechAgreement[clause] === true
+    );
+
+    if (!allAccepted) {
+      return res.status(400).json({
+        success: false,
+        message: "All compliance clauses must be accepted",
+        data: {
+          required: requiredClauses,
+          received: syncrotechAgreement
+        }
+      });
+    }
+
+    // Build compliance object with timestamps
+    const complianceData = {
+      syncrotechAgreement: {}
     };
+
+    requiredClauses.forEach(clause => {
+      complianceData.syncrotechAgreement[clause] = {
+        accepted: true,
+        acceptedAt: timestamp,
+        acceptedIp: ipAddress
+      };
+    });
+
+    complianceData.allClausesAccepted = true;
+    complianceData.agreementAcceptedAt = timestamp;
+    complianceData.agreementAcceptedIp = ipAddress;
+    complianceData.digitalSignature = digitalSignature;
+    complianceData.termsAccepted = true;
+    complianceData.ndaSigned = true;
+    complianceData.agreementSigned = true;
+    complianceData.agreementSignedAt = timestamp;
+
+    partner.compliance = complianceData;
     partner.profileCompletion.compliance = true;
     await partner.save();
 
     res.json({
       success: true,
-      message: "Compliance updated",
+      message: "Compliance updated successfully",
       data: partner.compliance,
     });
   } catch (error) {
@@ -275,6 +361,280 @@ exports.updatePayoutPreferences = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Update failed",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Update Team Access
+// @route   PUT /api/staffing-partners/profile/team-access
+exports.updateTeamAccess = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    // Only verified partners can manage team
+    if (partner.verificationStatus !== 'APPROVED') {
+      return res.status(403).json({
+        success: false,
+        message: "Partner must be verified to manage team members"
+      });
+    }
+
+    const { isTeamEnabled } = req.body;
+
+    partner.teamAccess.isTeamEnabled = isTeamEnabled || false;
+    await partner.save();
+
+    res.json({
+      success: true,
+      message: "Team access updated",
+      data: partner.teamAccess,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Update failed",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Add Team Member
+// @route   POST /api/staffing-partners/profile/team-access/member
+exports.addTeamMember = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    if (partner.verificationStatus !== 'APPROVED') {
+      return res.status(403).json({
+        success: false,
+        message: "Partner must be verified to add team members"
+      });
+    }
+
+    const { name, email, mobile, role, permissions } = req.body;
+
+    if (!name || !email) {
+      return res.status(400).json({
+        success: false,
+        message: "Name and email are required"
+      });
+    }
+
+    // Check if email already exists
+    const existingMember = partner.teamAccess.teamMembers.find(
+      m => m.email === email
+    );
+
+    if (existingMember) {
+      return res.status(400).json({
+        success: false,
+        message: "Team member with this email already exists"
+      });
+    }
+
+    partner.teamAccess.isTeamEnabled = true;
+    partner.teamAccess.teamMembers.push({
+      name,
+      email,
+      mobile,
+      role: role || 'Recruiter',
+      permissions: permissions || {
+        canViewJobs: true,
+        canSubmitCandidates: true,
+        canViewEarnings: false,
+        canManageTeam: false
+      },
+      addedAt: new Date(),
+      isActive: true
+    });
+
+    await partner.save();
+
+    res.json({
+      success: true,
+      message: "Team member added successfully",
+      data: partner.teamAccess,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to add team member",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Update Team Member
+// @route   PUT /api/staffing-partners/profile/team-access/member/:memberId
+exports.updateTeamMember = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    if (partner.verificationStatus !== 'APPROVED') {
+      return res.status(403).json({
+        success: false,
+        message: "Partner must be verified to update team members"
+      });
+    }
+
+    const { memberId } = req.params;
+    const { name, email, mobile, role, permissions, isActive } = req.body;
+
+    const memberIndex = partner.teamAccess.teamMembers.findIndex(
+      m => m._id.toString() === memberId
+    );
+
+    if (memberIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: "Team member not found"
+      });
+    }
+
+    // Check if email already exists (for different member)
+    if (email) {
+      const existingMember = partner.teamAccess.teamMembers.find(
+        m => m.email === email && m._id.toString() !== memberId
+      );
+
+      if (existingMember) {
+        return res.status(400).json({
+          success: false,
+          message: "Another team member with this email already exists"
+        });
+      }
+    }
+
+    // Update member fields
+    if (name) partner.teamAccess.teamMembers[memberIndex].name = name;
+    if (email) partner.teamAccess.teamMembers[memberIndex].email = email;
+    if (mobile) partner.teamAccess.teamMembers[memberIndex].mobile = mobile;
+    if (role) partner.teamAccess.teamMembers[memberIndex].role = role;
+    if (permissions) partner.teamAccess.teamMembers[memberIndex].permissions = permissions;
+    if (typeof isActive === 'boolean') partner.teamAccess.teamMembers[memberIndex].isActive = isActive;
+
+    await partner.save();
+
+    res.json({
+      success: true,
+      message: "Team member updated successfully",
+      data: partner.teamAccess,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to update team member",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Remove Team Member
+// @route   DELETE /api/staffing-partners/profile/team-access/member/:memberId
+exports.removeTeamMember = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    if (partner.verificationStatus !== 'APPROVED') {
+      return res.status(403).json({
+        success: false,
+        message: "Partner must be verified to remove team members"
+      });
+    }
+
+    const { memberId } = req.params;
+
+    const memberExists = partner.teamAccess.teamMembers.some(
+      m => m._id.toString() === memberId
+    );
+
+    if (!memberExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Team member not found"
+      });
+    }
+
+    partner.teamAccess.teamMembers = partner.teamAccess.teamMembers.filter(
+      m => m._id.toString() !== memberId
+    );
+
+    // If no team members left, disable team access
+    if (partner.teamAccess.teamMembers.length === 0) {
+      partner.teamAccess.isTeamEnabled = false;
+    }
+
+    await partner.save();
+
+    res.json({
+      success: true,
+      message: "Team member removed successfully",
+      data: partner.teamAccess,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to remove team member",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Get Team Members
+// @route   GET /api/staffing-partners/profile/team-access/members
+exports.getTeamMembers = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Profile not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        isTeamEnabled: partner.teamAccess.isTeamEnabled,
+        teamMembers: partner.teamAccess.teamMembers,
+        totalMembers: partner.teamAccess.teamMembers.length,
+        activeMembers: partner.teamAccess.teamMembers.filter(m => m.isActive).length
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch team members",
       error: error.message,
     });
   }

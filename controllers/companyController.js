@@ -4,6 +4,529 @@ const User = require('../models/User');
 const Job = require('../models/Job');
 const Candidate = require('../models/Candidate');
 
+// ==================== 1. PRIMARY ACCOUNT (Decision Maker) ====================
+
+// @desc    Update Primary Account / Basic Info
+// @route   PUT /api/companies/profile/basic-info
+exports.updateBasicInfo = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const {
+      decisionMakerName,
+      designation,
+      department,
+      linkedinProfile,
+      city,
+      state
+    } = req.body;
+
+    if (decisionMakerName) company.decisionMakerName = decisionMakerName;
+    if (designation) company.designation = designation;
+    if (department) company.department = department;
+    if (linkedinProfile) company.linkedinProfile = linkedinProfile;
+    if (city) company.city = city;
+    if (state) company.state = state;
+
+    company.profileCompletion.basicInfo = true;
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'Basic info updated successfully',
+      data: {
+        decisionMakerName: company.decisionMakerName,
+        designation: company.designation,
+        department: company.department,
+        linkedinProfile: company.linkedinProfile,
+        city: company.city,
+        state: company.state
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Update failed',
+      error: error.message
+    });
+  }
+};
+
+// ==================== 2. COMPANY INFORMATION (Core KYC Layer) ====================
+
+// @desc    Update Company KYC
+// @route   PUT /api/companies/profile/kyc
+exports.updateKYC = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const {
+      registeredName,
+      tradeName,
+      logo,
+      description,
+      website,
+      companyType,
+      yearEstablished,
+      cinNumber,
+      llpinNumber,
+      registeredAddress,
+      operatingAddress,
+      gstNumber,
+      panNumber,
+      industry,
+      employeeCount
+    } = req.body;
+
+    // Handle operating address "same as registered" logic
+    let finalOperatingAddress = operatingAddress;
+    if (operatingAddress?.sameAsRegistered && registeredAddress) {
+      finalOperatingAddress = {
+        ...registeredAddress,
+        sameAsRegistered: true
+      };
+    }
+
+    company.kyc = {
+      ...company.kyc,
+      registeredName,
+      tradeName,
+      logo,
+      description,
+      website,
+      companyType,
+      yearEstablished,
+      cinNumber,
+      llpinNumber,
+      registeredAddress,
+      operatingAddress: finalOperatingAddress,
+      gstNumber,
+      panNumber,
+      industry,
+      employeeCount
+    };
+
+    company.profileCompletion.kyc = true;
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'KYC updated successfully',
+      data: company.kyc
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Update failed',
+      error: error.message
+    });
+  }
+};
+
+// ==================== 3. HIRING & BUSINESS PROFILE ====================
+
+// @desc    Update Hiring Preferences
+// @route   PUT /api/companies/profile/hiring-preferences
+exports.updateHiringPreferences = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const {
+      preferredIndustries,
+      functionalAreas,
+      experienceLevels,
+      hiringType,
+      avgMonthlyHiringVolume,
+      typicalCtcBand,
+      preferredLocations,
+      workModePreference,
+      urgencyLevel
+    } = req.body;
+
+    company.hiringPreferences = {
+      ...company.hiringPreferences,
+      preferredIndustries,
+      functionalAreas,
+      experienceLevels,
+      hiringType,
+      avgMonthlyHiringVolume,
+      typicalCtcBand,
+      preferredLocations,
+      workModePreference,
+      urgencyLevel
+    };
+
+    company.profileCompletion.hiringPreferences = true;
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'Hiring preferences updated successfully',
+      data: company.hiringPreferences
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Update failed',
+      error: error.message
+    });
+  }
+};
+
+// ==================== 5. COMMERCIAL & BILLING SETUP ====================
+
+// @desc    Update Billing Setup
+// @route   PUT /api/companies/profile/billing
+exports.updateBilling = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const {
+      billingEntityName,
+      billingAddress,
+      gstRegistrationType,
+      gstNumber,
+      panNumber,
+      poRequired,
+      tdsApplicable,
+      paymentTerms,
+      preferredPaymentMethod
+    } = req.body;
+
+    company.billing = {
+      ...company.billing,
+      billingEntityName,
+      billingAddress,
+      gstRegistrationType,
+      gstNumber,
+      panNumber,
+      poRequired,
+      tdsApplicable,
+      paymentTerms,
+      preferredPaymentMethod
+    };
+
+    company.profileCompletion.billing = true;
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'Billing updated successfully',
+      data: company.billing
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Update failed',
+      error: error.message
+    });
+  }
+};
+
+// ==================== 6. USER ROLES & ACCESS CONTROL ====================
+
+// @desc    Update Team Access (Enterprise Feature)
+// @route   PUT /api/companies/profile/team-access
+exports.updateTeamAccess = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    // Only verified companies can add team members
+    if (company.verificationStatus !== 'APPROVED') {
+      return res.status(403).json({
+        success: false,
+        message: 'Company must be verified to add team members'
+      });
+    }
+
+    const { isTeamEnabled, teamMembers } = req.body;
+
+    company.teamAccess = {
+      isTeamEnabled: isTeamEnabled || false,
+      teamMembers: teamMembers || []
+    };
+
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'Team access updated successfully',
+      data: company.teamAccess
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Update failed',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Add Team Member
+// @route   POST /api/companies/profile/team-access/member
+exports.addTeamMember = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    if (company.verificationStatus !== 'APPROVED') {
+      return res.status(403).json({
+        success: false,
+        message: 'Company must be verified to add team members'
+      });
+    }
+
+    const { name, email, mobile, role } = req.body;
+
+    if (!name || !email || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, and role are required'
+      });
+    }
+
+    // Check if email already exists in team
+    const existingMember = company.teamAccess.teamMembers.find(
+      m => m.email === email
+    );
+
+    if (existingMember) {
+      return res.status(400).json({
+        success: false,
+        message: 'Team member with this email already exists'
+      });
+    }
+
+    company.teamAccess.isTeamEnabled = true;
+    company.teamAccess.teamMembers.push({
+      name,
+      email,
+      mobile,
+      role,
+      addedAt: new Date(),
+      isActive: true
+    });
+
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'Team member added successfully',
+      data: company.teamAccess
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add team member',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Remove Team Member
+// @route   DELETE /api/companies/profile/team-access/member/:memberId
+exports.removeTeamMember = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const { memberId } = req.params;
+
+    company.teamAccess.teamMembers = company.teamAccess.teamMembers.filter(
+      m => m._id.toString() !== memberId
+    );
+
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'Team member removed successfully',
+      data: company.teamAccess
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to remove team member',
+      error: error.message
+    });
+  }
+};
+
+// ==================== 7. LEGAL & COMPLIANCE ====================
+
+// @desc    Accept Legal Consents
+// @route   PUT /api/companies/profile/legal-consents
+exports.updateLegalConsents = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const {
+      termsAccepted,
+      privacyPolicyAccepted,
+      dataProcessingAgreementAccepted,
+      dataStorageConsent,
+      vendorSharingConsent,
+      communicationConsent
+    } = req.body;
+
+    // Get IP address for logging
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const timestamp = new Date();
+
+    company.legalConsents = {
+      // Terms of Service
+      termsAccepted,
+      termsAcceptedAt: termsAccepted ? timestamp : company.legalConsents?.termsAcceptedAt,
+      termsAcceptedIp: termsAccepted ? ipAddress : company.legalConsents?.termsAcceptedIp,
+
+      // Privacy Policy
+      privacyPolicyAccepted,
+      privacyPolicyAcceptedAt: privacyPolicyAccepted ? timestamp : company.legalConsents?.privacyPolicyAcceptedAt,
+      privacyPolicyAcceptedIp: privacyPolicyAccepted ? ipAddress : company.legalConsents?.privacyPolicyAcceptedIp,
+
+      // Data Processing Agreement
+      dataProcessingAgreementAccepted,
+      dataProcessingAgreementAcceptedAt: dataProcessingAgreementAccepted ? timestamp : company.legalConsents?.dataProcessingAgreementAcceptedAt,
+      dataProcessingAgreementAcceptedIp: dataProcessingAgreementAccepted ? ipAddress : company.legalConsents?.dataProcessingAgreementAcceptedIp,
+
+      // Data Storage Consent
+      dataStorageConsent,
+      dataStorageConsentAt: dataStorageConsent ? timestamp : company.legalConsents?.dataStorageConsentAt,
+      dataStorageConsentIp: dataStorageConsent ? ipAddress : company.legalConsents?.dataStorageConsentIp,
+
+      // Vendor Sharing Consent
+      vendorSharingConsent,
+      vendorSharingConsentAt: vendorSharingConsent ? timestamp : company.legalConsents?.vendorSharingConsentAt,
+      vendorSharingConsentIp: vendorSharingConsent ? ipAddress : company.legalConsents?.vendorSharingConsentIp,
+
+      // Communication Consent
+      communicationConsent: communicationConsent || company.legalConsents?.communicationConsent,
+      communicationConsentAt: communicationConsent ? timestamp : company.legalConsents?.communicationConsentAt,
+      communicationConsentIp: communicationConsent ? ipAddress : company.legalConsents?.communicationConsentIp
+    };
+
+    company.profileCompletion.legalConsents = true;
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'Legal consents updated successfully',
+      data: company.legalConsents
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Update failed',
+      error: error.message
+    });
+  }
+};
+
+// ==================== 8. DOCUMENTS (Post-Signup Verification) ====================
+
+// @desc    Upload Documents
+// @route   PUT /api/companies/profile/documents
+exports.uploadDocuments = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const {
+      gstCertificate,
+      panCard,
+      incorporationCertificate,
+      authorizedSignatoryProof,
+      addressProof
+    } = req.body;
+
+    company.documents = {
+      ...company.documents,
+      gstCertificate,
+      panCard,
+      incorporationCertificate,
+      authorizedSignatoryProof,
+      addressProof
+    };
+
+    company.profileCompletion.documents = true;
+    await company.save();
+
+    res.json({
+      success: true,
+      message: 'Documents uploaded successfully',
+      data: company.documents
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Upload failed',
+      error: error.message
+    });
+  }
+};
+
+// ==================== PROFILE MANAGEMENT ====================
+
 // @desc    Get Company Profile
 // @route   GET /api/companies/profile
 exports.getProfile = async (req, res) => {
@@ -31,203 +554,43 @@ exports.getProfile = async (req, res) => {
   }
 };
 
-// backend/controllers/companyController.js
-
-// @desc    Update Company KYC
-// @route   PUT /api/companies/profile/kyc
-exports.updateKYC = async (req, res) => {
+// @desc    Get Profile Completion Status
+// @route   GET /api/companies/profile/completion
+exports.getProfileCompletion = async (req, res) => {
   try {
     const company = await Company.findOne({ user: req.user._id });
-    
+
     if (!company) {
       return res.status(404).json({
         success: false,
-        message: 'Company not found'
+        message: 'Profile not found'
       });
     }
 
-    // ✅ Handle operating address "same as registered" logic
-    if (req.body.operatingAddress?.sameAsRegistered) {
-      req.body.operatingAddress = {
-        ...req.body.registeredAddress,
-        sameAsRegistered: true
-      };
-    }
-
-    company.kyc = { ...company.kyc, ...req.body };
-    company.profileCompletion.kyc = true;
-    await company.save();
+    const completion = company.profileCompletion;
+    const total = Object.keys(completion).length;
+    const completed = Object.values(completion).filter(Boolean).length;
+    const percentage = Math.round((completed / total) * 100);
 
     res.json({
       success: true,
-      message: 'KYC updated successfully',
-      data: company.kyc
+      data: {
+        completion,
+        percentage,
+        completed,
+        total,
+        canSubmit:
+          completion.basicInfo &&
+          completion.kyc &&
+          completion.hiringPreferences &&
+          completion.billing &&
+          completion.legalConsents
+      }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Update failed',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Update Hiring Preferences
-// @route   PUT /api/companies/profile/hiring-preferences
-exports.updateHiringPreferences = async (req, res) => {
-  try {
-    const company = await Company.findOne({ user: req.user._id });
-    
-    if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: 'Company not found'
-      });
-    }
-
-    company.hiringPreferences = { ...company.hiringPreferences, ...req.body };
-    company.profileCompletion.hiringPreferences = true;
-    await company.save();
-
-    res.json({
-      success: true,
-      message: 'Hiring preferences updated successfully',
-      data: company.hiringPreferences
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Update failed',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Update Billing Setup
-// @route   PUT /api/companies/profile/billing
-exports.updateBilling = async (req, res) => {
-  try {
-    const company = await Company.findOne({ user: req.user._id });
-    
-    if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: 'Company not found'
-      });
-    }
-
-    company.billing = { ...company.billing, ...req.body };
-    company.profileCompletion.billing = true;
-    await company.save();
-
-    res.json({
-      success: true,
-      message: 'Billing updated successfully',
-      data: company.billing
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Update failed',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Accept Legal Consents
-// @route   PUT /api/companies/profile/legal-consents
-exports.updateLegalConsents = async (req, res) => {
-  try {
-    const company = await Company.findOne({ user: req.user._id });
-    
-    if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: 'Company not found'
-      });
-    }
-
-    const { 
-      termsAccepted, 
-      privacyPolicyAccepted, 
-      dataProcessingAgreementAccepted,  // ✅ NEW
-      vendorSharingConsent,              // ✅ NEW
-      communicationConsent,              // ✅ NEW
-      agreementSigned 
-    } = req.body;
-
-    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
-    const timestamp = new Date();
-
-    // ✅ Update with IP logging and timestamps
-    company.legalConsents = {
-      termsAccepted,
-      termsAcceptedAt: termsAccepted ? timestamp : company.legalConsents.termsAcceptedAt,
-      termsAcceptedIp: termsAccepted ? ipAddress : company.legalConsents.termsAcceptedIp,
-      
-      privacyPolicyAccepted,
-      privacyPolicyAcceptedAt: privacyPolicyAccepted ? timestamp : company.legalConsents.privacyPolicyAcceptedAt,
-      privacyPolicyAcceptedIp: privacyPolicyAccepted ? ipAddress : company.legalConsents.privacyPolicyAcceptedIp,
-      
-      dataProcessingAgreementAccepted,
-      dataProcessingAgreementAcceptedAt: dataProcessingAgreementAccepted ? timestamp : company.legalConsents.dataProcessingAgreementAcceptedAt,
-      dataProcessingAgreementAcceptedIp: dataProcessingAgreementAccepted ? ipAddress : company.legalConsents.dataProcessingAgreementAcceptedIp,
-      
-      vendorSharingConsent,
-      vendorSharingConsentAt: vendorSharingConsent ? timestamp : company.legalConsents.vendorSharingConsentAt,
-      vendorSharingConsentIp: vendorSharingConsent ? ipAddress : company.legalConsents.vendorSharingConsentIp,
-      
-      communicationConsent: communicationConsent || company.legalConsents.communicationConsent,
-      communicationConsentAt: communicationConsent ? timestamp : company.legalConsents.communicationConsentAt,
-      communicationConsentIp: communicationConsent ? ipAddress : company.legalConsents.communicationConsentIp,
-      
-      agreementSigned,
-      agreementSignedAt: agreementSigned ? timestamp : company.legalConsents.agreementSignedAt
-    };
-    
-    company.profileCompletion.legalConsents = true;
-    await company.save();
-
-    res.json({
-      success: true,
-      message: 'Legal consents updated successfully',
-      data: company.legalConsents
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Update failed',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Upload Documents
-// @route   PUT /api/companies/profile/documents
-exports.uploadDocuments = async (req, res) => {
-  try {
-    const company = await Company.findOne({ user: req.user._id });
-    
-    if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: 'Company not found'
-      });
-    }
-
-    company.documents = { ...company.documents, ...req.body };
-    company.profileCompletion.documents = true;
-    await company.save();
-
-    res.json({
-      success: true,
-      message: 'Documents uploaded successfully',
-      data: company.documents
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Upload failed',
+      message: 'Failed to fetch completion status',
       error: error.message
     });
   }
@@ -249,7 +612,7 @@ exports.submitProfile = async (req, res) => {
 
     // Check required sections
     const { basicInfo, kyc, hiringPreferences, billing, legalConsents } = company.profileCompletion;
-    
+
     if (!basicInfo || !kyc || !hiringPreferences || !billing || !legalConsents) {
       return res.status(400).json({
         success: false,
@@ -260,7 +623,7 @@ exports.submitProfile = async (req, res) => {
 
     company.verificationStatus = 'UNDER_REVIEW';
     user.status = 'UNDER_VERIFICATION';
-    
+
     await company.save();
     await user.save();
 
@@ -280,6 +643,81 @@ exports.submitProfile = async (req, res) => {
     });
   }
 };
+
+// ==================== DASHBOARD ====================
+
+// @desc    Get Dashboard Stats
+// @route   GET /api/companies/dashboard
+exports.getDashboard = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    // Get job stats
+    const jobStats = await Job.aggregate([
+      { $match: { company: company._id } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    // Get recent candidates
+    const recentCandidates = await Candidate.find({ company: company._id })
+      .populate('job', 'title')
+      .populate('submittedBy', 'firstName lastName')
+      .sort({ createdAt: -1 })
+      .limit(10);
+
+    // Get hiring funnel
+    const hiringFunnel = await Candidate.aggregate([
+      { $match: { company: company._id } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    // Get active jobs
+    const activeJobs = await Job.find({
+      company: company._id,
+      status: 'ACTIVE'
+    }).limit(5);
+
+    // Calculate profile completion
+    const profileCompletion = company.profileCompletion;
+    const completedSections = Object.values(profileCompletion).filter(Boolean).length;
+    const totalSections = Object.keys(profileCompletion).length;
+    const completionPercentage = Math.round((completedSections / totalSections) * 100);
+
+    res.json({
+      success: true,
+      data: {
+        company: {
+          name: company.companyName,
+          verificationStatus: company.verificationStatus,
+          profileCompletion: {
+            ...profileCompletion,
+            percentage: completionPercentage
+          }
+        },
+        metrics: company.metrics,
+        jobStats,
+        recentCandidates,
+        hiringFunnel,
+        activeJobs
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch dashboard',
+      error: error.message
+    });
+  }
+};
+
+// ==================== JOB MANAGEMENT (Existing - Keep as is) ====================
 
 // @desc    Create Job Posting
 // @route   POST /api/companies/jobs
@@ -328,7 +766,7 @@ exports.createJob = async (req, res) => {
 exports.getJobs = async (req, res) => {
   try {
     const company = await Company.findOne({ user: req.user._id });
-    
+
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -461,6 +899,8 @@ exports.deleteJob = async (req, res) => {
   }
 };
 
+// ==================== CANDIDATE MANAGEMENT (Keep existing with auth fixes) ====================
+
 // @desc    Get Candidates for a Job
 // @route   GET /api/companies/jobs/:jobId/candidates
 exports.getJobCandidates = async (req, res) => {
@@ -503,7 +943,7 @@ exports.getJobCandidates = async (req, res) => {
 exports.getAllCandidates = async (req, res) => {
   try {
     const company = await Company.findOne({ user: req.user._id });
-    
+
     if (!company) {
       return res.status(404).json({
         success: false,
@@ -554,7 +994,7 @@ exports.getCandidate = async (req, res) => {
       .populate('job', 'title commission')
       .populate({
         path: 'company',
-        select: 'companyName user' // ✅ Include user field
+        select: 'companyName user'
       });
 
     if (!candidate) {
@@ -564,7 +1004,7 @@ exports.getCandidate = async (req, res) => {
       });
     }
 
-    // ✅ Now check authorization properly
+    // Check authorization
     const isCompany =
       req.user.role === 'company' &&
       candidate.company?.user?.toString() === req.user._id.toString();
@@ -604,7 +1044,7 @@ exports.updateCandidateStatus = async (req, res) => {
     const candidate = await Candidate.findById(req.params.id)
       .populate({
         path: 'company',
-        select: 'user' // ✅ Only need user for auth check
+        select: 'user'
       });
 
     if (!candidate) {
@@ -614,7 +1054,7 @@ exports.updateCandidateStatus = async (req, res) => {
       });
     }
 
-    // ✅ Verify this company owns this candidate
+    // Verify this company owns this candidate
     if (candidate.company.user.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
@@ -677,12 +1117,21 @@ exports.updateCandidateStatus = async (req, res) => {
 // @route   POST /api/companies/candidates/:id/interviews
 exports.scheduleInterview = async (req, res) => {
   try {
-    const candidate = await Candidate.findById(req.params.id);
+    const candidate = await Candidate.findById(req.params.id)
+      .populate({ path: 'company', select: 'user' });
 
     if (!candidate) {
       return res.status(404).json({
         success: false,
         message: 'Candidate not found'
+      });
+    }
+
+    // Verify ownership
+    if (candidate.company.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
       });
     }
 
@@ -724,12 +1173,21 @@ exports.scheduleInterview = async (req, res) => {
 // @route   PUT /api/companies/candidates/:id/interviews/:interviewId
 exports.updateInterviewFeedback = async (req, res) => {
   try {
-    const candidate = await Candidate.findById(req.params.id);
+    const candidate = await Candidate.findById(req.params.id)
+      .populate({ path: 'company', select: 'user' });
 
     if (!candidate) {
       return res.status(404).json({
         success: false,
         message: 'Candidate not found'
+      });
+    }
+
+    // Verify ownership
+    if (candidate.company.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
       });
     }
 
@@ -774,12 +1232,21 @@ exports.updateInterviewFeedback = async (req, res) => {
 // @route   POST /api/companies/candidates/:id/offer
 exports.makeOffer = async (req, res) => {
   try {
-    const candidate = await Candidate.findById(req.params.id);
+    const candidate = await Candidate.findById(req.params.id)
+      .populate({ path: 'company', select: 'user' });
 
     if (!candidate) {
       return res.status(404).json({
         success: false,
         message: 'Candidate not found'
+      });
+    }
+
+    // Verify ownership
+    if (candidate.company.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
       });
     }
 
@@ -817,12 +1284,21 @@ exports.makeOffer = async (req, res) => {
 // @route   PUT /api/companies/candidates/:id/offer
 exports.updateOfferResponse = async (req, res) => {
   try {
-    const candidate = await Candidate.findById(req.params.id);
+    const candidate = await Candidate.findById(req.params.id)
+      .populate({ path: 'company', select: 'user' });
 
     if (!candidate) {
       return res.status(404).json({
         success: false,
         message: 'Candidate not found'
+      });
+    }
+
+    // Verify ownership
+    if (candidate.company.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
       });
     }
 
@@ -862,8 +1338,9 @@ exports.updateOfferResponse = async (req, res) => {
 // @route   POST /api/companies/candidates/:id/joining
 exports.confirmJoining = async (req, res) => {
   try {
-    const candidate = await Candidate.findById(req.params.id);
-    
+    const candidate = await Candidate.findById(req.params.id)
+      .populate({ path: 'company', select: 'user' });
+
     if (!candidate) {
       return res.status(404).json({
         success: false,
@@ -871,8 +1348,16 @@ exports.confirmJoining = async (req, res) => {
       });
     }
 
+    // Verify ownership
+    if (candidate.company.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
+      });
+    }
+
     const job = await Job.findById(candidate.job);
-    const company = await Company.findById(candidate.company);
+    const company = await Company.findById(candidate.company._id);
 
     candidate.joining = {
       actualJoiningDate: req.body.joiningDate,
@@ -933,12 +1418,21 @@ exports.confirmJoining = async (req, res) => {
 // @route   POST /api/companies/candidates/:id/notes
 exports.addNote = async (req, res) => {
   try {
-    const candidate = await Candidate.findById(req.params.id);
+    const candidate = await Candidate.findById(req.params.id)
+      .populate({ path: 'company', select: 'user' });
 
     if (!candidate) {
       return res.status(404).json({
         success: false,
         message: 'Candidate not found'
+      });
+    }
+
+    // Verify ownership
+    if (candidate.company.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
       });
     }
 
@@ -959,68 +1453,6 @@ exports.addNote = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to add note',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Get Dashboard Stats
-// @route   GET /api/companies/dashboard
-exports.getDashboard = async (req, res) => {
-  try {
-    const company = await Company.findOne({ user: req.user._id });
-
-    if (!company) {
-      return res.status(404).json({
-        success: false,
-        message: 'Company not found'
-      });
-    }
-
-    // Get job stats
-    const jobStats = await Job.aggregate([
-      { $match: { company: company._id } },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]);
-
-    // Get recent candidates
-    const recentCandidates = await Candidate.find({ company: company._id })
-      .populate('job', 'title')
-      .populate('submittedBy', 'firstName lastName')
-      .sort({ createdAt: -1 })
-      .limit(10);
-
-    // Get hiring funnel
-    const hiringFunnel = await Candidate.aggregate([
-      { $match: { company: company._id } },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]);
-
-    // Get active jobs
-    const activeJobs = await Job.find({ 
-      company: company._id, 
-      status: 'ACTIVE' 
-    }).limit(5);
-
-    res.json({
-      success: true,
-      data: {
-        company: {
-          name: company.companyName,
-          verificationStatus: company.verificationStatus,
-          profileCompletion: company.profileCompletion
-        },
-        metrics: company.metrics,
-        jobStats,
-        recentCandidates,
-        hiringFunnel,
-        activeJobs
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch dashboard',
       error: error.message
     });
   }
