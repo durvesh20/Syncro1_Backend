@@ -172,58 +172,111 @@ await mongoose.connect(process.env.MONGO_URI);
         isPasswordChanged: true,
       });
 
-      await StaffingPartner.create({
-        user: partnerUser._id,
-        firstName: "Test",
-        lastName: "Partner",
-        firmName: "Test Syncro1ers Pvt Ltd",
-        designation: "Director",
-        city: "Mumbai",
-        state: "Maharashtra",
-        firmDetails: {
-          tradeName: "Test Recruiters", // ✅ optional but nice
-          entityType: "pvt_ltd", // ✅ optional but nice
-          registeredName: "Test Syncro1ers Private Limited",
-          gstNumber: "27AABCT1234A1Z5",
-          panNumber: "AABCT1234A",
-          employeeCount: "6-20",
-          yearEstablished: 2020,
-        },
+// Update the test partner creation
+await StaffingPartner.create({
+  user: partnerUser._id,
+  firstName: "Test",
+  lastName: "Partner",
+  firmName: "Test Syncro1ers Pvt Ltd",
+  designation: "Director",
+  city: "Mumbai",
+  state: "Maharashtra",
+  
+  firmDetails: {
+    registeredName: "Test Syncro1ers Private Limited",
+    tradeName: "Test Recruiters",
+    entityType: "Private Limited",
+    yearEstablished: 2020,
+    website: "https://testRecruiters.com",
+    registeredOfficeAddress: {
+      street: "123 Business Park",
+      city: "Mumbai",
+      state: "Maharashtra", 
+      pincode: "400001",
+      country: "India"
+    },
+    operatingAddress: {
+      street: "456 Tech Hub",
+      city: "Pune",
+      state: "Maharashtra",
+      pincode: "411001", 
+      country: "India",
+      sameAsRegistered: false
+    },
+    panNumber: "AABCT1234A",
+    gstNumber: "27AABCT1234A1Z5",
+    cinNumber: "U74999MH2020PTC123456",
+    employeeCount: "6-20"
+  },
 
-        Syncro1Competency: {
-          primaryHiringSectors: ["Technology", "Finance", "Healthcare"],
-          hiringLevels: ["Entry", "Mid", "Senior"],
-          avgCtcRangeHandled: "5-20 LPA",
-          averageMonthlyClosures: 3,
-          yearsOfRecruitmentExperience: 6,
-        },
-        geographicReach: {
-          operatingCities: ["Mumbai", "Pune", "Bangalore"],
-          operatingStates: ["Maharashtra", "Karnataka"],
-          panIndiaCapability: true,
-        },
-        compliance: {
-          termsAccepted: true,
-          ndaSigned: true,
-          agreementSigned: true,
-          agreementSignedAt: new Date(),
-        },
-        subscription: {
-          plan: "PROFESSIONAL",
-          startDate: new Date(),
-          endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-          isActive: true,
-        },
-        verificationStatus: "APPROVED",
-        profileCompletion: {
-          basicInfo: true,
-          firmDetails: true,
-          Syncro1Competency: true,
-          geographicReach: true,
-          compliance: true,
-          financeDetails: true,
-        },
-      });
+  Syncro1Competency: {
+    primaryHiringSectors: ["Technology", "BFSI", "Healthcare"],
+    hiringLevels: ["Entry", "Mid", "Senior"],
+    avgCtcRangeHandled: "5-20 LPA",
+    averageMonthlyClosures: 8,
+    yearsOfRecruitmentExperience: 6
+  },
+  
+  geographicReach: {
+    preferredHiringLocations: ["Mumbai", "Pune", "Bangalore", "Delhi", "Hyderabad"],
+    panIndiaCapability: true,
+    operatingCities: ["Mumbai", "Pune", "Bangalore"],
+    operatingStates: ["Maharashtra", "Karnataka"]
+  },
+  
+  compliance: {
+    syncrotechAgreement: {
+      noCvRecycling: true,
+      noFakeProfiles: true,
+      noDoubleRepresentation: true,
+      vendorCodeOfConduct: true,
+      dataPrivacyPolicy: true,
+      candidateConsentPolicy: true,
+      nonCircumventionClause: true,
+      commissionPayoutTerms: true,
+      replacementBackoutLiability: true
+    },
+    acceptanceTimestamp: new Date(),
+    acceptanceIpAddress: "127.0.0.1",
+    agreementSigned: true,
+    agreementSignedAt: new Date(),
+    termsAccepted: true,
+    ndaSigned: true
+  },
+  
+  financeDetails: {
+    bankAccountHolderName: "Test Syncro1ers Pvt Ltd",
+    bankName: "HDFC Bank",
+    accountNumber: "1234567890",
+    ifscCode: "HDFC0001234"
+  },
+  
+  payoutPreferences: {
+    payoutEntityName: "Test Syncro1ers Private Limited",
+    gstRegistration: "Regular",
+    tdsApplicable: true
+  },
+  
+  subscription: {
+    plan: "PROFESSIONAL",
+    startDate: new Date(),
+    endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    isActive: true
+  },
+  
+  verificationStatus: "APPROVED",
+  
+  profileCompletion: {
+    basicInfo: true,
+    firmDetails: true,
+    Syncro1Competency: true,
+    geographicReach: true,
+    compliance: true,
+    financeDetails: true,
+    payoutPreferences: true,
+    documents: false  // Documents not uploaded in seed
+  }
+});
 
       console.log("✅ Test partner created");
       console.log("   📧 Email: partner@test.com");
