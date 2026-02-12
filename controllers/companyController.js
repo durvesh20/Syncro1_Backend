@@ -20,7 +20,8 @@ exports.updateBasicInfo = async (req, res) => {
     }
 
     const {
-      decisionMakerName,
+      firstName,          // ✅ Accept firstName
+      lastName,           // ✅ Accept lastName
       designation,
       department,
       linkedinProfile,
@@ -28,7 +29,21 @@ exports.updateBasicInfo = async (req, res) => {
       state
     } = req.body;
 
-    if (decisionMakerName) company.decisionMakerName = decisionMakerName;
+    // ✅ Combine firstName + lastName if provided
+    if (firstName && lastName) {
+      company.decisionMakerName = `${firstName} ${lastName}`;
+    } else if (firstName || lastName) {
+      // If only one provided, update accordingly
+      const currentName = company.decisionMakerName.split(' ');
+      if (firstName) {
+        currentName[0] = firstName;
+      }
+      if (lastName) {
+        currentName[1] = lastName;
+      }
+      company.decisionMakerName = currentName.join(' ');
+    }
+
     if (designation) company.designation = designation;
     if (department) company.department = department;
     if (linkedinProfile) company.linkedinProfile = linkedinProfile;
@@ -38,10 +53,16 @@ exports.updateBasicInfo = async (req, res) => {
     company.profileCompletion.basicInfo = true;
     await company.save();
 
+    // ✅ Return firstName and lastName separately for frontend
+    const [returnFirstName, ...lastNameParts] = company.decisionMakerName.split(' ');
+    const returnLastName = lastNameParts.join(' ');
+
     res.json({
       success: true,
       message: 'Basic info updated successfully',
       data: {
+        firstName: returnFirstName,
+        lastName: returnLastName,
         decisionMakerName: company.decisionMakerName,
         designation: company.designation,
         department: company.department,
@@ -541,9 +562,19 @@ exports.getProfile = async (req, res) => {
       });
     }
 
+    // ✅ Split decisionMakerName for frontend
+    const [firstName, ...lastNameParts] = company.decisionMakerName.split(' ');
+    const lastName = lastNameParts.join(' ');
+
+    const responseData = {
+      ...company.toObject(),
+      firstName,  // ✅ Add firstName
+      lastName    // ✅ Add lastName
+    };
+
     res.json({
       success: true,
-      data: company
+      data: responseData
     });
   } catch (error) {
     res.status(500).json({

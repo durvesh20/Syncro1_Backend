@@ -16,16 +16,8 @@ const { SubscriptionPlan } = require("../models/Subscription");
 const seedDatabase = async () => {
   try {
     // Connect to MongoDB
-await mongoose.connect(process.env.MONGO_URI);
+    await mongoose.connect(process.env.MONGO_URI);
     console.log("📦 Connected to MongoDB");
-
-    // Clear existing data (optional - comment out in production)
-    // await User.deleteMany({});
-    // await StaffingPartner.deleteMany({});
-    // await Company.deleteMany({});
-    // await Job.deleteMany({});
-    // await SubscriptionPlan.deleteMany({});
-    // console.log('🗑️  Cleared existing data');
 
     // 1. Create Admin User
     const adminExists = await User.findOne({ email: "admin@Syncro1.com" });
@@ -172,115 +164,160 @@ await mongoose.connect(process.env.MONGO_URI);
         isPasswordChanged: true,
       });
 
-// Update the test partner creation
-await StaffingPartner.create({
-  user: partnerUser._id,
-  firstName: "Test",
-  lastName: "Partner",
-  firmName: "Test Syncro1ers Pvt Ltd",
-  designation: "Director",
-  city: "Mumbai",
-  state: "Maharashtra",
-  
-  firmDetails: {
-    registeredName: "Test Syncro1ers Private Limited",
-    tradeName: "Test Recruiters",
-    entityType: "Private Limited",
-    yearEstablished: 2020,
-    website: "https://testRecruiters.com",
-    registeredOfficeAddress: {
-      street: "123 Business Park",
-      city: "Mumbai",
-      state: "Maharashtra", 
-      pincode: "400001",
-      country: "India"
-    },
-    operatingAddress: {
-      street: "456 Tech Hub",
-      city: "Pune",
-      state: "Maharashtra",
-      pincode: "411001", 
-      country: "India",
-      sameAsRegistered: false
-    },
-    panNumber: "AABCT1234A",
-    gstNumber: "27AABCT1234A1Z5",
-    cinNumber: "U74999MH2020PTC123456",
-    employeeCount: "6-20"
-  },
+      const now = new Date();
+      const ipAddress = "127.0.0.1";
 
-  Syncro1Competency: {
-    primaryHiringSectors: ["Technology", "BFSI", "Healthcare"],
-    hiringLevels: ["Entry", "Mid", "Senior"],
-    avgCtcRangeHandled: "5-20 LPA",
-    averageMonthlyClosures: 8,
-    yearsOfRecruitmentExperience: 6
-  },
-  
-  geographicReach: {
-    preferredHiringLocations: ["Mumbai", "Pune", "Bangalore", "Delhi", "Hyderabad"],
-    panIndiaCapability: true,
-    operatingCities: ["Mumbai", "Pune", "Bangalore"],
-    operatingStates: ["Maharashtra", "Karnataka"]
-  },
-  
-  compliance: {
-    syncrotechAgreement: {
-      noCvRecycling: true,
-      noFakeProfiles: true,
-      noDoubleRepresentation: true,
-      vendorCodeOfConduct: true,
-      dataPrivacyPolicy: true,
-      candidateConsentPolicy: true,
-      nonCircumventionClause: true,
-      commissionPayoutTerms: true,
-      replacementBackoutLiability: true
-    },
-    acceptanceTimestamp: new Date(),
-    acceptanceIpAddress: "127.0.0.1",
-    agreementSigned: true,
-    agreementSignedAt: new Date(),
-    termsAccepted: true,
-    ndaSigned: true
-  },
-  
-  financeDetails: {
-    bankAccountHolderName: "Test Syncro1ers Pvt Ltd",
-    bankName: "HDFC Bank",
-    accountNumber: "1234567890",
-    ifscCode: "HDFC0001234"
-  },
-  
-  payoutPreferences: {
-    payoutEntityName: "Test Syncro1ers Private Limited",
-    gstRegistration: "Regular",
-    tdsApplicable: true
-  },
-  
-  subscription: {
-    plan: "PROFESSIONAL",
-    startDate: new Date(),
-    endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-    isActive: true
-  },
-  
-  verificationStatus: "APPROVED",
-  
-  profileCompletion: {
-    basicInfo: true,
-    firmDetails: true,
-    Syncro1Competency: true,
-    geographicReach: true,
-    compliance: true,
-    financeDetails: true,
-    payoutPreferences: true,
-    documents: false  // Documents not uploaded in seed
-  }
-});
+      // ✅ FIXED: Use proper Object structure for compliance
+      await StaffingPartner.create({
+        user: partnerUser._id,
+        firstName: "Test",
+        lastName: "Partner",
+        firmName: "Test Recruiters Pvt Ltd",
+        designation: "Director",
+        city: "Mumbai",
+        state: "Maharashtra",
+        
+        firmDetails: {
+          registeredName: "Test Recruiters Private Limited",
+          tradeName: "Test Recruiters",
+          entityType: "Private Limited",
+          yearEstablished: 2020,
+          website: "https://testRecruiters.com",
+          registeredOfficeAddress: {
+            street: "123 Business Park",
+            city: "Mumbai",
+            state: "Maharashtra",
+            pincode: "400001",
+            country: "India",
+          },
+          operatingAddress: {
+            street: "456 Tech Hub",
+            city: "Pune",
+            state: "Maharashtra",
+            pincode: "411001",
+            country: "India",
+            sameAsRegistered: false,
+          },
+          panNumber: "AABCT1234A",
+          gstNumber: "27AABCT1234A1Z5",
+          cinNumber: "U74999MH2020PTC123456",
+          employeeCount: "6-20",
+        },
+        
+        Syncro1Competency: {
+          primaryHiringSectors: ["Technology", "BFSI", "Healthcare"],
+          hiringLevels: ["Entry", "Mid", "Senior"],
+          avgCtcRangeHandled: "5-20 LPA",
+          averageMonthlyClosures: 8,
+          yearsOfRecruitmentExperience: 6,
+        },
+        
+        geographicReach: {
+          preferredHiringLocations: ["Mumbai", "Pune", "Bangalore", "Delhi", "Hyderabad"],
+          panIndiaCapability: true,
+          operatingCities: ["Mumbai", "Pune", "Bangalore"],
+          operatingStates: ["Maharashtra", "Karnataka"],
+        },
+        
+        // ✅ FIXED: Proper Object structure matching the model
+        compliance: {
+          syncrotechAgreement: {
+            noCvRecycling: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            },
+            noFakeProfiles: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            },
+            noDoubleRepresentation: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            },
+            vendorCodeOfConduct: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            },
+            dataPrivacyPolicy: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            },
+            candidateConsentPolicy: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            },
+            nonCircumventionClause: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            },
+            commissionPayoutTerms: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            },
+            replacementBackoutLiability: {
+              accepted: true,
+              acceptedAt: now,
+              acceptedIp: ipAddress
+            }
+          },
+          allClausesAccepted: true,
+          agreementAcceptedAt: now,
+          agreementAcceptedIp: ipAddress,
+          digitalSignature: "Test Partner",
+          termsAccepted: true,
+          ndaSigned: true,
+          agreementSigned: true,
+          agreementSignedAt: now
+        },
+        
+        financeDetails: {
+          bankAccountHolderName: "Test Recruiters Pvt Ltd",
+          bankName: "HDFC Bank",
+          accountNumber: "1234567890",
+          ifscCode: "HDFC0001234",
+        },
+        
+        payoutPreferences: {
+          payoutEntityName: "Test Recruiters Private Limited",
+          gstRegistration: "Regular",
+          tdsApplicable: true,
+        },
+        
+        subscription: {
+          plan: "PROFESSIONAL",
+          startDate: now,
+          endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          isActive: true,
+        },
+        
+        verificationStatus: "APPROVED",
+        verifiedAt: now,
+        
+        profileCompletion: {
+          basicInfo: true,
+          firmDetails: true,
+          Syncro1Competency: true,
+          geographicReach: true,
+          compliance: true,
+          financeDetails: true,
+          payoutPreferences: true,
+          documents: false,
+        },
+      });
 
       console.log("✅ Test partner created");
       console.log("   📧 Email: partner@test.com");
       console.log("   🔑 Password: Partner@123");
+    } else {
+      console.log("ℹ️  Test partner already exists");
     }
 
     // 4. Create Sample Verified Company (for testing)
@@ -300,139 +337,124 @@ await StaffingPartner.create({
         isPasswordChanged: true,
       });
 
-// backend/seeders/seed.js
+      const now = new Date();
+      const ipAddress = "127.0.0.1";
 
-const company = await Company.create({
-  user: companyUser._id,
-  companyName: 'TechCorp Solutions Pvt Ltd',
-  decisionMakerName: 'John Doe',
-  designation: 'HR Director',
-  department: 'HR',  // ✅ NEW
-  city: 'Bangalore',
-  state: 'Karnataka',
-  kyc: {
-    registeredName: 'TechCorp Solutions Private Limited',
-    tradeName: 'TechCorp',  // ✅ NEW
-    cin: 'U72200KA2018PTC123456',
-    gstNumber: '29AABCT5678A1Z5',
-    panNumber: 'AABCT5678A',
-    industry: 'Technology',
-    companyType: 'Private Limited',  // ✅ UPDATED
-    employeeCount: '500+',  // ✅ UPDATED
-    yearEstablished: 2018,
-    website: 'https://techcorp.com',
-    description: 'Leading technology solutions provider',
-    registeredAddress: {  // ✅ NEW
-      street: '123 Tech Park',
-      city: 'Bangalore',
-      state: 'Karnataka',
-      pincode: '560001',
-      country: 'India'
-    },
-    operatingAddress: {  // ✅ NEW
-      street: '123 Tech Park',
-      city: 'Bangalore',
-      state: 'Karnataka',
-      pincode: '560001',
-      country: 'India',
-      sameAsRegistered: true
-    }
-  },
-  hiringPreferences: {
-    preferredIndustries: ['Technology'],
-    hiringType: 'Both',  // ✅ NEW
-    avgMonthlyHiringVolume: '16-30',  // ✅ UPDATED
-    typicalCtcBand: '5-20 LPA',  // ✅ NEW
-    workModePreference: 'Hybrid',  // ✅ NEW
-    experienceLevels: ['Mid', 'Senior', 'Executive'],
-    locations: ['Bangalore', 'Mumbai', 'Hyderabad'],
-    urgencyLevel: 'Ongoing'
-  },
-  billing: {
-    billingEntityName: 'TechCorp Solutions Private Limited',
-    billingEmail: 'accounts@techcorp.com',
-    gstRegistrationType: 'Regular',  // ✅ NEW
-    gstNumber: '29AABCT5678A1Z5',
-    panNumber: 'AABCT5678A',
-    poRequired: false,  // ✅ NEW
-    tdsApplicable: true,  // ✅ NEW
-    paymentTerms: 'Net 30'
-  },
-  legalConsents: {
-    termsAccepted: true,
-    termsAcceptedAt: new Date(),
-    termsAcceptedIp: '127.0.0.1',
-    privacyPolicyAccepted: true,
-    privacyPolicyAcceptedAt: new Date(),
-    privacyPolicyAcceptedIp: '127.0.0.1',
-    dataProcessingAgreementAccepted: true,  // ✅ NEW
-    dataProcessingAgreementAcceptedAt: new Date(),
-    dataProcessingAgreementAcceptedIp: '127.0.0.1',
-    vendorSharingConsent: true,  // ✅ NEW
-    vendorSharingConsentAt: new Date(),
-    vendorSharingConsentIp: '127.0.0.1',
-    communicationConsent: {  // ✅ NEW
-      email: true,
-      whatsapp: true,
-      sms: false
-    },
-    communicationConsentAt: new Date(),
-    communicationConsentIp: '127.0.0.1',
-    agreementSigned: true,
-    agreementSignedAt: new Date()
-  },
-  verificationStatus: 'APPROVED',
-  profileCompletion: {
-    basicInfo: true,
-    kyc: true,
-    hiringPreferences: true,
-    billing: true,
-    legalConsents: true,
-    documents: true
-  }
-});
+      const company = await Company.create({
+        user: companyUser._id,
+        companyName: "TechCorp Solutions Pvt Ltd",
+        decisionMakerName: "John Doe",
+        designation: "HR Director",
+        department: "HR",
+        linkedinProfile: "https://linkedin.com/in/johndoe",
+        city: "Bangalore",
+        state: "Karnataka",
+        
+        kyc: {
+          registeredName: "TechCorp Solutions Private Limited",
+          tradeName: "TechCorp",
+          companyType: "Private Limited",
+          employeeCount: "500+",
+          yearEstablished: 2018,
+          website: "https://techcorp.com",
+          description: "Leading technology solutions provider",
+          industry: "Technology",
+          cinNumber: "U72200KA2018PTC123456",
+          registeredAddress: {
+            street: "123 Tech Park",
+            city: "Bangalore",
+            state: "Karnataka",
+            pincode: "560001",
+            country: "India",
+          },
+          operatingAddress: {
+            street: "123 Tech Park",
+            city: "Bangalore",
+            state: "Karnataka",
+            pincode: "560001",
+            country: "India",
+            sameAsRegistered: true,
+          },
+          gstNumber: "29AABCT5678A1Z5",
+          panNumber: "AABCT5678A",
+        },
+        
+        hiringPreferences: {
+          preferredIndustries: ["Technology"],
+          hiringType: "Both",
+          avgMonthlyHiringVolume: "16-30",
+          typicalCtcBand: "5-20 LPA",
+          workModePreference: "Hybrid",
+          experienceLevels: ["Mid", "Senior", "Executive"],
+          preferredLocations: ["Bangalore", "Mumbai", "Hyderabad"],
+          urgencyLevel: "Ongoing",
+        },
+        
+        billing: {
+          billingEntityName: "TechCorp Solutions Private Limited",
+          gstRegistrationType: "Regular",
+          gstNumber: "29AABCT5678A1Z5",
+          panNumber: "AABCT5678A",
+          poRequired: false,
+          tdsApplicable: true,
+          paymentTerms: "Net 30",
+        },
+        
+        legalConsents: {
+          termsAccepted: true,
+          termsAcceptedAt: now,
+          termsAcceptedIp: ipAddress,
+          privacyPolicyAccepted: true,
+          privacyPolicyAcceptedAt: now,
+          privacyPolicyAcceptedIp: ipAddress,
+          dataProcessingAgreementAccepted: true,
+          dataProcessingAgreementAcceptedAt: now,
+          dataProcessingAgreementAcceptedIp: ipAddress,
+          dataStorageConsent: true,
+          dataStorageConsentAt: now,
+          dataStorageConsentIp: ipAddress,
+          vendorSharingConsent: true,
+          vendorSharingConsentAt: now,
+          vendorSharingConsentIp: ipAddress,
+          communicationConsent: {
+            email: true,
+            whatsapp: true,
+            sms: false,
+          },
+          communicationConsentAt: now,
+          communicationConsentIp: ipAddress,
+        },
+        
+        verificationStatus: "APPROVED",
+        verifiedAt: now,
+        
+        profileCompletion: {
+          basicInfo: true,
+          kyc: true,
+          hiringPreferences: true,
+          billing: true,
+          legalConsents: true,
+          documents: true,
+        },
+      });
 
-      // Create sample jobs for the company
+      // Create sample jobs
       const sampleJobs = [
         {
           company: company._id,
           postedBy: companyUser._id,
           title: "Senior Software Engineer",
-          description:
-            "We are looking for an experienced Senior Software Engineer to join our growing team. You will be responsible for designing, developing, and maintaining scalable software solutions.",
-          requirements: [
-            "5+ years of experience in software development",
-            "Strong proficiency in JavaScript, React, and Node.js",
-            "Experience with cloud services (AWS/GCP/Azure)",
-            "Excellent problem-solving skills",
-          ],
-          responsibilities: [
-            "Design and implement new features",
-            "Code review and mentoring junior developers",
-            "Collaborate with product team on requirements",
-            "Ensure code quality and best practices",
-          ],
+          description: "We are looking for an experienced Senior Software Engineer...",
+          requirements: ["5+ years experience", "React", "Node.js", "MongoDB"],
+          responsibilities: ["Design systems", "Code review", "Mentor juniors"],
           category: "Technology",
           employmentType: "Full-time",
           experienceLevel: "Senior",
           experienceRange: { min: 5, max: 10 },
-          salary: {
-            min: 2500000,
-            max: 4000000,
-            currency: "INR",
-            isNegotiable: true,
-          },
+          salary: { min: 2500000, max: 4000000, currency: "INR", isNegotiable: true },
           commission: { type: "percentage", value: 8.33 },
-          location: {
-            city: "Bangalore",
-            state: "Karnataka",
-            isRemote: false,
-            isHybrid: true,
-          },
-          skills: {
-            required: ["JavaScript", "React", "Node.js", "MongoDB", "AWS"],
-            preferred: ["TypeScript", "GraphQL", "Docker", "Kubernetes"],
-          },
+          location: { city: "Bangalore", state: "Karnataka", isRemote: false, isHybrid: true },
+          skills: { required: ["JavaScript", "React", "Node.js"], preferred: ["AWS", "Docker"] },
           vacancies: 3,
           status: "ACTIVE",
           eligiblePlans: ["GROWTH", "PROFESSIONAL", "PREMIUM"],
@@ -441,35 +463,16 @@ const company = await Company.create({
           company: company._id,
           postedBy: companyUser._id,
           title: "Product Manager",
-          description:
-            "Join our product team to lead the development of innovative solutions. You will work closely with engineering, design, and business teams.",
-          requirements: [
-            "4+ years of product management experience",
-            "Strong analytical and communication skills",
-            "Experience with agile methodologies",
-            "Technical background preferred",
-          ],
+          description: "Join our product team to lead innovative solutions...",
+          requirements: ["4+ years PM experience", "Agile", "Data Analysis"],
           category: "Technology",
           employmentType: "Full-time",
           experienceLevel: "Mid",
           experienceRange: { min: 4, max: 8 },
-          salary: {
-            min: 2000000,
-            max: 3500000,
-            currency: "INR",
-            isNegotiable: true,
-          },
+          salary: { min: 2000000, max: 3500000, currency: "INR", isNegotiable: true },
           commission: { type: "percentage", value: 8.33 },
           location: { city: "Bangalore", state: "Karnataka", isRemote: true },
-          skills: {
-            required: [
-              "Product Management",
-              "Agile",
-              "Data Analysis",
-              "Roadmapping",
-            ],
-            preferred: ["SQL", "Jira", "Figma"],
-          },
+          skills: { required: ["Product Management", "Agile"], preferred: ["SQL", "Jira"] },
           vacancies: 2,
           status: "ACTIVE",
           eligiblePlans: ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"],
@@ -478,14 +481,8 @@ const company = await Company.create({
           company: company._id,
           postedBy: companyUser._id,
           title: "Junior Frontend Developer",
-          description:
-            "Great opportunity for freshers and junior developers to kickstart their career with a leading tech company.",
-          requirements: [
-            "0-2 years of experience",
-            "Knowledge of HTML, CSS, JavaScript",
-            "Familiarity with React or Vue.js",
-            "Eagerness to learn and grow",
-          ],
+          description: "Great opportunity for freshers...",
+          requirements: ["0-2 years experience", "HTML", "CSS", "JavaScript"],
           category: "Technology",
           employmentType: "Full-time",
           experienceLevel: "Entry",
@@ -493,10 +490,7 @@ const company = await Company.create({
           salary: { min: 400000, max: 800000, currency: "INR" },
           commission: { type: "fixed", value: 25000 },
           location: { city: "Mumbai", state: "Maharashtra", isRemote: false },
-          skills: {
-            required: ["HTML", "CSS", "JavaScript", "React"],
-            preferred: ["TypeScript", "Tailwind CSS"],
-          },
+          skills: { required: ["HTML", "CSS", "JavaScript", "React"], preferred: ["TypeScript"] },
           vacancies: 5,
           status: "ACTIVE",
           eligiblePlans: ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"],
@@ -511,6 +505,8 @@ const company = await Company.create({
       console.log("   📧 Email: company@test.com");
       console.log("   🔑 Password: Company@123");
       console.log("   📋 3 sample jobs created");
+    } else {
+      console.log("ℹ️  Test company already exists");
     }
 
     console.log("\n🎉 Database seeding completed!");

@@ -23,8 +23,8 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       lastName, 
       email, 
       mobile, 
-      firmName,  // This becomes the legal business name
-      designation, 
+      firmName,
+      designation,
       linkedinProfile, 
       city, 
       state 
@@ -71,14 +71,14 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       mobileVerified: skipMobileOTP
     });
 
-    // Create staffing partner profile with minimal required fields
+    // Create staffing partner profile with registration fields only
     await StaffingPartner.create({
       user: user._id,
       firstName,
       lastName,
-      firmName,  // Legal business name
+      firmName,
       designation,
-      linkedinProfile,
+      linkedinProfile: linkedinProfile || '',
       city,
       state,
       profileCompletion: { basicInfo: true }
@@ -591,29 +591,39 @@ exports.getMe = async (req, res) => {
   }
 };
 
-// backend/controllers/authController.js
-
 // @desc    Register Company - Step 1
 // @route   POST /api/auth/register/company/init
 exports.initCompanyRegistration = async (req, res) => {
   try {
     const { 
-      companyName, 
-      decisionMakerName, 
+      firstName,           
+      lastName,            
       email, 
-      mobile, 
-      designation, 
-      department,        // ✅ NEW
+      mobile,
+      companyName,         
+      designation,         
+      department,          
       linkedinProfile, 
       city, 
       state 
     } = req.body;
 
-    // Validate required fields
-    if (!companyName || !decisionMakerName || !email || !mobile || !designation || !department || !city || !state) {
+    // ✅ FIXED: Validate form fields (NOT decisionMakerName)
+    if (!firstName || !lastName || !email || !mobile || !companyName || !designation || !department || !city || !state) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide all required fields'
+        message: 'Please provide all required fields',
+        required: {
+          firstName: !firstName ? 'missing' : 'ok',
+          lastName: !lastName ? 'missing' : 'ok',
+          email: !email ? 'missing' : 'ok',
+          mobile: !mobile ? 'missing' : 'ok',
+          companyName: !companyName ? 'missing' : 'ok',
+          designation: !designation ? 'missing' : 'ok',
+          department: !department ? 'missing' : 'ok',
+          city: !city ? 'missing' : 'ok',
+          state: !state ? 'missing' : 'ok'
+        }
       });
     }
 
@@ -650,14 +660,14 @@ exports.initCompanyRegistration = async (req, res) => {
       mobileVerified: skipMobileOTP
     });
 
-    // Create company profile
+    // ✅ Create company profile - combine firstName + lastName
     await Company.create({
       user: user._id,
       companyName,
-      decisionMakerName,
+      decisionMakerName: `${firstName} ${lastName}`,  // ✅ Combine names
       designation,
-      department,          // ✅ NEW
-      linkedinProfile,
+      department,
+      linkedinProfile: linkedinProfile || '',
       city,
       state,
       profileCompletion: { basicInfo: true }

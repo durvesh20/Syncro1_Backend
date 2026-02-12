@@ -22,46 +22,41 @@ const staffingPartnerSchema = new mongoose.Schema({
   },
   designation: {
     type: String,
-    required: [true, 'Role/Designation is required']
+    required: [true, 'Designation is required'],  // ✅ ADDED required
+    trim: true
   },
   linkedinProfile: {
     type: String,
     trim: true
+    // ⚪ Optional - correct
   },
   city: {
     type: String,
-    required: [true, 'City is required']
+    required: [true, 'City is required'],  // ✅ ADDED required
+    trim: true
   },
   state: {
     type: String,
-    required: [true, 'State is required']
+    required: [true, 'State is required'],  // ✅ ADDED required
+    trim: true
   },
 
   // ==================== 2. FIRM / ORGANIZATION DETAILS ====================
   firmName: {
     type: String,
-    required: [true, 'Legal Business name is required'],
+    required: [true, 'Firm name is required'],
     trim: true
   },
   firmDetails: {
-    registeredName: {
-      type: String,
-      required: true
-    },
-    tradeName: {
-      type: String,
-      required: true,
-      trim: true
-    },
+    registeredName: String,        // ⚪ Optional - Dashboard
+    tradeName: String,             // ⚪ Optional - Dashboard
     entityType: {
       type: String,
-      enum: ['Proprietor', 'Partnership', 'LLP', 'Private Limited', 'Agency'],
-      required: true
+      enum: ['Proprietor', 'Partnership', 'LLP', 'Private Limited', 'Agency']
+      // ⚪ Optional - Dashboard
     },
     yearEstablished: Number,
     website: String,
-
-    // Registered Office Address
     registeredOfficeAddress: {
       street: String,
       city: String,
@@ -69,8 +64,6 @@ const staffingPartnerSchema = new mongoose.Schema({
       pincode: String,
       country: { type: String, default: 'India' }
     },
-
-    // Operating Address
     operatingAddress: {
       street: String,
       city: String,
@@ -79,15 +72,10 @@ const staffingPartnerSchema = new mongoose.Schema({
       country: { type: String, default: 'India' },
       sameAsRegistered: { type: Boolean, default: false }
     },
-
-    panNumber: {
-      type: String,
-      required: true
-    },
+    panNumber: String,
     gstNumber: String,
     cinNumber: String,
     llpinNumber: String,
-
     employeeCount: {
       type: String,
       enum: ['1-5', '6-20', '21-50', '51-100', '100+']
@@ -105,24 +93,16 @@ const staffingPartnerSchema = new mongoose.Schema({
         'Media', 'Legal', 'Real Estate', 'Logistics', 'Other'
       ]
     }],
-
     hiringLevels: [{
       type: String,
       enum: ['Entry', 'Mid', 'Senior', 'Leadership']
     }],
-
     avgCtcRangeHandled: {
       type: String,
       enum: ['0-5 LPA', '5-20 LPA', '20-35 LPA', '35+ LPA']
     },
-
-    averageMonthlyClosures: {
-      type: Number,
-      required: true
-    },
-
+    averageMonthlyClosures: Number,
     yearsOfRecruitmentExperience: Number,
-
     functionalAreas: [String],
     topClients: [String],
     specializations: [String]
@@ -131,22 +111,15 @@ const staffingPartnerSchema = new mongoose.Schema({
   // ==================== 4. GEOGRAPHIC & DELIVERY REACH ====================
   geographicReach: {
     preferredHiringLocations: [String],
-    panIndiaCapability: {
-      type: Boolean,
-      default: false
-    },
+    panIndiaCapability: { type: Boolean, default: false },
     operatingCities: [String],
     operatingStates: [String],
-    internationalReach: {
-      type: Boolean,
-      default: false
-    },
+    internationalReach: { type: Boolean, default: false },
     internationalCountries: [String]
   },
 
   // ==================== 5. COMPLIANCE & ETHICAL DECLARATIONS ====================
   compliance: {
-    // Syncrotech Agreement Clauses
     syncrotechAgreement: {
       noCvRecycling: {
         accepted: { type: Boolean, default: false },
@@ -194,14 +167,10 @@ const staffingPartnerSchema = new mongoose.Schema({
         acceptedIp: String
       }
     },
-
-    // Overall Agreement Status
     allClausesAccepted: { type: Boolean, default: false },
     agreementAcceptedAt: Date,
     agreementAcceptedIp: String,
     digitalSignature: String,
-
-    // Legacy fields (for backward compatibility)
     termsAccepted: { type: Boolean, default: false },
     ndaSigned: { type: Boolean, default: false },
     agreementSigned: { type: Boolean, default: false },
@@ -214,25 +183,17 @@ const staffingPartnerSchema = new mongoose.Schema({
     bankName: String,
     accountNumber: String,
     ifscCode: String,
-    
-    // Legacy field names
     accountHolderName: String
   },
 
   payoutPreferences: {
-    payoutEntityName: {
-      type: String,
-      trim: true
-    },
+    payoutEntityName: { type: String, trim: true },
     gstRegistration: {
       type: String,
       enum: ['Regular', 'Composition', 'Unregistered'],
       default: 'Unregistered'
     },
-    tdsApplicable: {
-      type: Boolean,
-      default: true
-    }
+    tdsApplicable: { type: Boolean, default: true }
   },
 
   // ==================== 7. DOCUMENTS ====================
@@ -318,12 +279,10 @@ const staffingPartnerSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Virtual for full name
 staffingPartnerSchema.virtual('fullName').get(function() {
   return `${this.firstName} ${this.lastName}`;
 });
 
-// Calculate profile completion percentage
 staffingPartnerSchema.methods.getProfileCompletionPercentage = function() {
   const fields = Object.values(this.profileCompletion);
   const completed = fields.filter(Boolean).length;

@@ -144,7 +144,12 @@ exports.verifyCompany = async (req, res) => {
       
       user.status = 'VERIFIED';
       
-      await emailService.sendVerificationApproved(user.email, company.decisionMakerName, 'company');
+      // ✅ Use decisionMakerName directly
+      await emailService.sendVerificationApproved(
+        user.email, 
+        company.decisionMakerName,  // ✅ Full name
+        'company'
+      );
     } else if (action === 'reject') {
       company.verificationStatus = 'REJECTED';
       company.rejectionReason = rejectionReason;
@@ -167,6 +172,7 @@ exports.verifyCompany = async (req, res) => {
     });
   }
 };
+
 
 // @desc    Manage Payouts
 // @route   GET /api/admin/payouts
