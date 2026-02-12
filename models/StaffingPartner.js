@@ -9,7 +9,7 @@ const staffingPartnerSchema = new mongoose.Schema({
     unique: true
   },
 
-  // Basic Info
+  // ==================== 1. PRIMARY PARTNER ACCOUNT ====================
   firstName: {
     type: String,
     required: [true, 'First name is required'],
@@ -18,11 +18,6 @@ const staffingPartnerSchema = new mongoose.Schema({
   lastName: {
     type: String,
     required: [true, 'Last name is required'],
-    trim: true
-  },
-  firmName: {
-    type: String,
-    required: [true, 'Firm/Legal Business name is required'],
     trim: true
   },
   designation: {
@@ -42,72 +37,106 @@ const staffingPartnerSchema = new mongoose.Schema({
     required: [true, 'State is required']
   },
 
-  // Firm/Organization Details
+  // ==================== 2. FIRM / ORGANIZATION DETAILS ====================
+  firmName: {
+    type: String,
+    required: [true, 'Legal Business name is required'],
+    trim: true
+  },
   firmDetails: {
-    // ✅ NEW: Brand / Trade Name
-    tradeName: { type: String, trim: true },
-
-    // ✅ NEW: Entity Type
+    registeredName: {
+      type: String,
+      required: true
+    },
+    tradeName: {
+      type: String,
+      required: true,
+      trim: true
+    },
     entityType: {
       type: String,
-      enum: ['proprietor', 'partnership', 'llp', 'pvt_ltd', 'agency']
+      enum: ['Proprietor', 'Partnership', 'LLP', 'Private Limited', 'Agency'],
+      required: true
     },
-
-    registeredName: String,
-    gstNumber: String,
-    panNumber: String,
-    registrationNumber: String,
     yearEstablished: Number,
-    employeeCount: {
-      type: String,
-      enum: ['1-5', '6-20', '21-50', '51-100', '100+']
-    },
     website: String,
-    address: {
+
+    // Registered Office Address
+    registeredOfficeAddress: {
       street: String,
       city: String,
       state: String,
-      pincode: String
+      pincode: String,
+      country: { type: String, default: 'India' }
+    },
+
+    // Operating Address
+    operatingAddress: {
+      street: String,
+      city: String,
+      state: String,
+      pincode: String,
+      country: { type: String, default: 'India' },
+      sameAsRegistered: { type: Boolean, default: false }
+    },
+
+    panNumber: {
+      type: String,
+      required: true
+    },
+    gstNumber: String,
+    cinNumber: String,
+    llpinNumber: String,
+
+    employeeCount: {
+      type: String,
+      enum: ['1-5', '6-20', '21-50', '51-100', '100+']
     }
   },
 
-  // Syncro1 Competency (UPDATED as per doc)
+  // ==================== 3. RECRUITMENT COMPETENCY PROFILE ====================
   Syncro1Competency: {
-    // ✅ RENAMED from industries
-    primaryHiringSectors: [String],
+    primaryHiringSectors: [{
+      type: String,
+      enum: [
+        'BFSI', 'Technology', 'Pharma', 'E-commerce', 'Engineering',
+        'Defence', 'Gaming', 'Agriculture', 'Healthcare', 'Retail',
+        'Manufacturing', 'Education', 'Hospitality', 'Telecom',
+        'Media', 'Legal', 'Real Estate', 'Logistics', 'Other'
+      ]
+    }],
 
-    // ✅ RENAMED from experienceLevels
     hiringLevels: [{
       type: String,
       enum: ['Entry', 'Mid', 'Senior', 'Leadership']
     }],
 
-    // ✅ NEW: Avg CTC Range Handled
     avgCtcRangeHandled: {
       type: String,
       enum: ['0-5 LPA', '5-20 LPA', '20-35 LPA', '35+ LPA']
     },
 
-    // ✅ NEW: Average Monthly Closures
-    averageMonthlyClosures: Number,
+    averageMonthlyClosures: {
+      type: Number,
+      required: true
+    },
 
-    // ✅ NEW: Years of Recruitment Experience
     yearsOfRecruitmentExperience: Number,
 
-    // Existing / optional fields (still useful)
     functionalAreas: [String],
     topClients: [String],
     specializations: [String]
   },
 
-  // Geographic Reach
+  // ==================== 4. GEOGRAPHIC & DELIVERY REACH ====================
   geographicReach: {
-    operatingCities: [String],
-    operatingStates: [String],
+    preferredHiringLocations: [String],
     panIndiaCapability: {
       type: Boolean,
       default: false
     },
+    operatingCities: [String],
+    operatingStates: [String],
     internationalReach: {
       type: Boolean,
       default: false
@@ -115,43 +144,90 @@ const staffingPartnerSchema = new mongoose.Schema({
     internationalCountries: [String]
   },
 
-  // Compliance & Agreement
+  // ==================== 5. COMPLIANCE & ETHICAL DECLARATIONS ====================
   compliance: {
-    agreementSigned: {
-      type: Boolean,
-      default: false
+    // Syncrotech Agreement Clauses
+    syncrotechAgreement: {
+      noCvRecycling: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      },
+      noFakeProfiles: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      },
+      noDoubleRepresentation: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      },
+      vendorCodeOfConduct: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      },
+      dataPrivacyPolicy: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      },
+      candidateConsentPolicy: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      },
+      nonCircumventionClause: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      },
+      commissionPayoutTerms: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      },
+      replacementBackoutLiability: {
+        accepted: { type: Boolean, default: false },
+        acceptedAt: Date,
+        acceptedIp: String
+      }
     },
-    agreementSignedAt: Date,
-    agreementDocument: String,
+
+    // Overall Agreement Status
+    allClausesAccepted: { type: Boolean, default: false },
+    agreementAcceptedAt: Date,
+    agreementAcceptedIp: String,
     digitalSignature: String,
-    termsAccepted: {
-      type: Boolean,
-      default: false
-    },
-    ndaSigned: {
-      type: Boolean,
-      default: false
-    }
+
+    // Legacy fields (for backward compatibility)
+    termsAccepted: { type: Boolean, default: false },
+    ndaSigned: { type: Boolean, default: false },
+    agreementSigned: { type: Boolean, default: false },
+    agreementSignedAt: Date
   },
 
-  // Finance Details
+  // ==================== 6. COMMERCIAL & PAYOUT PREFERENCES ====================
   financeDetails: {
+    bankAccountHolderName: String,
     bankName: String,
     accountNumber: String,
     ifscCode: String,
-    accountHolderName: String,
-    panCard: String,
-    gstCertificate: String,
-    cancelledCheque: String
+    
+    // Legacy field names
+    accountHolderName: String
   },
 
-  // ✅ NEW: Payout Preferences (Tax + Entity)
   payoutPreferences: {
-    payoutEntityName: { type: String, trim: true },
+    payoutEntityName: {
+      type: String,
+      trim: true
+    },
     gstRegistration: {
       type: String,
-      enum: ['regular', 'composition', 'unregister'],
-      default: 'unregister'
+      enum: ['Regular', 'Composition', 'Unregistered'],
+      default: 'Unregistered'
     },
     tdsApplicable: {
       type: Boolean,
@@ -159,16 +235,40 @@ const staffingPartnerSchema = new mongoose.Schema({
     }
   },
 
-  // Documents
- documents: {
-  panCard: String,
-  gstCertificate: String,
-  incorporationCertificate: String,     // ✅ NEW
-  cancelledCheque: String,
-  authorizedSignatoryProof: String,     // ✅ NEW
-  addressProof: String
-},
-  // Subscription
+  // ==================== 7. DOCUMENTS ====================
+  documents: {
+    panCard: String,
+    gstCertificate: String,
+    incorporationCertificate: String,
+    cancelledCheque: String,
+    authorizedSignatoryProof: String,
+    addressProof: String
+  },
+
+  // ==================== 8. TEAM & SUB-RECRUITER ACCESS ====================
+  teamAccess: {
+    isTeamEnabled: { type: Boolean, default: false },
+    teamMembers: [{
+      name: String,
+      email: String,
+      mobile: String,
+      role: {
+        type: String,
+        enum: ['Admin', 'Recruiter', 'Viewer'],
+        default: 'Recruiter'
+      },
+      permissions: {
+        canViewJobs: { type: Boolean, default: true },
+        canSubmitCandidates: { type: Boolean, default: true },
+        canViewEarnings: { type: Boolean, default: false },
+        canManageTeam: { type: Boolean, default: false }
+      },
+      addedAt: { type: Date, default: Date.now },
+      isActive: { type: Boolean, default: true }
+    }]
+  },
+
+  // ==================== SUBSCRIPTION ====================
   subscription: {
     plan: {
       type: String,
@@ -177,57 +277,31 @@ const staffingPartnerSchema = new mongoose.Schema({
     },
     startDate: Date,
     endDate: Date,
-    isActive: {
-      type: Boolean,
-      default: true
-    },
-    autoRenew: {
-      type: Boolean,
-      default: false
-    }
+    isActive: { type: Boolean, default: true },
+    autoRenew: { type: Boolean, default: false }
   },
 
-  // Performance Metrics
+  // ==================== PERFORMANCE METRICS ====================
   metrics: {
-    totalSubmissions: {
-      type: Number,
-      default: 0
-    },
-    totalPlacements: {
-      type: Number,
-      default: 0
-    },
-    totalEarnings: {
-      type: Number,
-      default: 0
-    },
-    pendingPayouts: {
-      type: Number,
-      default: 0
-    },
-    rating: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: 5
-    }
+    totalSubmissions: { type: Number, default: 0 },
+    totalPlacements: { type: Number, default: 0 },
+    totalEarnings: { type: Number, default: 0 },
+    pendingPayouts: { type: Number, default: 0 },
+    rating: { type: Number, default: 0, min: 0, max: 5 }
   },
 
-  // Verification
+  // ==================== VERIFICATION ====================
   verificationStatus: {
     type: String,
     enum: ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'],
     default: 'PENDING'
   },
   verificationNotes: String,
-  verifiedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
+  verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   verifiedAt: Date,
   rejectionReason: String,
 
-  // Profile Completion
+  // ==================== PROFILE COMPLETION ====================
   profileCompletion: {
     basicInfo: { type: Boolean, default: false },
     firmDetails: { type: Boolean, default: false },
@@ -235,15 +309,11 @@ const staffingPartnerSchema = new mongoose.Schema({
     geographicReach: { type: Boolean, default: false },
     compliance: { type: Boolean, default: false },
     financeDetails: { type: Boolean, default: false },
-
-    // ✅ NEW (optional but included)
-    payoutPreferences: { type: Boolean, default: false }
+    payoutPreferences: { type: Boolean, default: false },
+    documents: { type: Boolean, default: false }
   },
 
-  isActive: {
-    type: Boolean,
-    default: true
-  }
+  isActive: { type: Boolean, default: true }
 }, {
   timestamps: true
 });
