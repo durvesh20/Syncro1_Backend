@@ -9,12 +9,7 @@ const companySchema = new mongoose.Schema({
     unique: true
   },
 
-  // Basic Info
-  companyName: {
-    type: String,
-    required: [true, 'Company name is required'],
-    trim: true
-  },
+  // ==================== 1. Primary Account (Decision Maker) ====================
   decisionMakerName: {
     type: String,
     required: [true, 'Decision maker name is required']
@@ -22,6 +17,12 @@ const companySchema = new mongoose.Schema({
   designation: {
     type: String,
     required: [true, 'Designation is required']
+  },
+  // ✅ NEW
+  department: {
+    type: String,
+    enum: ['HR', 'Talent Acquisition', 'Founder/CEO', 'Operations', 'Admin', 'Other'],
+    required: true
   },
   linkedinProfile: String,
   city: {
@@ -33,26 +34,40 @@ const companySchema = new mongoose.Schema({
     required: true
   },
 
-  // Company KYC
+  // ==================== 2. Company Information (Core KYC Layer) ====================
+  companyName: {
+    type: String,
+    required: [true, 'Company name is required'],
+    trim: true
+  },
   kyc: {
     registeredName: String,
+    // ✅ NEW: Brand / Trade Name
+    tradeName: {
+      type: String,
+      trim: true
+    },
     cin: String,
+    // ✅ NEW: LLPIN for LLP companies
+    llpin: String,
     gstNumber: String,
     panNumber: String,
     industry: String,
     companyType: {
       type: String,
-      enum: ['Startup', 'SME', 'Enterprise', 'MNC', 'Government', 'NGO']
+      enum: ['Private Limited', 'LLP', 'Public Limited', 'Startup', 'MNC', 'Partnership', 'Proprietorship', 'Other']
     },
     employeeCount: {
       type: String,
-      enum: ['1-50', '51-200', '201-500', '501-1000', '1000+']
+      enum: ['1-10', '11-50', '51-200', '201-500', '500+']
     },
     yearEstablished: Number,
     website: String,
     description: String,
     logo: String,
-    address: {
+    
+    // ✅ UPDATED: Separate Registered & Operating Addresses
+    registeredAddress: {
       street: String,
       city: String,
       state: String,
@@ -61,15 +76,57 @@ const companySchema = new mongoose.Schema({
         type: String,
         default: 'India'
       }
+    },
+    operatingAddress: {
+      street: String,
+      city: String,
+      state: String,
+      pincode: String,
+      country: {
+        type: String,
+        default: 'India'
+      },
+      sameAsRegistered: {
+        type: Boolean,
+        default: true
+      }
     }
   },
 
-  // Hiring Preferences
+  // ==================== 3. Hiring & Business Profile ====================
   hiringPreferences: {
     preferredIndustries: [String],
     functionalAreas: [String],
     experienceLevels: [String],
     locations: [String],
+    
+    // ✅ NEW: Hiring Type
+    hiringType: {
+      type: String,
+      enum: ['Permanent', 'Contract', 'Both'],
+      default: 'Permanent'
+    },
+    
+    // ✅ RENAMED: More specific
+    avgMonthlyHiringVolume: {
+      type: String,
+      enum: ['1-5', '6-15', '16-30', '30+']
+    },
+    
+    // ✅ NEW: Typical CTC Band (restructured)
+    typicalCtcBand: {
+      type: String,
+      enum: ['0-5 LPA', '5-20 LPA', '20-35 LPA', '35+ LPA']
+    },
+    
+    // ✅ NEW: Work Mode Preference
+    workModePreference: {
+      type: String,
+      enum: ['Remote', 'Hybrid', 'Onsite', 'Flexible'],
+      default: 'Hybrid'
+    },
+    
+    // Existing fields
     salaryRanges: [{
       min: Number,
       max: Number,
@@ -78,27 +135,44 @@ const companySchema = new mongoose.Schema({
         default: 'INR'
       }
     }],
-    hiringVolume: {
-      type: String,
-      enum: ['Low (1-5/month)', 'Medium (6-15/month)', 'High (16-30/month)', 'Very High (30+/month)']
-    },
     urgencyLevel: {
       type: String,
       enum: ['Immediate', 'Within 30 days', 'Within 60 days', 'Ongoing']
     }
   },
 
-  // Billing Setup
+  // ==================== 5. Commercial & Billing Setup ====================
   billing: {
-    billingName: String,
-    billingEmail: String,
+    billingEntityName: String,
     billingAddress: {
       street: String,
       city: String,
       state: String,
       pincode: String
     },
+    
+    // ✅ NEW: GST Registration Type
+    gstRegistrationType: {
+      type: String,
+      enum: ['Regular', 'Composition', 'Unregistered'],
+      default: 'Unregistered'
+    },
+    
     gstNumber: String,
+    panNumber: String,
+    
+    // ✅ NEW: PO Required
+    poRequired: {
+      type: Boolean,
+      default: false
+    },
+    
+    // ✅ NEW: TDS Applicable
+    tdsApplicable: {
+      type: Boolean,
+      default: true
+    },
+    
     paymentTerms: {
       type: String,
       enum: ['Immediate', 'Net 15', 'Net 30', 'Net 45', 'Net 60'],
@@ -111,17 +185,47 @@ const companySchema = new mongoose.Schema({
     }
   },
 
-  // Legal Consents
+  // ==================== 7. Legal & Compliance ====================
   legalConsents: {
     termsAccepted: {
       type: Boolean,
       default: false
     },
     termsAcceptedAt: Date,
+    termsAcceptedIp: String,
+    
     privacyPolicyAccepted: {
       type: Boolean,
       default: false
     },
+    privacyPolicyAcceptedAt: Date,
+    privacyPolicyAcceptedIp: String,
+    
+    // ✅ NEW: Data Processing Agreement
+    dataProcessingAgreementAccepted: {
+      type: Boolean,
+      default: false
+    },
+    dataProcessingAgreementAcceptedAt: Date,
+    dataProcessingAgreementAcceptedIp: String,
+    
+    // ✅ NEW: Vendor Sharing Consent
+    vendorSharingConsent: {
+      type: Boolean,
+      default: false
+    },
+    vendorSharingConsentAt: Date,
+    vendorSharingConsentIp: String,
+    
+    // ✅ NEW: Communication Consent
+    communicationConsent: {
+      email: { type: Boolean, default: true },
+      whatsapp: { type: Boolean, default: false },
+      sms: { type: Boolean, default: false }
+    },
+    communicationConsentAt: Date,
+    communicationConsentIp: String,
+    
     agreementSigned: {
       type: Boolean,
       default: false
@@ -130,16 +234,16 @@ const companySchema = new mongoose.Schema({
     agreementDocument: String
   },
 
-  // Documents
+  // ==================== 8. Documents (Post-Signup Verification) ====================
   documents: {
-    incorporationCertificate: String,
     gstCertificate: String,
     panCard: String,
-    addressProof: String,
-    authorizedSignatoryProof: String
+    incorporationCertificate: String,
+    authorizedSignatoryProof: String,
+    addressProof: String
   },
 
-  // Verification
+  // ==================== Verification ====================
   verificationStatus: {
     type: String,
     enum: ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'],
@@ -153,7 +257,7 @@ const companySchema = new mongoose.Schema({
   verifiedAt: Date,
   rejectionReason: String,
 
-  // Profile Completion
+  // ==================== Profile Completion ====================
   profileCompletion: {
     basicInfo: { type: Boolean, default: false },
     kyc: { type: Boolean, default: false },
@@ -163,7 +267,7 @@ const companySchema = new mongoose.Schema({
     documents: { type: Boolean, default: false }
   },
 
-  // Metrics
+  // ==================== Metrics ====================
   metrics: {
     totalJobsPosted: { type: Number, default: 0 },
     activeJobs: { type: Number, default: 0 },

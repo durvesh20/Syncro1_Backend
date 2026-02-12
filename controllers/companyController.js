@@ -31,6 +31,8 @@ exports.getProfile = async (req, res) => {
   }
 };
 
+// backend/controllers/companyController.js
+
 // @desc    Update Company KYC
 // @route   PUT /api/companies/profile/kyc
 exports.updateKYC = async (req, res) => {
@@ -42,6 +44,14 @@ exports.updateKYC = async (req, res) => {
         success: false,
         message: 'Company not found'
       });
+    }
+
+    // ✅ Handle operating address "same as registered" logic
+    if (req.body.operatingAddress?.sameAsRegistered) {
+      req.body.operatingAddress = {
+        ...req.body.registeredAddress,
+        sameAsRegistered: true
+      };
     }
 
     company.kyc = { ...company.kyc, ...req.body };
@@ -137,15 +147,44 @@ exports.updateLegalConsents = async (req, res) => {
       });
     }
 
-    const { termsAccepted, privacyPolicyAccepted, agreementSigned } = req.body;
+    const { 
+      termsAccepted, 
+      privacyPolicyAccepted, 
+      dataProcessingAgreementAccepted,  // ✅ NEW
+      vendorSharingConsent,              // ✅ NEW
+      communicationConsent,              // ✅ NEW
+      agreementSigned 
+    } = req.body;
 
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const timestamp = new Date();
+
+    // ✅ Update with IP logging and timestamps
     company.legalConsents = {
       termsAccepted,
-      termsAcceptedAt: termsAccepted ? new Date() : null,
+      termsAcceptedAt: termsAccepted ? timestamp : company.legalConsents.termsAcceptedAt,
+      termsAcceptedIp: termsAccepted ? ipAddress : company.legalConsents.termsAcceptedIp,
+      
       privacyPolicyAccepted,
+      privacyPolicyAcceptedAt: privacyPolicyAccepted ? timestamp : company.legalConsents.privacyPolicyAcceptedAt,
+      privacyPolicyAcceptedIp: privacyPolicyAccepted ? ipAddress : company.legalConsents.privacyPolicyAcceptedIp,
+      
+      dataProcessingAgreementAccepted,
+      dataProcessingAgreementAcceptedAt: dataProcessingAgreementAccepted ? timestamp : company.legalConsents.dataProcessingAgreementAcceptedAt,
+      dataProcessingAgreementAcceptedIp: dataProcessingAgreementAccepted ? ipAddress : company.legalConsents.dataProcessingAgreementAcceptedIp,
+      
+      vendorSharingConsent,
+      vendorSharingConsentAt: vendorSharingConsent ? timestamp : company.legalConsents.vendorSharingConsentAt,
+      vendorSharingConsentIp: vendorSharingConsent ? ipAddress : company.legalConsents.vendorSharingConsentIp,
+      
+      communicationConsent: communicationConsent || company.legalConsents.communicationConsent,
+      communicationConsentAt: communicationConsent ? timestamp : company.legalConsents.communicationConsentAt,
+      communicationConsentIp: communicationConsent ? ipAddress : company.legalConsents.communicationConsentIp,
+      
       agreementSigned,
-      agreementSignedAt: agreementSigned ? new Date() : null
+      agreementSignedAt: agreementSigned ? timestamp : company.legalConsents.agreementSignedAt
     };
+    
     company.profileCompletion.legalConsents = true;
     await company.save();
 
@@ -513,7 +552,10 @@ exports.getCandidate = async (req, res) => {
     const candidate = await Candidate.findById(req.params.id)
       .populate('submittedBy', 'firstName lastName firmName email')
       .populate('job', 'title commission')
-      .populate('company', 'companyName');
+      .populate({
+        path: 'company',
+        select: 'companyName user' // ✅ Include user field
+      });
 
     if (!candidate) {
       return res.status(404).json({
@@ -522,9 +564,27 @@ exports.getCandidate = async (req, res) => {
       });
     }
 
+    // ✅ Now check authorization properly
+    const isCompany =
+      req.user.role === 'company' &&
+      candidate.company?.user?.toString() === req.user._id.toString();
+
+    if (!isCompany) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to view this candidate'
+      });
+    }
+
+    // Remove sensitive company.user before sending response
+    const responseData = candidate.toObject();
+    if (responseData.company?.user) {
+      delete responseData.company.user;
+    }
+
     res.json({
       success: true,
-      data: candidate
+      data: responseData
     });
   } catch (error) {
     res.status(500).json({
@@ -541,12 +601,24 @@ exports.updateCandidateStatus = async (req, res) => {
   try {
     const { status, notes } = req.body;
 
-    const candidate = await Candidate.findById(req.params.id);
+    const candidate = await Candidate.findById(req.params.id)
+      .populate({
+        path: 'company',
+        select: 'user' // ✅ Only need user for auth check
+      });
 
     if (!candidate) {
       return res.status(404).json({
         success: false,
         message: 'Candidate not found'
+      });
+    }
+
+    // ✅ Verify this company owns this candidate
+    if (candidate.company.user.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to update this candidate'
       });
     }
 
@@ -581,10 +653,16 @@ exports.updateCandidateStatus = async (req, res) => {
       await job.save();
     }
 
+    // Re-fetch without user field for response
+    const updatedCandidate = await Candidate.findById(candidate._id)
+      .populate('submittedBy', 'firstName lastName firmName')
+      .populate('job', 'title commission')
+      .populate('company', 'companyName');
+
     res.json({
       success: true,
       message: 'Candidate status updated',
-      data: candidate
+      data: updatedCandidate
     });
   } catch (error) {
     res.status(500).json({

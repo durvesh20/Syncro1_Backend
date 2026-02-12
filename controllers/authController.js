@@ -584,17 +584,26 @@ exports.getMe = async (req, res) => {
   }
 };
 
+// backend/controllers/authController.js
+
 // @desc    Register Company - Step 1
 // @route   POST /api/auth/register/company/init
 exports.initCompanyRegistration = async (req, res) => {
   try {
     const { 
-      companyName, decisionMakerName, email, mobile, 
-      designation, linkedinProfile, city, state 
+      companyName, 
+      decisionMakerName, 
+      email, 
+      mobile, 
+      designation, 
+      department,        // ✅ NEW
+      linkedinProfile, 
+      city, 
+      state 
     } = req.body;
 
     // Validate required fields
-    if (!companyName || !decisionMakerName || !email || !mobile || !designation || !city || !state) {
+    if (!companyName || !decisionMakerName || !email || !mobile || !designation || !department || !city || !state) {
       return res.status(400).json({
         success: false,
         message: 'Please provide all required fields'
@@ -640,6 +649,7 @@ exports.initCompanyRegistration = async (req, res) => {
       companyName,
       decisionMakerName,
       designation,
+      department,          // ✅ NEW
       linkedinProfile,
       city,
       state,

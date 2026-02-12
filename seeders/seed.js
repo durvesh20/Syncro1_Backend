@@ -247,54 +247,97 @@ const seedDatabase = async () => {
         isPasswordChanged: true,
       });
 
-      const company = await Company.create({
-        user: companyUser._id,
-        companyName: "TechCorp Solutions Pvt Ltd",
-        decisionMakerName: "John Doe",
-        designation: "HR Director",
-        city: "Bangalore",
-        state: "Karnataka",
-        kyc: {
-          registeredName: "TechCorp Solutions Private Limited",
-          cin: "U72200KA2018PTC123456",
-          gstNumber: "29AABCT5678A1Z5",
-          panNumber: "AABCT5678A",
-          industry: "Technology",
-          companyType: "Enterprise",
-          employeeCount: "501-1000",
-          yearEstablished: 2018,
-          website: "https://techcorp.com",
-          description: "Leading technology solutions provider",
-        },
-        hiringPreferences: {
-          preferredIndustries: ["Technology"],
-          experienceLevels: ["Mid", "Senior", "Executive"],
-          locations: ["Bangalore", "Mumbai", "Hyderabad"],
-          hiringVolume: "High (16-30/month)",
-          urgencyLevel: "Ongoing",
-        },
-        billing: {
-          billingName: "TechCorp Solutions Private Limited",
-          billingEmail: "accounts@techcorp.com",
-          paymentTerms: "Net 30",
-        },
-        legalConsents: {
-          termsAccepted: true,
-          termsAcceptedAt: new Date(),
-          privacyPolicyAccepted: true,
-          agreementSigned: true,
-          agreementSignedAt: new Date(),
-        },
-        verificationStatus: "APPROVED",
-        profileCompletion: {
-          basicInfo: true,
-          kyc: true,
-          hiringPreferences: true,
-          billing: true,
-          legalConsents: true,
-          documents: true,
-        },
-      });
+// backend/seeders/seed.js
+
+const company = await Company.create({
+  user: companyUser._id,
+  companyName: 'TechCorp Solutions Pvt Ltd',
+  decisionMakerName: 'John Doe',
+  designation: 'HR Director',
+  department: 'HR',  // ✅ NEW
+  city: 'Bangalore',
+  state: 'Karnataka',
+  kyc: {
+    registeredName: 'TechCorp Solutions Private Limited',
+    tradeName: 'TechCorp',  // ✅ NEW
+    cin: 'U72200KA2018PTC123456',
+    gstNumber: '29AABCT5678A1Z5',
+    panNumber: 'AABCT5678A',
+    industry: 'Technology',
+    companyType: 'Private Limited',  // ✅ UPDATED
+    employeeCount: '500+',  // ✅ UPDATED
+    yearEstablished: 2018,
+    website: 'https://techcorp.com',
+    description: 'Leading technology solutions provider',
+    registeredAddress: {  // ✅ NEW
+      street: '123 Tech Park',
+      city: 'Bangalore',
+      state: 'Karnataka',
+      pincode: '560001',
+      country: 'India'
+    },
+    operatingAddress: {  // ✅ NEW
+      street: '123 Tech Park',
+      city: 'Bangalore',
+      state: 'Karnataka',
+      pincode: '560001',
+      country: 'India',
+      sameAsRegistered: true
+    }
+  },
+  hiringPreferences: {
+    preferredIndustries: ['Technology'],
+    hiringType: 'Both',  // ✅ NEW
+    avgMonthlyHiringVolume: '16-30',  // ✅ UPDATED
+    typicalCtcBand: '5-20 LPA',  // ✅ NEW
+    workModePreference: 'Hybrid',  // ✅ NEW
+    experienceLevels: ['Mid', 'Senior', 'Executive'],
+    locations: ['Bangalore', 'Mumbai', 'Hyderabad'],
+    urgencyLevel: 'Ongoing'
+  },
+  billing: {
+    billingEntityName: 'TechCorp Solutions Private Limited',
+    billingEmail: 'accounts@techcorp.com',
+    gstRegistrationType: 'Regular',  // ✅ NEW
+    gstNumber: '29AABCT5678A1Z5',
+    panNumber: 'AABCT5678A',
+    poRequired: false,  // ✅ NEW
+    tdsApplicable: true,  // ✅ NEW
+    paymentTerms: 'Net 30'
+  },
+  legalConsents: {
+    termsAccepted: true,
+    termsAcceptedAt: new Date(),
+    termsAcceptedIp: '127.0.0.1',
+    privacyPolicyAccepted: true,
+    privacyPolicyAcceptedAt: new Date(),
+    privacyPolicyAcceptedIp: '127.0.0.1',
+    dataProcessingAgreementAccepted: true,  // ✅ NEW
+    dataProcessingAgreementAcceptedAt: new Date(),
+    dataProcessingAgreementAcceptedIp: '127.0.0.1',
+    vendorSharingConsent: true,  // ✅ NEW
+    vendorSharingConsentAt: new Date(),
+    vendorSharingConsentIp: '127.0.0.1',
+    communicationConsent: {  // ✅ NEW
+      email: true,
+      whatsapp: true,
+      sms: false
+    },
+    communicationConsentAt: new Date(),
+    communicationConsentIp: '127.0.0.1',
+    agreementSigned: true,
+    agreementSignedAt: new Date()
+  },
+  verificationStatus: 'APPROVED',
+  profileCompletion: {
+    basicInfo: true,
+    kyc: true,
+    hiringPreferences: true,
+    billing: true,
+    legalConsents: true,
+    documents: true
+  }
+});
 
       // Create sample jobs for the company
       const sampleJobs = [
