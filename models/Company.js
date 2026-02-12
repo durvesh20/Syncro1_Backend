@@ -9,7 +9,7 @@ const companySchema = new mongoose.Schema({
     unique: true
   },
 
-  // ==================== 1. Primary Account (Decision Maker) ====================
+  // ==================== 1. PRIMARY ACCOUNT (Decision Maker) ====================
   decisionMakerName: {
     type: String,
     required: [true, 'Decision maker name is required']
@@ -18,7 +18,6 @@ const companySchema = new mongoose.Schema({
     type: String,
     required: [true, 'Designation is required']
   },
-  // ✅ NEW
   department: {
     type: String,
     enum: ['HR', 'Talent Acquisition', 'Founder/CEO', 'Operations', 'Admin', 'Other'],
@@ -34,7 +33,7 @@ const companySchema = new mongoose.Schema({
     required: true
   },
 
-  // ==================== 2. Company Information (Core KYC Layer) ====================
+  // ==================== 2. COMPANY INFORMATION (Core KYC Layer) ====================
   companyName: {
     type: String,
     required: [true, 'Company name is required'],
@@ -42,106 +41,72 @@ const companySchema = new mongoose.Schema({
   },
   kyc: {
     registeredName: String,
-    // ✅ NEW: Brand / Trade Name
-    tradeName: {
-      type: String,
-      trim: true
-    },
-    cin: String,
-    // ✅ NEW: LLPIN for LLP companies
-    llpin: String,
-    gstNumber: String,
-    panNumber: String,
-    industry: String,
+    tradeName: String,
+    logo: String,
+    description: String,
+    website: String,
     companyType: {
       type: String,
       enum: ['Private Limited', 'LLP', 'Public Limited', 'Startup', 'MNC', 'Partnership', 'Proprietorship', 'Other']
     },
-    employeeCount: {
-      type: String,
-      enum: ['1-10', '11-50', '51-200', '201-500', '500+']
-    },
     yearEstablished: Number,
-    website: String,
-    description: String,
-    logo: String,
-    
-    // ✅ UPDATED: Separate Registered & Operating Addresses
+    cinNumber: String,
+    llpinNumber: String,
     registeredAddress: {
       street: String,
       city: String,
       state: String,
       pincode: String,
-      country: {
-        type: String,
-        default: 'India'
-      }
+      country: { type: String, default: 'India' }
     },
     operatingAddress: {
       street: String,
       city: String,
       state: String,
       pincode: String,
-      country: {
-        type: String,
-        default: 'India'
-      },
-      sameAsRegistered: {
-        type: Boolean,
-        default: true
-      }
+      country: { type: String, default: 'India' },
+      sameAsRegistered: { type: Boolean, default: false }
+    },
+    gstNumber: String,
+    panNumber: String,
+    industry: String,
+    employeeCount: {
+      type: String,
+      enum: ['1-10', '11-50', '51-200', '201-500', '500+']
     }
   },
 
-  // ==================== 3. Hiring & Business Profile ====================
+  // ==================== 3. HIRING & BUSINESS PROFILE ====================
   hiringPreferences: {
     preferredIndustries: [String],
     functionalAreas: [String],
     experienceLevels: [String],
-    locations: [String],
-    
-    // ✅ NEW: Hiring Type
     hiringType: {
       type: String,
       enum: ['Permanent', 'Contract', 'Both'],
       default: 'Permanent'
     },
-    
-    // ✅ RENAMED: More specific
     avgMonthlyHiringVolume: {
       type: String,
       enum: ['1-5', '6-15', '16-30', '30+']
     },
-    
-    // ✅ NEW: Typical CTC Band (restructured)
     typicalCtcBand: {
       type: String,
       enum: ['0-5 LPA', '5-20 LPA', '20-35 LPA', '35+ LPA']
     },
-    
-    // ✅ NEW: Work Mode Preference
+    preferredLocations: [String],
     workModePreference: {
       type: String,
       enum: ['Remote', 'Hybrid', 'Onsite', 'Flexible'],
       default: 'Hybrid'
     },
-    
-    // Existing fields
-    salaryRanges: [{
-      min: Number,
-      max: Number,
-      currency: {
-        type: String,
-        default: 'INR'
-      }
-    }],
     urgencyLevel: {
       type: String,
       enum: ['Immediate', 'Within 30 days', 'Within 60 days', 'Ongoing']
     }
   },
 
-  // ==================== 5. Commercial & Billing Setup ====================
+  // ==================== 5. COMMERCIAL & BILLING SETUP ====================
   billing: {
     billingEntityName: String,
     billingAddress: {
@@ -150,29 +115,15 @@ const companySchema = new mongoose.Schema({
       state: String,
       pincode: String
     },
-    
-    // ✅ NEW: GST Registration Type
     gstRegistrationType: {
       type: String,
       enum: ['Regular', 'Composition', 'Unregistered'],
       default: 'Unregistered'
     },
-    
     gstNumber: String,
     panNumber: String,
-    
-    // ✅ NEW: PO Required
-    poRequired: {
-      type: Boolean,
-      default: false
-    },
-    
-    // ✅ NEW: TDS Applicable
-    tdsApplicable: {
-      type: Boolean,
-      default: true
-    },
-    
+    poRequired: { type: Boolean, default: false },
+    tdsApplicable: { type: Boolean, default: true },
     paymentTerms: {
       type: String,
       enum: ['Immediate', 'Net 15', 'Net 30', 'Net 45', 'Net 60'],
@@ -185,56 +136,61 @@ const companySchema = new mongoose.Schema({
     }
   },
 
-  // ==================== 7. Legal & Compliance ====================
+  // ==================== 6. USER ROLES & ACCESS CONTROL ====================
+  teamAccess: {
+    isTeamEnabled: { type: Boolean, default: false },
+    teamMembers: [{
+      name: String,
+      email: String,
+      mobile: String,
+      role: {
+        type: String,
+        enum: ['Primary Admin', 'Hiring Manager', 'Recruiter', 'Finance', 'Viewer'],
+        default: 'Recruiter'
+      },
+      addedAt: { type: Date, default: Date.now },
+      isActive: { type: Boolean, default: true }
+    }]
+  },
+
+  // ==================== 7. LEGAL & COMPLIANCE ====================
   legalConsents: {
-    termsAccepted: {
-      type: Boolean,
-      default: false
-    },
+    // Terms of Service
+    termsAccepted: { type: Boolean, default: false },
     termsAcceptedAt: Date,
     termsAcceptedIp: String,
-    
-    privacyPolicyAccepted: {
-      type: Boolean,
-      default: false
-    },
+
+    // Privacy Policy
+    privacyPolicyAccepted: { type: Boolean, default: false },
     privacyPolicyAcceptedAt: Date,
     privacyPolicyAcceptedIp: String,
-    
-    // ✅ NEW: Data Processing Agreement
-    dataProcessingAgreementAccepted: {
-      type: Boolean,
-      default: false
-    },
+
+    // Data Processing Agreement
+    dataProcessingAgreementAccepted: { type: Boolean, default: false },
     dataProcessingAgreementAcceptedAt: Date,
     dataProcessingAgreementAcceptedIp: String,
-    
-    // ✅ NEW: Vendor Sharing Consent
-    vendorSharingConsent: {
-      type: Boolean,
-      default: false
-    },
+
+    // Data Storage Consent
+    dataStorageConsent: { type: Boolean, default: false },
+    dataStorageConsentAt: Date,
+    dataStorageConsentIp: String,
+
+    // Vendor Sharing Consent
+    vendorSharingConsent: { type: Boolean, default: false },
     vendorSharingConsentAt: Date,
     vendorSharingConsentIp: String,
-    
-    // ✅ NEW: Communication Consent
+
+    // Communication Consent
     communicationConsent: {
       email: { type: Boolean, default: true },
       whatsapp: { type: Boolean, default: false },
       sms: { type: Boolean, default: false }
     },
     communicationConsentAt: Date,
-    communicationConsentIp: String,
-    
-    agreementSigned: {
-      type: Boolean,
-      default: false
-    },
-    agreementSignedAt: Date,
-    agreementDocument: String
+    communicationConsentIp: String
   },
 
-  // ==================== 8. Documents (Post-Signup Verification) ====================
+  // ==================== 8. DOCUMENTS (Post-Signup) ====================
   documents: {
     gstCertificate: String,
     panCard: String,
@@ -243,21 +199,18 @@ const companySchema = new mongoose.Schema({
     addressProof: String
   },
 
-  // ==================== Verification ====================
+  // ==================== VERIFICATION ====================
   verificationStatus: {
     type: String,
     enum: ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'],
     default: 'PENDING'
   },
   verificationNotes: String,
-  verifiedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
+  verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   verifiedAt: Date,
   rejectionReason: String,
 
-  // ==================== Profile Completion ====================
+  // ==================== PROFILE COMPLETION ====================
   profileCompletion: {
     basicInfo: { type: Boolean, default: false },
     kyc: { type: Boolean, default: false },
@@ -267,7 +220,7 @@ const companySchema = new mongoose.Schema({
     documents: { type: Boolean, default: false }
   },
 
-  // ==================== Metrics ====================
+  // ==================== METRICS ====================
   metrics: {
     totalJobsPosted: { type: Number, default: 0 },
     activeJobs: { type: Number, default: 0 },
@@ -275,10 +228,7 @@ const companySchema = new mongoose.Schema({
     totalSpent: { type: Number, default: 0 }
   },
 
-  isActive: {
-    type: Boolean,
-    default: true
-  }
+  isActive: { type: Boolean, default: true }
 }, {
   timestamps: true
 });
