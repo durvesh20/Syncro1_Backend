@@ -11,7 +11,10 @@ const {
   updateGeographicReach,
   updateCompliance,
   updateFinanceDetails,
-  updatePayoutPreferences, 
+  updatePayoutPreferences,
+  updateTeamAccess,
+  addTeamMember,
+  removeTeamMember,
   submitProfile,
   getAvailableJobs,
   getJobDetails,
@@ -22,34 +25,44 @@ const {
   getDashboard,
   getEarnings
 } = require('../controllers/staffingPartnerController');
-const { protect, authorize } = require('../middleware/auth');
+const { protect, authorize, checkStatus } = require('../middleware/auth');
 const {
   uploadResume: uploadResumeMiddleware,
   uploadPartnerDocuments,
   handleUploadError
 } = require('../middleware/upload');
 
-// Apply auth middleware to all routes
+// Apply auth middleware
 router.use(protect);
 router.use(authorize('staffing_partner'));
 
-// ==================== Dashboard ====================
+// ==================== DASHBOARD ====================
 router.get('/dashboard', getDashboard);
 
-// ==================== Profile Routes ====================
+// ==================== PROFILE ROUTES ====================
 router.get('/profile', getProfile);
 router.get('/profile/completion', getProfileCompletion);
-router.put('/profile/basic-info', updateBasicInfo);
-router.put('/profile/firm-details', updateFirmDetails);
-router.put('/profile/Syncro1-competency', updateSyncro1Competency);
-router.put('/profile/geographic-reach', updateGeographicReach);
-router.put('/profile/compliance', updateCompliance);
-router.put('/profile/finance', updateFinanceDetails);
-router.put('/profile/payout-preferences', updatePayoutPreferences); 
-router.post('/profile/submit', submitProfile);
 
-// @desc    Upload KYC Documents
-// @route   POST /api/staffing-partners/profile/documents
+// Section 1: Basic Info
+router.put('/profile/basic-info', updateBasicInfo);
+
+// Section 2: Firm Details
+router.put('/profile/firm-details', updateFirmDetails);
+
+// Section 3: Recruitment Competency
+router.put('/profile/Syncro1-competency', updateSyncro1Competency);
+
+// Section 4: Geographic Reach
+router.put('/profile/geographic-reach', updateGeographicReach);
+
+// Section 5: Compliance & Ethical Declarations
+router.put('/profile/compliance', updateCompliance);
+
+// Section 6: Finance & Payout Preferences
+router.put('/profile/finance', updateFinanceDetails);
+router.put('/profile/payout-preferences', updatePayoutPreferences);
+
+// Section 7: Documents
 router.post(
   '/profile/documents',
   uploadPartnerDocuments,
@@ -65,9 +78,7 @@ router.post(
         });
       }
 
-      // Process uploaded files
       const documents = {};
-
       if (req.files) {
         Object.keys(req.files).forEach((fieldName) => {
           const file = req.files[fieldName][0];
@@ -76,6 +87,7 @@ router.post(
       }
 
       partner.documents = { ...partner.documents, ...documents };
+      partner.profileCompletion.documents = true;
       await partner.save();
 
       res.json({
@@ -93,19 +105,27 @@ router.post(
   }
 );
 
-// ==================== Jobs Routes ====================
+// Section 8: Team Access (After Verification Only)
+router.put('/profile/team-access', checkStatus('VERIFIED', 'ACTIVE'), updateTeamAccess);
+router.post('/profile/team-access/member', checkStatus('VERIFIED', 'ACTIVE'), addTeamMember);
+router.delete('/profile/team-access/member/:memberId', checkStatus('VERIFIED', 'ACTIVE'), removeTeamMember);
+
+// Submit for Verification
+router.post('/profile/submit', submitProfile);
+
+// ==================== JOBS ROUTES ====================
 router.get('/jobs', getAvailableJobs);
 router.get('/jobs/:id', getJobDetails);
 router.post('/jobs/:jobId/candidates', submitCandidate);
 
-// ==================== Submissions Routes ====================
+// ==================== SUBMISSIONS ROUTES ====================
 router.get('/submissions', getMySubmissions);
 router.get('/submissions/:id', getSubmission);
 
-// ==================== Earnings ====================
+// ==================== EARNINGS ====================
 router.get('/earnings', getEarnings);
 
-// ==================== Candidate Routes ====================
+// ==================== CANDIDATE ROUTES ====================
 router.post('/candidates/:id/resume', uploadResumeMiddleware, uploadResume);
 
 module.exports = router;
