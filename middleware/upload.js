@@ -24,21 +24,21 @@ const storage = multer.diskStorage({
   destination: function(req, file, cb) {
     let uploadPath = 'uploads/';
     
-    switch(file.fieldname) {
+    switch (file.fieldname) {
       case 'resume':
         uploadPath += 'resumes/';
         break;
       case 'logo':
         uploadPath += 'logos/';
         break;
-     case 'panCard':
-case 'gstCertificate':
-case 'incorporationCertificate':        // ✅ NEW
-case 'authorizedSignatoryProof':        // ✅ NEW
-case 'addressProof':
-case 'cancelledCheque':
-  uploadPath += 'documents/';
-  break;
+      case 'panCard':
+      case 'gstCertificate':
+      case 'incorporationCertificate':
+      case 'authorizedSignatoryProof':
+      case 'addressProof':
+      case 'cancelledCheque':
+        uploadPath += 'documents/';
+        break;
       default:
         uploadPath += 'others/';
     }

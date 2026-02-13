@@ -5,51 +5,6 @@ const Candidate = require('../models/Candidate');
 const Job = require('../models/Job');
 const { protect, authorize } = require('../middleware/auth');
 
-// @desc    Get candidate details (for authorized users)
-// @route   GET /api/candidates/:id
-router.get('/:id', protect, async (req, res) => {
-  try {
-    const candidate = await Candidate.findById(req.params.id)
-      .populate('submittedBy', 'firstName lastName firmName user')
-      .populate('job', 'title commission company')
-      .populate('company', 'companyName');
-
-    if (!candidate) {
-      return res.status(404).json({
-        success: false,
-        message: 'Candidate not found'
-      });
-    }
-
-    // Check authorization - only admin, the company, or the submitting partner can view
-    const isAdmin = req.user.role === 'admin';
-    const isCompany =
-      req.user.role === 'company' &&
-      candidate.company?.user?.toString() === req.user._id.toString();
-    const isPartner =
-      req.user.role === 'staffing_partner' &&
-      candidate.submittedBy?.user?.toString() === req.user._id.toString();
-
-    if (!isAdmin && !isCompany && !isPartner) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view this candidate'
-      });
-    }
-
-    res.json({
-      success: true,
-      data: candidate
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch candidate',
-      error: error.message
-    });
-  }
-});
-
 // @desc    Public consent page data
 // @route   GET /api/candidates/consent/:token
 router.get('/consent/:token', async (req, res) => {
@@ -133,4 +88,48 @@ router.post('/consent/:token', async (req, res) => {
   }
 });
 
+// @desc    Get candidate details (for authorized users)
+// @route   GET /api/candidates/:id
+router.get('/:id', protect, async (req, res) => {
+  try {
+    const candidate = await Candidate.findById(req.params.id)
+      .populate('submittedBy', 'firstName lastName firmName user')
+      .populate('job', 'title commission company')
+      .populate('company', 'companyName');
+
+    if (!candidate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Candidate not found'
+      });
+    }
+
+    // Check authorization - only admin, the company, or the submitting partner can view
+    const isAdmin = req.user.role === 'admin';
+    const isCompany =
+      req.user.role === 'company' &&
+      candidate.company?.user?.toString() === req.user._id.toString();
+    const isPartner =
+      req.user.role === 'staffing_partner' &&
+      candidate.submittedBy?.user?.toString() === req.user._id.toString();
+
+    if (!isAdmin && !isCompany && !isPartner) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to view this candidate'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: candidate
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch candidate',
+      error: error.message
+    });
+  }
+});
 module.exports = router;

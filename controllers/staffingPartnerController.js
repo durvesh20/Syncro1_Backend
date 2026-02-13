@@ -1191,10 +1191,7 @@ exports.getDashboard = async (req, res) => {
       (completedSections / totalSections) * 100,
     );
 
-    const payoutReady =
-      partner.profileCompletion.financeDetails &&
-      partner.profileCompletion.payoutPreferences;
-
+    const payoutReady = partner.profileCompletion.commercialDetails;
     res.json({
       success: true,
       data: {
