@@ -59,8 +59,11 @@ router.put('/profile/geographic-reach', updateGeographicReach);
 router.put('/profile/compliance', updateCompliance);
 
 // Section 6: Finance & Payout Preferences
-router.put('/profile/finance', updateFinanceDetails);
-router.put('/profile/payout-preferences', updatePayoutPreferences);
+// router.put('/profile/finance', updateFinanceDetails);
+// router.put('/profile/payout-preferences', updatePayoutPreferences);
+
+router.put('/profile/commercial-details', updateCommercialDetails);
+
 
 // Section 7: Documents
 router.post(

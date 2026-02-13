@@ -520,14 +520,12 @@ exports.uploadDocuments = async (req, res) => {
       addressProof
     } = req.body;
 
-    company.documents = {
-      ...company.documents,
-      gstCertificate,
-      panCard,
-      incorporationCertificate,
-      authorizedSignatoryProof,
-      addressProof
-    };
+    // ✅ Update only provided documents
+    if (gstCertificate) company.documents.gstCertificate = gstCertificate;
+    if (panCard) company.documents.panCard = panCard;
+    if (incorporationCertificate) company.documents.incorporationCertificate = incorporationCertificate;
+    if (authorizedSignatoryProof) company.documents.authorizedSignatoryProof = authorizedSignatoryProof;
+    if (addressProof) company.documents.addressProof = addressProof;
 
     company.profileCompletion.documents = true;
     await company.save();
@@ -545,6 +543,7 @@ exports.uploadDocuments = async (req, res) => {
     });
   }
 };
+
 
 // ==================== PROFILE MANAGEMENT ====================
 

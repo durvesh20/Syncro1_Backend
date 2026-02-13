@@ -94,7 +94,7 @@ router.post(
         });
       }
 
-      // Process uploaded files
+      // ✅ Process uploaded files - SAME AS STAFFING PARTNER
       const documents = {};
 
       if (req.files) {
@@ -104,6 +104,7 @@ router.post(
         });
       }
 
+      // ✅ Merge with existing documents
       company.documents = { ...company.documents, ...documents };
       company.profileCompletion.documents = true;
       await company.save();

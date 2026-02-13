@@ -299,69 +299,121 @@ exports.updateCompliance = async (req, res) => {
   }
 };
 
-// @desc    Update Finance Details
-// @route   PUT /api/staffing-partners/profile/finance
-exports.updateFinanceDetails = async (req, res) => {
+// // @desc    Update Finance Details
+// // @route   PUT /api/staffing-partners/profile/finance
+// exports.updateFinanceDetails = async (req, res) => {
+//   try {
+//     const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+//     if (!partner) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Profile not found",
+//       });
+//     }
+
+//     partner.financeDetails = { ...partner.financeDetails, ...req.body };
+//     partner.profileCompletion.financeDetails = true;
+//     await partner.save();
+
+//     res.json({
+//       success: true,
+//       message: "Finance details updated",
+//       data: partner.financeDetails,
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       success: false,
+//       message: "Update failed",
+//       error: error.message,
+//     });
+//   }
+// };
+
+// // @desc    Update Payout Preferences
+// // @route   PUT /api/staffing-partners/profile/payout-preferences
+// exports.updatePayoutPreferences = async (req, res) => {
+//   try {
+//     const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+//     if (!partner) {
+//       return res.status(404).json({
+//         success: false,
+//         message: "Profile not found",
+//       });
+//     }
+
+//     partner.payoutPreferences = {
+//       ...partner.payoutPreferences,
+//       ...req.body,
+//     };
+
+//     partner.profileCompletion.payoutPreferences = true;
+
+//     await partner.save();
+
+//     res.json({
+//       success: true,
+//       message: "Payout preferences updated",
+//       data: partner.payoutPreferences,
+//     });
+//   } catch (error) {
+//     res.status(500).json({
+//       success: false,
+//       message: "Update failed",
+//       error: error.message,
+//     });
+//   }
+// };
+
+
+// @desc    Update Commercial & Payout Details
+// @route   PUT /api/staffing-partners/profile/commercial-details
+exports.updateCommercialDetails = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
 
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
-    partner.financeDetails = { ...partner.financeDetails, ...req.body };
-    partner.profileCompletion.financeDetails = true;
-    await partner.save();
+    const {
+      payoutEntityName,
+      gstRegistration,
+      tdsApplicable,
+      bankAccountHolderName,
+      bankName,
+      accountNumber,
+      ifscCode
+    } = req.body;
 
-    res.json({
-      success: true,
-      message: "Finance details updated",
-      data: partner.financeDetails,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Update failed",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Update Payout Preferences
-// @route   PUT /api/staffing-partners/profile/payout-preferences
-exports.updatePayoutPreferences = async (req, res) => {
-  try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
-
-    if (!partner) {
-      return res.status(404).json({
-        success: false,
-        message: "Profile not found",
-      });
-    }
-
-    partner.payoutPreferences = {
-      ...partner.payoutPreferences,
-      ...req.body,
+    partner.commercialDetails = {
+      ...partner.commercialDetails,
+      payoutEntityName,
+      gstRegistration,
+      tdsApplicable,
+      bankAccountHolderName,
+      bankName,
+      accountNumber,
+      ifscCode
     };
 
-    partner.profileCompletion.payoutPreferences = true;
-
+    partner.profileCompletion.commercialDetails = true;
     await partner.save();
 
     res.json({
       success: true,
-      message: "Payout preferences updated",
-      data: partner.payoutPreferences,
+      message: 'Commercial details updated successfully',
+      data: partner.commercialDetails
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Update failed",
-      error: error.message,
+      message: 'Update failed',
+      error: error.message
     });
   }
 };

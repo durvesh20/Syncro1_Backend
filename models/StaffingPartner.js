@@ -22,22 +22,21 @@ const staffingPartnerSchema = new mongoose.Schema({
   },
   designation: {
     type: String,
-    required: [true, 'Designation is required'],  // ✅ ADDED required
+    required: [true, 'Designation is required'],
     trim: true
   },
   linkedinProfile: {
     type: String,
     trim: true
-    // ⚪ Optional - correct
   },
   city: {
     type: String,
-    required: [true, 'City is required'],  // ✅ ADDED required
+    required: [true, 'City is required'],
     trim: true
   },
   state: {
     type: String,
-    required: [true, 'State is required'],  // ✅ ADDED required
+    required: [true, 'State is required'],
     trim: true
   },
 
@@ -48,12 +47,11 @@ const staffingPartnerSchema = new mongoose.Schema({
     trim: true
   },
   firmDetails: {
-    registeredName: String,        // ⚪ Optional - Dashboard
-    tradeName: String,             // ⚪ Optional - Dashboard
+    registeredName: String,
+    tradeName: String,
     entityType: {
       type: String,
       enum: ['Proprietor', 'Partnership', 'LLP', 'Private Limited', 'Agency']
-      // ⚪ Optional - Dashboard
     },
     yearEstablished: Number,
     website: String,
@@ -177,23 +175,22 @@ const staffingPartnerSchema = new mongoose.Schema({
     agreementSignedAt: Date
   },
 
-  // ==================== 6. COMMERCIAL & PAYOUT PREFERENCES ====================
-  financeDetails: {
-    bankAccountHolderName: String,
-    bankName: String,
-    accountNumber: String,
-    ifscCode: String,
-    accountHolderName: String
-  },
-
-  payoutPreferences: {
+  // ==================== 6. COMMERCIAL & PAYOUT PREFERENCES (MERGED) ====================
+  commercialDetails: {
+    // Payout Entity Info
     payoutEntityName: { type: String, trim: true },
     gstRegistration: {
       type: String,
       enum: ['Regular', 'Composition', 'Unregistered'],
       default: 'Unregistered'
     },
-    tdsApplicable: { type: Boolean, default: true }
+    tdsApplicable: { type: Boolean, default: true },
+    
+    // Bank Details
+    bankAccountHolderName: String,
+    bankName: String,
+    accountNumber: String,
+    ifscCode: String
   },
 
   // ==================== 7. DOCUMENTS ====================
@@ -262,15 +259,14 @@ const staffingPartnerSchema = new mongoose.Schema({
   verifiedAt: Date,
   rejectionReason: String,
 
-  // ==================== PROFILE COMPLETION ====================
+  // ==================== PROFILE COMPLETION (UPDATED) ====================
   profileCompletion: {
     basicInfo: { type: Boolean, default: false },
     firmDetails: { type: Boolean, default: false },
     Syncro1Competency: { type: Boolean, default: false },
     geographicReach: { type: Boolean, default: false },
     compliance: { type: Boolean, default: false },
-    financeDetails: { type: Boolean, default: false },
-    payoutPreferences: { type: Boolean, default: false },
+    commercialDetails: { type: Boolean, default: false },  // ✅ MERGED
     documents: { type: Boolean, default: false }
   },
 
