@@ -1017,6 +1017,8 @@ exports.getAllCandidates = async (req, res) => {
 
 // @desc    Get Single Candidate
 // @route   GET /api/companies/candidates/:id
+// @desc    Get Single Candidate
+// @route   GET /api/companies/candidates/:id
 exports.getCandidate = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
@@ -1034,19 +1036,24 @@ exports.getCandidate = async (req, res) => {
       });
     }
 
-    // Check authorization
-    const isCompany =
-      req.user.role === 'company' &&
-      candidate.company?.user?.toString() === req.user._id.toString();
+    // ✅ More robust authorization check
+    if (req.user.role === 'company') {
+      const company = await Company.findOne({ user: req.user._id });
 
-    if (!isCompany) {
+      if (!company || candidate.company._id.toString() !== company._id.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'Not authorized to view this candidate'
+        });
+      }
+    } else if (req.user.role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to view this candidate'
       });
     }
 
-    // Remove sensitive company.user before sending response
+    // Clean response
     const responseData = candidate.toObject();
     if (responseData.company?.user) {
       delete responseData.company.user;
@@ -1056,6 +1063,7 @@ exports.getCandidate = async (req, res) => {
       success: true,
       data: responseData
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
