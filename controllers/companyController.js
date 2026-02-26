@@ -1113,22 +1113,28 @@ exports.updateCandidateStatus = async (req, res) => {
 
     await candidate.save();
 
-    // Update job metrics based on status
-    const job = await Job.findById(candidate.job);
-    if (job) {
+    // Update job metrics using atomic $inc
+    if (previousStatus !== status) {
+      const incrementFields = {};
+
       if (status === 'SHORTLISTED' && previousStatus !== 'SHORTLISTED') {
-        job.metrics.shortlisted += 1;
+        incrementFields['metrics.shortlisted'] = 1;
       }
       if (status === 'INTERVIEWED' && previousStatus !== 'INTERVIEWED') {
-        job.metrics.interviewed += 1;
+        incrementFields['metrics.interviewed'] = 1;
       }
       if (status === 'OFFERED' && previousStatus !== 'OFFERED') {
-        job.metrics.offered += 1;
+        incrementFields['metrics.offered'] = 1;
       }
       if (status === 'JOINED' && previousStatus !== 'JOINED') {
-        job.metrics.joined += 1;
+        incrementFields['metrics.joined'] = 1;
       }
-      await job.save();
+
+      if (Object.keys(incrementFields).length > 0) {
+        await Job.findByIdAndUpdate(candidate.job, {
+          $inc: incrementFields
+        });
+      }
     }
 
     // Re-fetch without user field for response
