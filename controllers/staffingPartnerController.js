@@ -3,6 +3,11 @@ const StaffingPartner = require("../models/StaffingPartner");
 const User = require("../models/User");
 const Job = require("../models/Job");
 const Candidate = require("../models/Candidate");
+const Company = require("../models/Company");
+const duplicateDetection = require("../services/duplicateDetectionService");
+const notificationEngine = require("../services/notificationEngine");
+const jobAccessService = require("../services/jobAccessService");
+const candidateScoringService = require("../services/candidateScoringService");
 
 // @desc    Get Staffing Partner Profile
 // @route   GET /api/staffing-partners/profile
@@ -105,7 +110,7 @@ exports.updateFirmDetails = async (req, res) => {
       gstNumber,
       cinNumber,
       llpinNumber,
-      employeeCount
+      employeeCount,
     } = req.body;
 
     // Handle operating address "same as registered" logic
@@ -113,7 +118,7 @@ exports.updateFirmDetails = async (req, res) => {
     if (operatingAddress?.sameAsRegistered && registeredOfficeAddress) {
       finalOperatingAddress = {
         ...registeredOfficeAddress,
-        sameAsRegistered: true
+        sameAsRegistered: true,
       };
     }
 
@@ -130,7 +135,7 @@ exports.updateFirmDetails = async (req, res) => {
       gstNumber,
       cinNumber,
       llpinNumber,
-      employeeCount
+      employeeCount,
     };
 
     partner.profileCompletion.firmDetails = true;
@@ -228,24 +233,25 @@ exports.updateCompliance = async (req, res) => {
     const { syncrotechAgreement, digitalSignature } = req.body;
 
     // Get IP address
-    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+    const ipAddress =
+      req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress;
     const timestamp = new Date();
 
     // Validate all clauses are accepted
     const requiredClauses = [
-      'noCvRecycling',
-      'noFakeProfiles',
-      'noDoubleRepresentation',
-      'vendorCodeOfConduct',
-      'dataPrivacyPolicy',
-      'candidateConsentPolicy',
-      'nonCircumventionClause',
-      'commissionPayoutTerms',
-      'replacementBackoutLiability'
+      "noCvRecycling",
+      "noFakeProfiles",
+      "noDoubleRepresentation",
+      "vendorCodeOfConduct",
+      "dataPrivacyPolicy",
+      "candidateConsentPolicy",
+      "nonCircumventionClause",
+      "commissionPayoutTerms",
+      "replacementBackoutLiability",
     ];
 
     const allAccepted = requiredClauses.every(
-      clause => syncrotechAgreement && syncrotechAgreement[clause] === true
+      (clause) => syncrotechAgreement && syncrotechAgreement[clause] === true,
     );
 
     if (!allAccepted) {
@@ -254,21 +260,21 @@ exports.updateCompliance = async (req, res) => {
         message: "All compliance clauses must be accepted",
         data: {
           required: requiredClauses,
-          received: syncrotechAgreement
-        }
+          received: syncrotechAgreement,
+        },
       });
     }
 
     // Build compliance object with timestamps
     const complianceData = {
-      syncrotechAgreement: {}
+      syncrotechAgreement: {},
     };
 
-    requiredClauses.forEach(clause => {
+    requiredClauses.forEach((clause) => {
       complianceData.syncrotechAgreement[clause] = {
         accepted: true,
         acceptedAt: timestamp,
-        acceptedIp: ipAddress
+        acceptedIp: ipAddress,
       };
     });
 
@@ -299,74 +305,6 @@ exports.updateCompliance = async (req, res) => {
   }
 };
 
-// // @desc    Update Finance Details
-// // @route   PUT /api/staffing-partners/profile/finance
-// exports.updateFinanceDetails = async (req, res) => {
-//   try {
-//     const partner = await StaffingPartner.findOne({ user: req.user._id });
-
-//     if (!partner) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Profile not found",
-//       });
-//     }
-
-//     partner.financeDetails = { ...partner.financeDetails, ...req.body };
-//     partner.profileCompletion.financeDetails = true;
-//     await partner.save();
-
-//     res.json({
-//       success: true,
-//       message: "Finance details updated",
-//       data: partner.financeDetails,
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: "Update failed",
-//       error: error.message,
-//     });
-//   }
-// };
-
-// // @desc    Update Payout Preferences
-// // @route   PUT /api/staffing-partners/profile/payout-preferences
-// exports.updatePayoutPreferences = async (req, res) => {
-//   try {
-//     const partner = await StaffingPartner.findOne({ user: req.user._id });
-
-//     if (!partner) {
-//       return res.status(404).json({
-//         success: false,
-//         message: "Profile not found",
-//       });
-//     }
-
-//     partner.payoutPreferences = {
-//       ...partner.payoutPreferences,
-//       ...req.body,
-//     };
-
-//     partner.profileCompletion.payoutPreferences = true;
-
-//     await partner.save();
-
-//     res.json({
-//       success: true,
-//       message: "Payout preferences updated",
-//       data: partner.payoutPreferences,
-//     });
-//   } catch (error) {
-//     res.status(500).json({
-//       success: false,
-//       message: "Update failed",
-//       error: error.message,
-//     });
-//   }
-// };
-
-
 // @desc    Update Commercial & Payout Details
 // @route   PUT /api/staffing-partners/profile/commercial-details
 exports.updateCommercialDetails = async (req, res) => {
@@ -376,7 +314,7 @@ exports.updateCommercialDetails = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: 'Profile not found'
+        message: "Profile not found",
       });
     }
 
@@ -387,7 +325,7 @@ exports.updateCommercialDetails = async (req, res) => {
       bankAccountHolderName,
       bankName,
       accountNumber,
-      ifscCode
+      ifscCode,
     } = req.body;
 
     partner.commercialDetails = {
@@ -398,7 +336,7 @@ exports.updateCommercialDetails = async (req, res) => {
       bankAccountHolderName,
       bankName,
       accountNumber,
-      ifscCode
+      ifscCode,
     };
 
     partner.profileCompletion.commercialDetails = true;
@@ -406,14 +344,14 @@ exports.updateCommercialDetails = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Commercial details updated successfully',
-      data: partner.commercialDetails
+      message: "Commercial details updated successfully",
+      data: partner.commercialDetails,
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Update failed',
-      error: error.message
+      message: "Update failed",
+      error: error.message,
     });
   }
 };
@@ -432,10 +370,10 @@ exports.updateTeamAccess = async (req, res) => {
     }
 
     // Only verified partners can manage team
-    if (partner.verificationStatus !== 'APPROVED') {
+    if (partner.verificationStatus !== "APPROVED") {
       return res.status(403).json({
         success: false,
-        message: "Partner must be verified to manage team members"
+        message: "Partner must be verified to manage team members",
       });
     }
 
@@ -471,10 +409,10 @@ exports.addTeamMember = async (req, res) => {
       });
     }
 
-    if (partner.verificationStatus !== 'APPROVED') {
+    if (partner.verificationStatus !== "APPROVED") {
       return res.status(403).json({
         success: false,
-        message: "Partner must be verified to add team members"
+        message: "Partner must be verified to add team members",
       });
     }
 
@@ -483,19 +421,19 @@ exports.addTeamMember = async (req, res) => {
     if (!name || !email) {
       return res.status(400).json({
         success: false,
-        message: "Name and email are required"
+        message: "Name and email are required",
       });
     }
 
     // Check if email already exists
     const existingMember = partner.teamAccess.teamMembers.find(
-      m => m.email === email
+      (m) => m.email === email,
     );
 
     if (existingMember) {
       return res.status(400).json({
         success: false,
-        message: "Team member with this email already exists"
+        message: "Team member with this email already exists",
       });
     }
 
@@ -504,15 +442,15 @@ exports.addTeamMember = async (req, res) => {
       name,
       email,
       mobile,
-      role: role || 'Recruiter',
+      role: role || "Recruiter",
       permissions: permissions || {
         canViewJobs: true,
         canSubmitCandidates: true,
         canViewEarnings: false,
-        canManageTeam: false
+        canManageTeam: false,
       },
       addedAt: new Date(),
-      isActive: true
+      isActive: true,
     });
 
     await partner.save();
@@ -544,10 +482,10 @@ exports.updateTeamMember = async (req, res) => {
       });
     }
 
-    if (partner.verificationStatus !== 'APPROVED') {
+    if (partner.verificationStatus !== "APPROVED") {
       return res.status(403).json({
         success: false,
-        message: "Partner must be verified to update team members"
+        message: "Partner must be verified to update team members",
       });
     }
 
@@ -555,26 +493,26 @@ exports.updateTeamMember = async (req, res) => {
     const { name, email, mobile, role, permissions, isActive } = req.body;
 
     const memberIndex = partner.teamAccess.teamMembers.findIndex(
-      m => m._id.toString() === memberId
+      (m) => m._id.toString() === memberId,
     );
 
     if (memberIndex === -1) {
       return res.status(404).json({
         success: false,
-        message: "Team member not found"
+        message: "Team member not found",
       });
     }
 
     // Check if email already exists (for different member)
     if (email) {
       const existingMember = partner.teamAccess.teamMembers.find(
-        m => m.email === email && m._id.toString() !== memberId
+        (m) => m.email === email && m._id.toString() !== memberId,
       );
 
       if (existingMember) {
         return res.status(400).json({
           success: false,
-          message: "Another team member with this email already exists"
+          message: "Another team member with this email already exists",
         });
       }
     }
@@ -584,8 +522,10 @@ exports.updateTeamMember = async (req, res) => {
     if (email) partner.teamAccess.teamMembers[memberIndex].email = email;
     if (mobile) partner.teamAccess.teamMembers[memberIndex].mobile = mobile;
     if (role) partner.teamAccess.teamMembers[memberIndex].role = role;
-    if (permissions) partner.teamAccess.teamMembers[memberIndex].permissions = permissions;
-    if (typeof isActive === 'boolean') partner.teamAccess.teamMembers[memberIndex].isActive = isActive;
+    if (permissions)
+      partner.teamAccess.teamMembers[memberIndex].permissions = permissions;
+    if (typeof isActive === "boolean")
+      partner.teamAccess.teamMembers[memberIndex].isActive = isActive;
 
     await partner.save();
 
@@ -616,28 +556,28 @@ exports.removeTeamMember = async (req, res) => {
       });
     }
 
-    if (partner.verificationStatus !== 'APPROVED') {
+    if (partner.verificationStatus !== "APPROVED") {
       return res.status(403).json({
         success: false,
-        message: "Partner must be verified to remove team members"
+        message: "Partner must be verified to remove team members",
       });
     }
 
     const { memberId } = req.params;
 
     const memberExists = partner.teamAccess.teamMembers.some(
-      m => m._id.toString() === memberId
+      (m) => m._id.toString() === memberId,
     );
 
     if (!memberExists) {
       return res.status(404).json({
         success: false,
-        message: "Team member not found"
+        message: "Team member not found",
       });
     }
 
     partner.teamAccess.teamMembers = partner.teamAccess.teamMembers.filter(
-      m => m._id.toString() !== memberId
+      (m) => m._id.toString() !== memberId,
     );
 
     // If no team members left, disable team access
@@ -680,7 +620,8 @@ exports.getTeamMembers = async (req, res) => {
         isTeamEnabled: partner.teamAccess.isTeamEnabled,
         teamMembers: partner.teamAccess.teamMembers,
         totalMembers: partner.teamAccess.teamMembers.length,
-        activeMembers: partner.teamAccess.teamMembers.filter(m => m.isActive).length
+        activeMembers: partner.teamAccess.teamMembers.filter((m) => m.isActive)
+          .length,
       },
     });
   } catch (error) {
@@ -826,6 +767,7 @@ exports.submitProfile = async (req, res) => {
 
 // @desc    Get Available Jobs
 // @route   GET /api/staffing-partners/jobs
+// ✅ ENHANCED: Uses jobAccessService for plan-based filtering
 exports.getAvailableJobs = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -837,48 +779,61 @@ exports.getAvailableJobs = async (req, res) => {
       });
     }
 
-    const {
-      page = 1,
-      limit = 10,
-      category,
-      location,
-      experienceLevel,
-      search,
-    } = req.query;
+    const partnerPlan = partner.subscription?.plan || "FREE";
 
-    const query = {
-      status: "ACTIVE",
-      eligiblePlans: partner.subscription?.plan || "FREE",
-    };
+    // ✅ Use job access service with plan-based filtering
+    const result = await jobAccessService.getAccessibleJobs(
+      partner._id,
+      partnerPlan,
+      {
+        page: req.query.page,
+        limit: req.query.limit,
+        category: req.query.category,
+        location: req.query.location,
+        experienceLevel: req.query.experienceLevel,
+        employmentType: req.query.employmentType,
+        salaryMin: req.query.salaryMin,
+        salaryMax: req.query.salaryMax,
+        search: req.query.search,
+        sortBy: req.query.sortBy,
+        isUrgent: req.query.urgentOnly,
+      },
+    );
 
-    if (category) query.category = category;
-    if (location) query["location.city"] = new RegExp(location, "i");
-    if (experienceLevel) query.experienceLevel = experienceLevel;
-    if (search) {
-      query.$or = [
-        { title: new RegExp(search, "i") },
-        { description: new RegExp(search, "i") },
-      ];
+    // ✅ If no jobs found, provide helpful debug info
+    if (result.jobs.length === 0) {
+      const totalActiveJobs = await Job.countDocuments({ status: "ACTIVE" });
+      const jobsForPlan = await Job.countDocuments({
+        status: "ACTIVE",
+        eligiblePlans: { $in: result.partnerAccess.accessiblePlans },
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          ...result,
+          debug: {
+            totalActiveJobsOnPlatform: totalActiveJobs,
+            jobsAccessibleByYourPlan: jobsForPlan,
+            yourPlan: partnerPlan,
+            plansYouCanAccess: result.partnerAccess.accessiblePlans,
+            filtersApplied: Object.keys(req.query).filter(
+              (k) => !["page", "limit"].includes(k) && req.query[k],
+            ),
+            suggestion:
+              totalActiveJobs > 0 && jobsForPlan === 0
+                ? `There are ${totalActiveJobs} active jobs, but none are available for the ${partnerPlan} plan. Consider upgrading your plan.`
+                : jobsForPlan > 0
+                  ? "Jobs exist for your plan but your filters are too restrictive. Try removing some filters."
+                  : "No active jobs on the platform at the moment. Check back later.",
+          },
+        },
+      });
     }
-
-    const jobs = await Job.find(query)
-      .populate("company", "companyName kyc.logo kyc.industry")
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await Job.countDocuments(query);
 
     res.json({
       success: true,
-      data: {
-        jobs,
-        pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(total / limit),
-          total,
-        },
-      },
+      data: result,
     });
   } catch (error) {
     res.status(500).json({
@@ -927,6 +882,7 @@ exports.getJobDetails = async (req, res) => {
 
 // @desc    Submit Candidate for a Job
 // @route   POST /api/staffing-partners/jobs/:jobId/candidates
+// ✅ COMPLETE: All validations, duplicate detection, notifications
 exports.submitCandidate = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -953,37 +909,84 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    const { firstName, lastName, email, mobile, consent, profile } = req.body;
+    // Check plan eligibility
+    const partnerPlan = partner.subscription?.plan || "FREE";
+    if (
+      job.eligiblePlans &&
+      job.eligiblePlans.length > 0 &&
+      !job.eligiblePlans.includes(partnerPlan)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: `This job requires ${job.eligiblePlans.join(" or ")} plan. You are on ${partnerPlan} plan.`,
+        requiredPlans: job.eligiblePlans,
+        currentPlan: partnerPlan,
+      });
+    }
+
+    const {
+      firstName,
+      lastName,
+      email,
+      mobile,
+      consent,
+      profile,
+      forceSubmit,
+    } = req.body;
 
     // Validate required fields
     if (!firstName || !lastName || !email || !mobile) {
       return res.status(400).json({
         success: false,
-        message: "Please provide all required candidate information",
+        message: "Please provide firstName, lastName, email, and mobile",
       });
     }
 
     if (!consent) {
       return res.status(400).json({
         success: false,
-        message: "Candidate consent is required",
+        message: "Candidate consent is required before submission",
       });
     }
 
-    // Check for duplicate submission
-    const existingSubmission = await Candidate.findOne({
-      job: job._id,
-      email: email.toLowerCase(),
-    });
+    // ✅ DUPLICATE DETECTION
+    const duplicateCheck = await duplicateDetection.checkBeforeSubmission(
+      { email, mobile },
+      job._id,
+      partner._id,
+    );
 
-    if (existingSubmission) {
-      return res.status(400).json({
+    // Hard block — cannot submit
+    if (!duplicateCheck.canSubmit) {
+      return res.status(409).json({
         success: false,
-        message: "This candidate has already been submitted for this job",
+        message:
+          duplicateCheck.blocks[0]?.message || "Duplicate submission blocked",
+        data: {
+          blocks: duplicateCheck.blocks,
+          warnings: duplicateCheck.warnings,
+        },
       });
     }
 
-    // Create candidate
+    // Warnings exist — ask for confirmation unless forceSubmit
+    const highSeverityWarnings = duplicateCheck.warnings.filter(
+      (w) => w.severity === "high",
+    );
+
+    if (highSeverityWarnings.length > 0 && !forceSubmit) {
+      return res.status(200).json({
+        success: true,
+        requiresConfirmation: true,
+        message:
+          "Potential issues detected. Review warnings and resubmit with forceSubmit: true to proceed.",
+        data: {
+          warnings: duplicateCheck.warnings,
+        },
+      });
+    }
+
+    // ✅ CREATE CANDIDATE
     const candidate = await Candidate.create({
       submittedBy: partner._id,
       job: job._id,
@@ -995,6 +998,7 @@ exports.submitCandidate = async (req, res) => {
       consent: {
         given: consent,
         givenAt: new Date(),
+        ipAddress: req.ip,
       },
       profile: profile || {},
       status: "SUBMITTED",
@@ -1002,22 +1006,61 @@ exports.submitCandidate = async (req, res) => {
         {
           status: "SUBMITTED",
           changedBy: req.user._id,
-          notes: "Initial submission",
+          notes:
+            duplicateCheck.warnings.length > 0
+              ? `Submitted with ${duplicateCheck.warnings.length} warning(s)`
+              : "Initial submission",
         },
       ],
     });
 
-    // Update metrics
-    job.metrics.applications += 1;
-    partner.metrics.totalSubmissions += 1;
+    // ✅ UPDATE METRICS
+    await Job.findByIdAndUpdate(job._id, {
+      $inc: { "metrics.applications": 1 },
+    });
+    await StaffingPartner.findByIdAndUpdate(partner._id, {
+      $inc: { "metrics.totalSubmissions": 1 },
+    });
 
-    await job.save();
-    await partner.save();
+    // ✅ NOTIFY COMPANY about new candidate
+    const company = await Company.findById(job.company).populate("user", "_id");
+
+    if (company?.user) {
+      await notificationEngine.send({
+        recipientId: company.user._id,
+        type: "NEW_CANDIDATE_SUBMITTED",
+        title: `New candidate for "${job.title}"`,
+        message: `${partner.firmName} submitted ${firstName} ${lastName} for the ${job.title} position. Review their profile in your dashboard.`,
+        data: {
+          entityType: "Candidate",
+          entityId: candidate._id,
+          actionUrl: `/company/jobs/${job._id}/candidates`,
+          metadata: {
+            partnerName: `${partner.firstName} ${partner.lastName}`,
+            firmName: partner.firmName,
+            candidateName: `${firstName} ${lastName}`,
+            candidateExperience: profile?.totalExperience,
+            candidateLocation: profile?.currentLocation,
+          },
+        },
+        channels: {
+          inApp: true,
+          email: true,
+        },
+        priority: job.isUrgent ? "high" : "medium",
+      });
+    }
 
     res.status(201).json({
       success: true,
-      message: "Candidate submitted successfully",
-      data: candidate,
+      message:
+        duplicateCheck.warnings.length > 0
+          ? "Candidate submitted with warnings"
+          : "Candidate submitted successfully",
+      data: {
+        candidate,
+        warnings: duplicateCheck.warnings,
+      },
     });
   } catch (error) {
     res.status(500).json({
@@ -1191,7 +1234,10 @@ exports.getDashboard = async (req, res) => {
       (completedSections / totalSections) * 100,
     );
 
-    const payoutReady = partner.profileCompletion.commercialDetails;
+    // ✅ UPDATED: Payout system disabled
+    // const payoutReady = partner.profileCompletion.commercialDetails;
+    const payoutReady = false; // Payout system disabled
+
     res.json({
       success: true,
       data: {
@@ -1221,6 +1267,7 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
+/* ========== GET EARNINGS - DISABLED (Payout system inactive) ==========
 // @desc    Get Earnings/Payouts
 // @route   GET /api/staffing-partners/earnings
 exports.getEarnings = async (req, res) => {
@@ -1269,6 +1316,95 @@ exports.getEarnings = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch earnings",
+      error: error.message,
+    });
+  }
+};
+========== END GET EARNINGS ========== */
+
+// @desc    Get Earnings/Payouts
+// @route   GET /api/staffing-partners/earnings
+// ✅ STUB: Returns empty data (payout system disabled)
+exports.getEarnings = async (req, res) => {
+  res.json({
+    success: true,
+    message: "Earnings feature is currently disabled",
+    data: {
+      summary: {
+        totalEarnings: 0,
+        paidEarnings: 0,
+        pendingEarnings: 0,
+        totalPlacements: 0,
+      },
+      placements: [],
+    },
+  });
+};
+
+// @desc    Withdraw Candidate
+// @route   PUT /api/staffing-partners/submissions/:id/withdraw
+// ✅ COMPLETE: Uses lifecycle service for proper validation
+exports.withdrawCandidate = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const { reason } = req.body;
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: "Partner profile not found",
+      });
+    }
+
+    // Verify this candidate belongs to this partner
+    const candidate = await Candidate.findOne({
+      _id: req.params.id,
+      submittedBy: partner._id,
+    });
+
+    if (!candidate) {
+      return res.status(404).json({
+        success: false,
+        message: "Submission not found or does not belong to you",
+      });
+    }
+
+    // Use lifecycle service for proper validation + notifications
+    const candidateLifecycleService = require("../services/candidateLifecycleService");
+
+    try {
+      const updated = await candidateLifecycleService.updateStatus(
+        candidate._id,
+        "WITHDRAWN",
+        req.user._id,
+        "staffing_partner",
+        reason || "Withdrawn by staffing partner",
+      );
+
+      res.json({
+        success: true,
+        message: "Candidate withdrawn successfully",
+        data: {
+          candidateId: updated._id,
+          previousStatus: candidate.status,
+          newStatus: "WITHDRAWN",
+        },
+      });
+    } catch (error) {
+      if (error.statusCode === 400) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          currentStatus: candidate.status,
+          allowedTransitions: error.allowedTransitions,
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Withdrawal failed",
       error: error.message,
     });
   }

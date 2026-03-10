@@ -1,0 +1,3625 @@
+diff --git a/controllers/companyController.js b/controllers/companyController.js
+index 3eaa28c..1e799e9 100644
+--- a/controllers/companyController.js
++++ b/controllers/companyController.js
+@@ -1,8 +1,10 @@
+ // backend/controllers/companyController.js
+-const Company = require('../models/Company');
+-const User = require('../models/User');
+-const Job = require('../models/Job');
+-const Candidate = require('../models/Candidate');
++const Company = require("../models/Company");
++const User = require("../models/User");
++const Job = require("../models/Job");
++const Candidate = require("../models/Candidate");
++const candidateLifecycleService = require("../services/candidateLifecycleService");
++const StatusMachine = require("../utils/statusMachine");
+ 
+ // ==================== 1. PRIMARY ACCOUNT (Decision Maker) ====================
+ 
+@@ -15,33 +17,32 @@ exports.updateBasicInfo = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+     const {
+-      firstName,          // ✅ Accept firstName
+-      lastName,           // ✅ Accept lastName
++      firstName,
++      lastName,
+       designation,
+       department,
+       linkedinProfile,
+       city,
+-      state
++      state,
+     } = req.body;
+ 
+     // ✅ Combine firstName + lastName if provided
+     if (firstName && lastName) {
+       company.decisionMakerName = `${firstName} ${lastName}`;
+     } else if (firstName || lastName) {
+-      // If only one provided, update accordingly
+-      const currentName = company.decisionMakerName.split(' ');
++      const currentName = company.decisionMakerName.split(" ");
+       if (firstName) {
+         currentName[0] = firstName;
+       }
+       if (lastName) {
+         currentName[1] = lastName;
+       }
+-      company.decisionMakerName = currentName.join(' ');
++      company.decisionMakerName = currentName.join(" ");
+     }
+ 
+     if (designation) company.designation = designation;
+@@ -54,12 +55,13 @@ exports.updateBasicInfo = async (req, res) => {
+     await company.save();
+ 
+     // ✅ Return firstName and lastName separately for frontend
+-    const [returnFirstName, ...lastNameParts] = company.decisionMakerName.split(' ');
+-    const returnLastName = lastNameParts.join(' ');
++    const [returnFirstName, ...lastNameParts] =
++      company.decisionMakerName.split(" ");
++    const returnLastName = lastNameParts.join(" ");
+ 
+     res.json({
+       success: true,
+-      message: 'Basic info updated successfully',
++      message: "Basic info updated successfully",
+       data: {
+         firstName: returnFirstName,
+         lastName: returnLastName,
+@@ -68,20 +70,18 @@ exports.updateBasicInfo = async (req, res) => {
+         department: company.department,
+         linkedinProfile: company.linkedinProfile,
+         city: company.city,
+-        state: company.state
+-      }
++        state: company.state,
++      },
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Update failed',
+-      error: error.message
++      message: "Update failed",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== 2. COMPANY INFORMATION (Core KYC Layer) ====================
+-
+ // @desc    Update Company KYC
+ // @route   PUT /api/companies/profile/kyc
+ exports.updateKYC = async (req, res) => {
+@@ -91,7 +91,7 @@ exports.updateKYC = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+@@ -110,7 +110,7 @@ exports.updateKYC = async (req, res) => {
+       gstNumber,
+       panNumber,
+       industry,
+-      employeeCount
++      employeeCount,
+     } = req.body;
+ 
+     // Handle operating address "same as registered" logic
+@@ -118,7 +118,7 @@ exports.updateKYC = async (req, res) => {
+     if (operatingAddress?.sameAsRegistered && registeredAddress) {
+       finalOperatingAddress = {
+         ...registeredAddress,
+-        sameAsRegistered: true
++        sameAsRegistered: true,
+       };
+     }
+ 
+@@ -138,7 +138,7 @@ exports.updateKYC = async (req, res) => {
+       gstNumber,
+       panNumber,
+       industry,
+-      employeeCount
++      employeeCount,
+     };
+ 
+     company.profileCompletion.kyc = true;
+@@ -146,20 +146,18 @@ exports.updateKYC = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'KYC updated successfully',
+-      data: company.kyc
++      message: "KYC updated successfully",
++      data: company.kyc,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Update failed',
+-      error: error.message
++      message: "Update failed",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== 3. HIRING & BUSINESS PROFILE ====================
+-
+ // @desc    Update Hiring Preferences
+ // @route   PUT /api/companies/profile/hiring-preferences
+ exports.updateHiringPreferences = async (req, res) => {
+@@ -169,7 +167,7 @@ exports.updateHiringPreferences = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+@@ -182,7 +180,7 @@ exports.updateHiringPreferences = async (req, res) => {
+       typicalCtcBand,
+       preferredLocations,
+       workModePreference,
+-      urgencyLevel
++      urgencyLevel,
+     } = req.body;
+ 
+     company.hiringPreferences = {
+@@ -195,7 +193,7 @@ exports.updateHiringPreferences = async (req, res) => {
+       typicalCtcBand,
+       preferredLocations,
+       workModePreference,
+-      urgencyLevel
++      urgencyLevel,
+     };
+ 
+     company.profileCompletion.hiringPreferences = true;
+@@ -203,20 +201,18 @@ exports.updateHiringPreferences = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'Hiring preferences updated successfully',
+-      data: company.hiringPreferences
++      message: "Hiring preferences updated successfully",
++      data: company.hiringPreferences,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Update failed',
+-      error: error.message
++      message: "Update failed",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== 5. COMMERCIAL & BILLING SETUP ====================
+-
+ // @desc    Update Billing Setup
+ // @route   PUT /api/companies/profile/billing
+ exports.updateBilling = async (req, res) => {
+@@ -226,7 +222,7 @@ exports.updateBilling = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+@@ -239,7 +235,7 @@ exports.updateBilling = async (req, res) => {
+       poRequired,
+       tdsApplicable,
+       paymentTerms,
+-      preferredPaymentMethod
++      preferredPaymentMethod,
+     } = req.body;
+ 
+     company.billing = {
+@@ -252,7 +248,7 @@ exports.updateBilling = async (req, res) => {
+       poRequired,
+       tdsApplicable,
+       paymentTerms,
+-      preferredPaymentMethod
++      preferredPaymentMethod,
+     };
+ 
+     company.profileCompletion.billing = true;
+@@ -260,21 +256,19 @@ exports.updateBilling = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'Billing updated successfully',
+-      data: company.billing
++      message: "Billing updated successfully",
++      data: company.billing,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Update failed',
+-      error: error.message
++      message: "Update failed",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== 6. USER ROLES & ACCESS CONTROL ====================
+-
+-// @desc    Update Team Access (Enterprise Feature)
++// @desc    Update Team Access
+ // @route   PUT /api/companies/profile/team-access
+ exports.updateTeamAccess = async (req, res) => {
+   try {
+@@ -283,15 +277,14 @@ exports.updateTeamAccess = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+-    // Only verified companies can add team members
+-    if (company.verificationStatus !== 'APPROVED') {
++    if (company.verificationStatus !== "APPROVED") {
+       return res.status(403).json({
+         success: false,
+-        message: 'Company must be verified to add team members'
++        message: "Company must be verified to add team members",
+       });
+     }
+ 
+@@ -299,21 +292,21 @@ exports.updateTeamAccess = async (req, res) => {
+ 
+     company.teamAccess = {
+       isTeamEnabled: isTeamEnabled || false,
+-      teamMembers: teamMembers || []
++      teamMembers: teamMembers || [],
+     };
+ 
+     await company.save();
+ 
+     res.json({
+       success: true,
+-      message: 'Team access updated successfully',
+-      data: company.teamAccess
++      message: "Team access updated successfully",
++      data: company.teamAccess,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Update failed',
+-      error: error.message
++      message: "Update failed",
++      error: error.message,
+     });
+   }
+ };
+@@ -327,14 +320,14 @@ exports.addTeamMember = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+-    if (company.verificationStatus !== 'APPROVED') {
++    if (company.verificationStatus !== "APPROVED") {
+       return res.status(403).json({
+         success: false,
+-        message: 'Company must be verified to add team members'
++        message: "Company must be verified to add team members",
+       });
+     }
+ 
+@@ -343,19 +336,18 @@ exports.addTeamMember = async (req, res) => {
+     if (!name || !email || !role) {
+       return res.status(400).json({
+         success: false,
+-        message: 'Name, email, and role are required'
++        message: "Name, email, and role are required",
+       });
+     }
+ 
+-    // Check if email already exists in team
+     const existingMember = company.teamAccess.teamMembers.find(
+-      m => m.email === email
++      (m) => m.email === email,
+     );
+ 
+     if (existingMember) {
+       return res.status(400).json({
+         success: false,
+-        message: 'Team member with this email already exists'
++        message: "Team member with this email already exists",
+       });
+     }
+ 
+@@ -366,21 +358,21 @@ exports.addTeamMember = async (req, res) => {
+       mobile,
+       role,
+       addedAt: new Date(),
+-      isActive: true
++      isActive: true,
+     });
+ 
+     await company.save();
+ 
+     res.json({
+       success: true,
+-      message: 'Team member added successfully',
+-      data: company.teamAccess
++      message: "Team member added successfully",
++      data: company.teamAccess,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to add team member',
+-      error: error.message
++      message: "Failed to add team member",
++      error: error.message,
+     });
+   }
+ };
+@@ -394,34 +386,32 @@ exports.removeTeamMember = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+     const { memberId } = req.params;
+ 
+     company.teamAccess.teamMembers = company.teamAccess.teamMembers.filter(
+-      m => m._id.toString() !== memberId
++      (m) => m._id.toString() !== memberId,
+     );
+ 
+     await company.save();
+ 
+     res.json({
+       success: true,
+-      message: 'Team member removed successfully',
+-      data: company.teamAccess
++      message: "Team member removed successfully",
++      data: company.teamAccess,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to remove team member',
+-      error: error.message
++      message: "Failed to remove team member",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== 7. LEGAL & COMPLIANCE ====================
+-
+ // @desc    Accept Legal Consents
+ // @route   PUT /api/companies/profile/legal-consents
+ exports.updateLegalConsents = async (req, res) => {
+@@ -431,7 +421,7 @@ exports.updateLegalConsents = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+@@ -441,43 +431,62 @@ exports.updateLegalConsents = async (req, res) => {
+       dataProcessingAgreementAccepted,
+       dataStorageConsent,
+       vendorSharingConsent,
+-      communicationConsent
++      communicationConsent,
+     } = req.body;
+ 
+-    // Get IP address for logging
+-    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
++    const ipAddress =
++      req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+     const timestamp = new Date();
+ 
+     company.legalConsents = {
+-      // Terms of Service
+       termsAccepted,
+-      termsAcceptedAt: termsAccepted ? timestamp : company.legalConsents?.termsAcceptedAt,
+-      termsAcceptedIp: termsAccepted ? ipAddress : company.legalConsents?.termsAcceptedIp,
++      termsAcceptedAt: termsAccepted
++        ? timestamp
++        : company.legalConsents?.termsAcceptedAt,
++      termsAcceptedIp: termsAccepted
++        ? ipAddress
++        : company.legalConsents?.termsAcceptedIp,
+ 
+-      // Privacy Policy
+       privacyPolicyAccepted,
+-      privacyPolicyAcceptedAt: privacyPolicyAccepted ? timestamp : company.legalConsents?.privacyPolicyAcceptedAt,
+-      privacyPolicyAcceptedIp: privacyPolicyAccepted ? ipAddress : company.legalConsents?.privacyPolicyAcceptedIp,
++      privacyPolicyAcceptedAt: privacyPolicyAccepted
++        ? timestamp
++        : company.legalConsents?.privacyPolicyAcceptedAt,
++      privacyPolicyAcceptedIp: privacyPolicyAccepted
++        ? ipAddress
++        : company.legalConsents?.privacyPolicyAcceptedIp,
+ 
+-      // Data Processing Agreement
+       dataProcessingAgreementAccepted,
+-      dataProcessingAgreementAcceptedAt: dataProcessingAgreementAccepted ? timestamp : company.legalConsents?.dataProcessingAgreementAcceptedAt,
+-      dataProcessingAgreementAcceptedIp: dataProcessingAgreementAccepted ? ipAddress : company.legalConsents?.dataProcessingAgreementAcceptedIp,
++      dataProcessingAgreementAcceptedAt: dataProcessingAgreementAccepted
++        ? timestamp
++        : company.legalConsents?.dataProcessingAgreementAcceptedAt,
++      dataProcessingAgreementAcceptedIp: dataProcessingAgreementAccepted
++        ? ipAddress
++        : company.legalConsents?.dataProcessingAgreementAcceptedIp,
+ 
+-      // Data Storage Consent
+       dataStorageConsent,
+-      dataStorageConsentAt: dataStorageConsent ? timestamp : company.legalConsents?.dataStorageConsentAt,
+-      dataStorageConsentIp: dataStorageConsent ? ipAddress : company.legalConsents?.dataStorageConsentIp,
++      dataStorageConsentAt: dataStorageConsent
++        ? timestamp
++        : company.legalConsents?.dataStorageConsentAt,
++      dataStorageConsentIp: dataStorageConsent
++        ? ipAddress
++        : company.legalConsents?.dataStorageConsentIp,
+ 
+-      // Vendor Sharing Consent
+       vendorSharingConsent,
+-      vendorSharingConsentAt: vendorSharingConsent ? timestamp : company.legalConsents?.vendorSharingConsentAt,
+-      vendorSharingConsentIp: vendorSharingConsent ? ipAddress : company.legalConsents?.vendorSharingConsentIp,
+-
+-      // Communication Consent
+-      communicationConsent: communicationConsent || company.legalConsents?.communicationConsent,
+-      communicationConsentAt: communicationConsent ? timestamp : company.legalConsents?.communicationConsentAt,
+-      communicationConsentIp: communicationConsent ? ipAddress : company.legalConsents?.communicationConsentIp
++      vendorSharingConsentAt: vendorSharingConsent
++        ? timestamp
++        : company.legalConsents?.vendorSharingConsentAt,
++      vendorSharingConsentIp: vendorSharingConsent
++        ? ipAddress
++        : company.legalConsents?.vendorSharingConsentIp,
++
++      communicationConsent:
++        communicationConsent || company.legalConsents?.communicationConsent,
++      communicationConsentAt: communicationConsent
++        ? timestamp
++        : company.legalConsents?.communicationConsentAt,
++      communicationConsentIp: communicationConsent
++        ? ipAddress
++        : company.legalConsents?.communicationConsentIp,
+     };
+ 
+     company.profileCompletion.legalConsents = true;
+@@ -485,20 +494,18 @@ exports.updateLegalConsents = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'Legal consents updated successfully',
+-      data: company.legalConsents
++      message: "Legal consents updated successfully",
++      data: company.legalConsents,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Update failed',
+-      error: error.message
++      message: "Update failed",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== 8. DOCUMENTS (Post-Signup Verification) ====================
+-
+ // @desc    Upload Documents
+ // @route   PUT /api/companies/profile/documents
+ exports.uploadDocuments = async (req, res) => {
+@@ -508,7 +515,7 @@ exports.uploadDocuments = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+@@ -517,14 +524,15 @@ exports.uploadDocuments = async (req, res) => {
+       panCard,
+       incorporationCertificate,
+       authorizedSignatoryProof,
+-      addressProof
++      addressProof,
+     } = req.body;
+ 
+-    // ✅ Update only provided documents
+     if (gstCertificate) company.documents.gstCertificate = gstCertificate;
+     if (panCard) company.documents.panCard = panCard;
+-    if (incorporationCertificate) company.documents.incorporationCertificate = incorporationCertificate;
+-    if (authorizedSignatoryProof) company.documents.authorizedSignatoryProof = authorizedSignatoryProof;
++    if (incorporationCertificate)
++      company.documents.incorporationCertificate = incorporationCertificate;
++    if (authorizedSignatoryProof)
++      company.documents.authorizedSignatoryProof = authorizedSignatoryProof;
+     if (addressProof) company.documents.addressProof = addressProof;
+ 
+     company.profileCompletion.documents = true;
+@@ -532,54 +540,52 @@ exports.uploadDocuments = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'Documents uploaded successfully',
+-      data: company.documents
++      message: "Documents uploaded successfully",
++      data: company.documents,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Upload failed',
+-      error: error.message
++      message: "Upload failed",
++      error: error.message,
+     });
+   }
+ };
+ 
+-
+-// ==================== PROFILE MANAGEMENT ====================
+-
+ // @desc    Get Company Profile
+ // @route   GET /api/companies/profile
+ exports.getProfile = async (req, res) => {
+   try {
+-    const company = await Company.findOne({ user: req.user._id })
+-      .populate('user', 'email mobile status');
++    const company = await Company.findOne({ user: req.user._id }).populate(
++      "user",
++      "email mobile status",
++    );
+ 
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Profile not found'
++        message: "Profile not found",
+       });
+     }
+ 
+-    // ✅ Split decisionMakerName for frontend
+-    const [firstName, ...lastNameParts] = company.decisionMakerName.split(' ');
+-    const lastName = lastNameParts.join(' ');
++    const [firstName, ...lastNameParts] = company.decisionMakerName.split(" ");
++    const lastName = lastNameParts.join(" ");
+ 
+     const responseData = {
+       ...company.toObject(),
+-      firstName,  // ✅ Add firstName
+-      lastName    // ✅ Add lastName
++      firstName,
++      lastName,
+     };
+ 
+     res.json({
+       success: true,
+-      data: responseData
++      data: responseData,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch profile',
+-      error: error.message
++      message: "Failed to fetch profile",
++      error: error.message,
+     });
+   }
+ };
+@@ -593,7 +599,7 @@ exports.getProfileCompletion = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Profile not found'
++        message: "Profile not found",
+       });
+     }
+ 
+@@ -614,14 +620,14 @@ exports.getProfileCompletion = async (req, res) => {
+           completion.kyc &&
+           completion.hiringPreferences &&
+           completion.billing &&
+-          completion.legalConsents
+-      }
++          completion.legalConsents,
++      },
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch completion status',
+-      error: error.message
++      message: "Failed to fetch completion status",
++      error: error.message,
+     });
+   }
+ };
+@@ -636,46 +642,50 @@ exports.submitProfile = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+-    // Check required sections
+-    const { basicInfo, kyc, hiringPreferences, billing, legalConsents } = company.profileCompletion;
++    const { basicInfo, kyc, hiringPreferences, billing, legalConsents } =
++      company.profileCompletion;
+ 
+-    if (!basicInfo || !kyc || !hiringPreferences || !billing || !legalConsents) {
++    if (
++      !basicInfo ||
++      !kyc ||
++      !hiringPreferences ||
++      !billing ||
++      !legalConsents
++    ) {
+       return res.status(400).json({
+         success: false,
+-        message: 'Please complete all required sections',
+-        data: company.profileCompletion
++        message: "Please complete all required sections",
++        data: company.profileCompletion,
+       });
+     }
+ 
+-    company.verificationStatus = 'UNDER_REVIEW';
+-    user.status = 'UNDER_VERIFICATION';
++    company.verificationStatus = "UNDER_REVIEW";
++    user.status = "UNDER_VERIFICATION";
+ 
+     await company.save();
+     await user.save();
+ 
+     res.json({
+       success: true,
+-      message: 'Profile submitted for verification',
++      message: "Profile submitted for verification",
+       data: {
+         verificationStatus: company.verificationStatus,
+-        userStatus: user.status
+-      }
++        userStatus: user.status,
++      },
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Submission failed',
+-      error: error.message
++      message: "Submission failed",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== DASHBOARD ====================
+-
+ // @desc    Get Dashboard Stats
+ // @route   GET /api/companies/dashboard
+ exports.getDashboard = async (req, res) => {
+@@ -685,40 +695,38 @@ exports.getDashboard = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+-    // Get job stats
+     const jobStats = await Job.aggregate([
+       { $match: { company: company._id } },
+-      { $group: { _id: '$status', count: { $sum: 1 } } }
++      { $group: { _id: "$status", count: { $sum: 1 } } },
+     ]);
+ 
+-    // Get recent candidates
+     const recentCandidates = await Candidate.find({ company: company._id })
+-      .populate('job', 'title')
+-      .populate('submittedBy', 'firstName lastName')
++      .populate("job", "title")
++      .populate("submittedBy", "firstName lastName")
+       .sort({ createdAt: -1 })
+       .limit(10);
+ 
+-    // Get hiring funnel
+     const hiringFunnel = await Candidate.aggregate([
+       { $match: { company: company._id } },
+-      { $group: { _id: '$status', count: { $sum: 1 } } }
++      { $group: { _id: "$status", count: { $sum: 1 } } },
+     ]);
+ 
+-    // Get active jobs
+     const activeJobs = await Job.find({
+       company: company._id,
+-      status: 'ACTIVE'
++      status: "ACTIVE",
+     }).limit(5);
+ 
+-    // Calculate profile completion
+     const profileCompletion = company.profileCompletion;
+-    const completedSections = Object.values(profileCompletion).filter(Boolean).length;
++    const completedSections =
++      Object.values(profileCompletion).filter(Boolean).length;
+     const totalSections = Object.keys(profileCompletion).length;
+-    const completionPercentage = Math.round((completedSections / totalSections) * 100);
++    const completionPercentage = Math.round(
++      (completedSections / totalSections) * 100,
++    );
+ 
+     res.json({
+       success: true,
+@@ -728,27 +736,25 @@ exports.getDashboard = async (req, res) => {
+           verificationStatus: company.verificationStatus,
+           profileCompletion: {
+             ...profileCompletion,
+-            percentage: completionPercentage
+-          }
++            percentage: completionPercentage,
++          },
+         },
+         metrics: company.metrics,
+         jobStats,
+         recentCandidates,
+         hiringFunnel,
+-        activeJobs
+-      }
++        activeJobs,
++      },
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch dashboard',
+-      error: error.message
++      message: "Failed to fetch dashboard",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== JOB MANAGEMENT (Existing - Keep as is) ====================
+-
+ // @desc    Create Job Posting
+ // @route   POST /api/companies/jobs
+ exports.createJob = async (req, res) => {
+@@ -758,35 +764,44 @@ exports.createJob = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
++    // ✅ Ensure eligiblePlans has a default
++    const eligiblePlans =
++      req.body.eligiblePlans && req.body.eligiblePlans.length > 0
++        ? req.body.eligiblePlans
++        : ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"];
++
+     const jobData = {
+       ...req.body,
+       company: company._id,
+       postedBy: req.user._id,
+-      status: 'ACTIVE',
+-      eligiblePlans: req.body.eligiblePlans || ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM']
++      status: "ACTIVE",
++      eligiblePlans,
+     };
+ 
+     const job = await Job.create(jobData);
+ 
+-    // Update company metrics
+     company.metrics.totalJobsPosted += 1;
+     company.metrics.activeJobs += 1;
+     await company.save();
+ 
++    console.log(
++      `[JOB] Created: "${job.title}" — Visible to plans: ${eligiblePlans.join(", ")}`,
++    );
++
+     res.status(201).json({
+       success: true,
+-      message: 'Job created successfully',
+-      data: job
++      message: "Job created successfully",
++      data: job,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Job creation failed',
+-      error: error.message
++      message: "Job creation failed",
++      error: error.message,
+     });
+   }
+ };
+@@ -800,7 +815,7 @@ exports.getJobs = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+@@ -823,15 +838,15 @@ exports.getJobs = async (req, res) => {
+         pagination: {
+           current: parseInt(page),
+           pages: Math.ceil(total / limit),
+-          total
+-        }
+-      }
++          total,
++        },
++      },
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch jobs',
+-      error: error.message
++      message: "Failed to fetch jobs",
++      error: error.message,
+     });
+   }
+ };
+@@ -845,19 +860,19 @@ exports.getJob = async (req, res) => {
+     if (!job) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Job not found'
++        message: "Job not found",
+       });
+     }
+ 
+     res.json({
+       success: true,
+-      data: job
++      data: job,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch job',
+-      error: error.message
++      message: "Failed to fetch job",
++      error: error.message,
+     });
+   }
+ };
+@@ -866,29 +881,28 @@ exports.getJob = async (req, res) => {
+ // @route   PUT /api/companies/jobs/:id
+ exports.updateJob = async (req, res) => {
+   try {
+-    const job = await Job.findByIdAndUpdate(
+-      req.params.id,
+-      req.body,
+-      { new: true, runValidators: true }
+-    );
++    const job = await Job.findByIdAndUpdate(req.params.id, req.body, {
++      new: true,
++      runValidators: true,
++    });
+ 
+     if (!job) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Job not found'
++        message: "Job not found",
+       });
+     }
+ 
+     res.json({
+       success: true,
+-      message: 'Job updated successfully',
+-      data: job
++      message: "Job updated successfully",
++      data: job,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Update failed',
+-      error: error.message
++      message: "Update failed",
++      error: error.message,
+     });
+   }
+ };
+@@ -902,14 +916,13 @@ exports.deleteJob = async (req, res) => {
+     if (!job) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Job not found'
++        message: "Job not found",
+       });
+     }
+ 
+-    job.status = 'CLOSED';
++    job.status = "CLOSED";
+     await job.save();
+ 
+-    // Update company metrics
+     const company = await Company.findById(job.company);
+     if (company) {
+       company.metrics.activeJobs = Math.max(0, company.metrics.activeJobs - 1);
+@@ -918,19 +931,17 @@ exports.deleteJob = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'Job closed successfully'
++      message: "Job closed successfully",
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to close job',
+-      error: error.message
++      message: "Failed to close job",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// ==================== CANDIDATE MANAGEMENT (Keep existing with auth fixes) ====================
+-
+ // @desc    Get Candidates for a Job
+ // @route   GET /api/companies/jobs/:jobId/candidates
+ exports.getJobCandidates = async (req, res) => {
+@@ -941,7 +952,7 @@ exports.getJobCandidates = async (req, res) => {
+     if (status) query.status = status;
+ 
+     const candidates = await Candidate.find(query)
+-      .populate('submittedBy', 'firstName lastName firmName')
++      .populate("submittedBy", "firstName lastName firmName")
+       .sort({ createdAt: -1 })
+       .skip((page - 1) * limit)
+       .limit(parseInt(limit));
+@@ -955,15 +966,15 @@ exports.getJobCandidates = async (req, res) => {
+         pagination: {
+           current: parseInt(page),
+           pages: Math.ceil(total / limit),
+-          total
+-        }
+-      }
++          total,
++        },
++      },
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch candidates',
+-      error: error.message
++      message: "Failed to fetch candidates",
++      error: error.message,
+     });
+   }
+ };
+@@ -977,7 +988,7 @@ exports.getAllCandidates = async (req, res) => {
+     if (!company) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Company not found'
++        message: "Company not found",
+       });
+     }
+ 
+@@ -987,8 +998,8 @@ exports.getAllCandidates = async (req, res) => {
+     if (status) query.status = status;
+ 
+     const candidates = await Candidate.find(query)
+-      .populate('submittedBy', 'firstName lastName firmName')
+-      .populate('job', 'title')
++      .populate("submittedBy", "firstName lastName firmName")
++      .populate("job", "title")
+       .sort({ createdAt: -1 })
+       .skip((page - 1) * limit)
+       .limit(parseInt(limit));
+@@ -1002,58 +1013,58 @@ exports.getAllCandidates = async (req, res) => {
+         pagination: {
+           current: parseInt(page),
+           pages: Math.ceil(total / limit),
+-          total
+-        }
+-      }
++          total,
++        },
++      },
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch candidates',
+-      error: error.message
++      message: "Failed to fetch candidates",
++      error: error.message,
+     });
+   }
+ };
+ 
+-// @desc    Get Single Candidate
+-// @route   GET /api/companies/candidates/:id
+ // @desc    Get Single Candidate
+ // @route   GET /api/companies/candidates/:id
+ exports.getCandidate = async (req, res) => {
+   try {
+     const candidate = await Candidate.findById(req.params.id)
+-      .populate('submittedBy', 'firstName lastName firmName email')
+-      .populate('job', 'title commission')
++      .populate("submittedBy", "firstName lastName firmName email")
++      .populate("job", "title commission")
+       .populate({
+-        path: 'company',
+-        select: 'companyName user'
++        path: "company",
++        select: "companyName user",
+       });
+ 
+     if (!candidate) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: "Candidate not found",
+       });
+     }
+ 
+-    // ✅ More robust authorization check
+-    if (req.user.role === 'company') {
++    // ✅ Authorization check
++    if (req.user.role === "company") {
+       const company = await Company.findOne({ user: req.user._id });
+ 
+-      if (!company || candidate.company._id.toString() !== company._id.toString()) {
++      if (
++        !company ||
++        candidate.company._id.toString() !== company._id.toString()
++      ) {
+         return res.status(403).json({
+           success: false,
+-          message: 'Not authorized to view this candidate'
++          message: "Not authorized to view this candidate",
+         });
+       }
+-    } else if (req.user.role !== 'admin') {
++    } else if (req.user.role !== "admin") {
+       return res.status(403).json({
+         success: false,
+-        message: 'Not authorized to view this candidate'
++        message: "Not authorized to view this candidate",
+       });
+     }
+ 
+-    // Clean response
+     const responseData = candidate.toObject();
+     if (responseData.company?.user) {
+       delete responseData.company.user;
+@@ -1061,98 +1072,145 @@ exports.getCandidate = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      data: responseData
++      data: responseData,
+     });
+-
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch candidate',
+-      error: error.message
++      message: "Failed to fetch candidate",
++      error: error.message,
+     });
+   }
+ };
+ 
+ // @desc    Update Candidate Status
+ // @route   PUT /api/companies/candidates/:id/status
++// ✅ COMPLETE: Uses lifecycle service, validates transitions, returns next actions
+ exports.updateCandidateStatus = async (req, res) => {
+   try {
+     const { status, notes } = req.body;
+ 
+-    const candidate = await Candidate.findById(req.params.id)
+-      .populate({
+-        path: 'company',
+-        select: 'user'
+-      });
+-
+-    if (!candidate) {
+-      return res.status(404).json({
++    if (!status) {
++      return res.status(400).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: "Please provide status",
+       });
+     }
+ 
+-    // Verify this company owns this candidate
+-    if (candidate.company.user.toString() !== req.user._id.toString()) {
+-      return res.status(403).json({
+-        success: false,
+-        message: 'Not authorized to update this candidate'
+-      });
++    const company = await Company.findOne({ user: req.user._id });
++    if (!company) {
++      return res
++        .status(404)
++        .json({ success: false, message: "Company not found" });
+     }
+ 
+-    const previousStatus = candidate.status;
+-
+-    // Update status
+-    candidate.status = status;
+-    candidate.statusHistory.push({
+-      status,
+-      changedBy: req.user._id,
+-      changedAt: new Date(),
+-      notes
+-    });
+-
+-    await candidate.save();
++    const candidate = await Candidate.findById(req.params.id);
++    if (!candidate) {
++      return res
++        .status(404)
++        .json({ success: false, message: "Candidate not found" });
++    }
+ 
+-    // Update job metrics using atomic $inc
+-    if (previousStatus !== status) {
+-      const incrementFields = {};
++    if (candidate.company.toString() !== company._id.toString()) {
++      return res
++        .status(403)
++        .json({ success: false, message: "Not authorized" });
++    }
+ 
+-      if (status === 'SHORTLISTED' && previousStatus !== 'SHORTLISTED') {
+-        incrementFields['metrics.shortlisted'] = 1;
+-      }
+-      if (status === 'INTERVIEWED' && previousStatus !== 'INTERVIEWED') {
+-        incrementFields['metrics.interviewed'] = 1;
+-      }
+-      if (status === 'OFFERED' && previousStatus !== 'OFFERED') {
+-        incrementFields['metrics.offered'] = 1;
+-      }
+-      if (status === 'JOINED' && previousStatus !== 'JOINED') {
+-        incrementFields['metrics.joined'] = 1;
++    // ✅ VALIDATE: If marking as JOINED, offer must exist
++    if (status === "JOINED") {
++      if (!candidate.offer || !candidate.offer.salary) {
++        return res.status(400).json({
++          success: false,
++          message:
++            "Cannot mark as JOINED without an offer. Please make an offer first.",
++          hint: "Use POST /api/companies/candidates/:id/offer to set offer details",
++          data: {
++            hasOffer: !!candidate.offer,
++            hasSalary: !!candidate.offer?.salary,
++            currentOffer: candidate.offer || null,
++          },
++        });
+       }
+ 
+-      if (Object.keys(incrementFields).length > 0) {
+-        await Job.findByIdAndUpdate(candidate.job, {
+-          $inc: incrementFields
++      if (!candidate.offer.joiningDate) {
++        return res.status(400).json({
++          success: false,
++          message:
++            "Please set a joining date in the offer before marking as JOINED",
++          data: { currentOffer: candidate.offer },
+         });
+       }
+     }
+ 
+-    // Re-fetch without user field for response
+-    const updatedCandidate = await Candidate.findById(candidate._id)
+-      .populate('submittedBy', 'firstName lastName firmName')
+-      .populate('job', 'title commission')
+-      .populate('company', 'companyName');
++    // ✅ VALIDATE: If marking as OFFERED, salary must be provided
++    if (status === "OFFERED") {
++      if (!candidate.offer || !candidate.offer.salary) {
++        return res.status(400).json({
++          success: false,
++          message:
++            "Cannot mark as OFFERED without offer details. Use the offer endpoint first.",
++          hint: "Use POST /api/companies/candidates/:id/offer with salary and joiningDate",
++        });
++      }
++    }
+ 
+-    res.json({
+-      success: true,
+-      message: 'Candidate status updated',
+-      data: updatedCandidate
+-    });
++    // ✅ Use lifecycle service
++    try {
++      const updatedCandidate = await candidateLifecycleService.updateStatus(
++        req.params.id,
++        status,
++        req.user._id,
++        "company",
++        notes,
++      );
++
++      const responseCandidate = await Candidate.findById(updatedCandidate._id)
++        .populate("submittedBy", "firstName lastName firmName")
++        .populate("job", "title commission")
++        .populate("company", "companyName");
++
++      const nextActions = candidateLifecycleService.getNextActions(
++        status,
++        "company",
++      );
++
++      res.json({
++        success: true,
++        message: `Status updated to ${StatusMachine.getStatusLabel(status)}`,
++        data: {
++          candidate: responseCandidate,
++          nextActions: nextActions.map((s) => ({
++            value: s,
++            label: StatusMachine.getStatusLabel(s),
++          })),
++        },
++      });
++    } catch (error) {
++      if (error.statusCode === 400) {
++        return res.status(400).json({
++          success: false,
++          message: error.message,
++          data: {
++            currentStatus: {
++              value: candidate.status,
++              label: StatusMachine.getStatusLabel(candidate.status),
++            },
++            allowedTransitions: (error.allowedTransitions || []).map((s) => ({
++              value: s,
++              label: StatusMachine.getStatusLabel(s),
++            })),
++            hint: error.hint || null,
++          },
++        });
++      }
++      throw error;
++    }
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Status update failed',
+-      error: error.message
++      message: "Status update failed",
++      error: error.message,
+     });
+   }
+ };
+@@ -1161,21 +1219,22 @@ exports.updateCandidateStatus = async (req, res) => {
+ // @route   POST /api/companies/candidates/:id/interviews
+ exports.scheduleInterview = async (req, res) => {
+   try {
+-    const candidate = await Candidate.findById(req.params.id)
+-      .populate({ path: 'company', select: 'user' });
++    const candidate = await Candidate.findById(req.params.id).populate({
++      path: "company",
++      select: "user",
++    });
+ 
+     if (!candidate) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: "Candidate not found",
+       });
+     }
+ 
+-    // Verify ownership
+     if (candidate.company.user.toString() !== req.user._id.toString()) {
+       return res.status(403).json({
+         success: false,
+-        message: 'Not authorized'
++        message: "Not authorized",
+       });
+     }
+ 
+@@ -1186,29 +1245,29 @@ exports.scheduleInterview = async (req, res) => {
+       interviewerName: req.body.interviewerName,
+       interviewerEmail: req.body.interviewerEmail,
+       meetingLink: req.body.meetingLink,
+-      result: 'PENDING'
++      result: "PENDING",
+     };
+ 
+     candidate.interviews.push(interview);
+-    candidate.status = 'INTERVIEW_SCHEDULED';
++    candidate.status = "INTERVIEW_SCHEDULED";
+     candidate.statusHistory.push({
+-      status: 'INTERVIEW_SCHEDULED',
++      status: "INTERVIEW_SCHEDULED",
+       changedBy: req.user._id,
+-      notes: `Interview Round ${interview.round} scheduled for ${new Date(interview.scheduledAt).toLocaleString()}`
++      notes: `Interview Round ${interview.round} scheduled for ${new Date(interview.scheduledAt).toLocaleString()}`,
+     });
+ 
+     await candidate.save();
+ 
+     res.json({
+       success: true,
+-      message: 'Interview scheduled successfully',
+-      data: candidate
++      message: "Interview scheduled successfully",
++      data: candidate,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to schedule interview',
+-      error: error.message
++      message: "Failed to schedule interview",
++      error: error.message,
+     });
+   }
+ };
+@@ -1217,21 +1276,22 @@ exports.scheduleInterview = async (req, res) => {
+ // @route   PUT /api/companies/candidates/:id/interviews/:interviewId
+ exports.updateInterviewFeedback = async (req, res) => {
+   try {
+-    const candidate = await Candidate.findById(req.params.id)
+-      .populate({ path: 'company', select: 'user' });
++    const candidate = await Candidate.findById(req.params.id).populate({
++      path: "company",
++      select: "user",
++    });
+ 
+     if (!candidate) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: "Candidate not found",
+       });
+     }
+ 
+-    // Verify ownership
+     if (candidate.company.user.toString() !== req.user._id.toString()) {
+       return res.status(403).json({
+         success: false,
+-        message: 'Not authorized'
++        message: "Not authorized",
+       });
+     }
+ 
+@@ -1239,7 +1299,7 @@ exports.updateInterviewFeedback = async (req, res) => {
+     if (!interview) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Interview not found'
++        message: "Interview not found",
+       });
+     }
+ 
+@@ -1247,12 +1307,12 @@ exports.updateInterviewFeedback = async (req, res) => {
+     interview.rating = req.body.rating;
+     interview.result = req.body.result;
+ 
+-    if (req.body.result === 'PASSED' || req.body.result === 'FAILED') {
+-      candidate.status = 'INTERVIEWED';
++    if (req.body.result === "PASSED" || req.body.result === "FAILED") {
++      candidate.status = "INTERVIEWED";
+       candidate.statusHistory.push({
+-        status: 'INTERVIEWED',
++        status: "INTERVIEWED",
+         changedBy: req.user._id,
+-        notes: `Interview Round ${interview.round} completed - ${req.body.result}`
++        notes: `Interview Round ${interview.round} completed - ${req.body.result}`,
+       });
+     }
+ 
+@@ -1260,14 +1320,14 @@ exports.updateInterviewFeedback = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'Interview feedback updated',
+-      data: candidate
++      message: "Interview feedback updated",
++      data: candidate,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to update feedback',
+-      error: error.message
++      message: "Failed to update feedback",
++      error: error.message,
+     });
+   }
+ };
+@@ -1276,21 +1336,22 @@ exports.updateInterviewFeedback = async (req, res) => {
+ // @route   POST /api/companies/candidates/:id/offer
+ exports.makeOffer = async (req, res) => {
+   try {
+-    const candidate = await Candidate.findById(req.params.id)
+-      .populate({ path: 'company', select: 'user' });
++    const candidate = await Candidate.findById(req.params.id).populate({
++      path: "company",
++      select: "user",
++    });
+ 
+     if (!candidate) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: "Candidate not found",
+       });
+     }
+ 
+-    // Verify ownership
+     if (candidate.company.user.toString() !== req.user._id.toString()) {
+       return res.status(403).json({
+         success: false,
+-        message: 'Not authorized'
++        message: "Not authorized",
+       });
+     }
+ 
+@@ -1299,27 +1360,27 @@ exports.makeOffer = async (req, res) => {
+       joiningDate: req.body.joiningDate,
+       offerLetterUrl: req.body.offerLetterUrl,
+       offeredAt: new Date(),
+-      response: 'PENDING'
++      response: "PENDING",
+     };
+-    candidate.status = 'OFFERED';
++    candidate.status = "OFFERED";
+     candidate.statusHistory.push({
+-      status: 'OFFERED',
++      status: "OFFERED",
+       changedBy: req.user._id,
+-      notes: `Offer made with salary ₹${req.body.salary}`
++      notes: `Offer made with salary ₹${req.body.salary}`,
+     });
+ 
+     await candidate.save();
+ 
+     res.json({
+       success: true,
+-      message: 'Offer made successfully',
+-      data: candidate
++      message: "Offer made successfully",
++      data: candidate,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to make offer',
+-      error: error.message
++      message: "Failed to make offer",
++      error: error.message,
+     });
+   }
+ };
+@@ -1328,21 +1389,22 @@ exports.makeOffer = async (req, res) => {
+ // @route   PUT /api/companies/candidates/:id/offer
+ exports.updateOfferResponse = async (req, res) => {
+   try {
+-    const candidate = await Candidate.findById(req.params.id)
+-      .populate({ path: 'company', select: 'user' });
++    const candidate = await Candidate.findById(req.params.id).populate({
++      path: "company",
++      select: "user",
++    });
+ 
+     if (!candidate) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: "Candidate not found",
+       });
+     }
+ 
+-    // Verify ownership
+     if (candidate.company.user.toString() !== req.user._id.toString()) {
+       return res.status(403).json({
+         success: false,
+-        message: 'Not authorized'
++        message: "Not authorized",
+       });
+     }
+ 
+@@ -1350,53 +1412,55 @@ exports.updateOfferResponse = async (req, res) => {
+     candidate.offer.respondedAt = new Date();
+     candidate.offer.negotiationNotes = req.body.negotiationNotes;
+ 
+-    if (req.body.response === 'ACCEPTED') {
+-      candidate.status = 'OFFER_ACCEPTED';
+-    } else if (req.body.response === 'DECLINED') {
+-      candidate.status = 'OFFER_DECLINED';
++    if (req.body.response === "ACCEPTED") {
++      candidate.status = "OFFER_ACCEPTED";
++    } else if (req.body.response === "DECLINED") {
++      candidate.status = "OFFER_DECLINED";
+     }
+ 
+     candidate.statusHistory.push({
+       status: candidate.status,
+       changedBy: req.user._id,
+-      notes: `Offer ${req.body.response.toLowerCase()}`
++      notes: `Offer ${req.body.response.toLowerCase()}`,
+     });
+ 
+     await candidate.save();
+ 
+     res.json({
+       success: true,
+-      message: 'Offer response updated',
+-      data: candidate
++      message: "Offer response updated",
++      data: candidate,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to update offer response',
+-      error: error.message
++      message: "Failed to update offer response",
++      error: error.message,
+     });
+   }
+ };
+ 
++/* ========== CONFIRM JOINING - DISABLED (Commission system inactive) ==========
+ // @desc    Confirm Joining
+ // @route   POST /api/companies/candidates/:id/joining
+ exports.confirmJoining = async (req, res) => {
+   try {
+-    const candidate = await Candidate.findById(req.params.id)
+-      .populate({ path: 'company', select: 'user' });
++    const candidate = await Candidate.findById(req.params.id).populate({
++      path: "company",
++      select: "user",
++    });
+ 
+     if (!candidate) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: "Candidate not found",
+       });
+     }
+ 
+-    // Verify ownership
+     if (candidate.company.user.toString() !== req.user._id.toString()) {
+       return res.status(403).json({
+         success: false,
+-        message: 'Not authorized'
++        message: "Not authorized",
+       });
+     }
+ 
+@@ -1407,32 +1471,33 @@ exports.confirmJoining = async (req, res) => {
+       actualJoiningDate: req.body.joiningDate,
+       confirmed: true,
+       confirmedAt: new Date(),
+-      documentsSubmitted: req.body.documentsSubmitted || false
++      documentsSubmitted: req.body.documentsSubmitted || false,
+     };
+-    candidate.status = 'JOINED';
++    candidate.status = "JOINED";
+     candidate.statusHistory.push({
+-      status: 'JOINED',
++      status: "JOINED",
+       changedBy: req.user._id,
+-      notes: `Joined on ${new Date(req.body.joiningDate).toDateString()}`
++      notes: `Joined on ${new Date(req.body.joiningDate).toDateString()}`,
+     });
+ 
+-    // Calculate commission
++    // ========== COMMISSION CALCULATION - DISABLED ==========
+     if (job && candidate.offer) {
+-      const commissionAmount = job.commission.type === 'percentage'
+-        ? (candidate.offer.salary * job.commission.value / 100)
+-        : job.commission.value;
++      const commissionAmount =
++        job.commission.type === "percentage"
++          ? (candidate.offer.salary * job.commission.value) / 100
++          : job.commission.value;
+ 
+       candidate.payout = {
+         commissionAmount,
+-        status: 'PENDING'
++        status: "PENDING",
+       };
+     }
++    // ========== END COMMISSION ==========
+ 
+-    // Update metrics
+     if (job) {
+       job.filledPositions += 1;
+       if (job.filledPositions >= job.vacancies) {
+-        job.status = 'FILLED';
++        job.status = "FILLED";
+       }
+       await job.save();
+     }
+@@ -1446,58 +1511,60 @@ exports.confirmJoining = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'Joining confirmed successfully',
+-      data: candidate
++      message: "Joining confirmed successfully",
++      data: candidate,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to confirm joining',
+-      error: error.message
++      message: "Failed to confirm joining",
++      error: error.message,
+     });
+   }
+ };
++========== END CONFIRM JOINING ========== */
+ 
+ // @desc    Add Note to Candidate
+ // @route   POST /api/companies/candidates/:id/notes
+ exports.addNote = async (req, res) => {
+   try {
+-    const candidate = await Candidate.findById(req.params.id)
+-      .populate({ path: 'company', select: 'user' });
++    const candidate = await Candidate.findById(req.params.id).populate({
++      path: "company",
++      select: "user",
++    });
+ 
+     if (!candidate) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: "Candidate not found",
+       });
+     }
+ 
+-    // Verify ownership
+     if (candidate.company.user.toString() !== req.user._id.toString()) {
+       return res.status(403).json({
+         success: false,
+-        message: 'Not authorized'
++        message: "Not authorized",
+       });
+     }
+ 
+     candidate.notes.push({
+       content: req.body.content,
+       addedBy: req.user._id,
+-      isInternal: req.body.isInternal !== false
++      isInternal: req.body.isInternal !== false,
+     });
+ 
+     await candidate.save();
+ 
+     res.json({
+       success: true,
+-      message: 'Note added successfully',
+-      data: candidate.notes
++      message: "Note added successfully",
++      data: candidate.notes,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to add note',
+-      error: error.message
++      message: "Failed to add note",
++      error: error.message,
+     });
+   }
+ };
+\ No newline at end of file
+diff --git a/controllers/invoiceController.js b/controllers/invoiceController.js
+index e69de29..f4cec15 100644
+--- a/controllers/invoiceController.js
++++ b/controllers/invoiceController.js
+@@ -0,0 +1,328 @@
++// backend/controllers/invoiceController.js — PAYOUT/COMMISSION DISABLED
++
++const Invoice = require('../models/Invoice');
++const Company = require('../models/Company');
++const Candidate = require('../models/Candidate');
++const StaffingPartner = require('../models/StaffingPartner');
++
++/* ========== AUTO-GENERATE INVOICE - DISABLED ==========
++/**
++ * Auto-generate invoice when candidate joins
++ * Called internally by candidateLifecycleService
++ * DISABLED: Payout/Commission system not active
++ */
++/*
++exports.generateInvoice = async (candidateId) => {
++  try {
++    const candidate = await Candidate.findById(candidateId)
++      .populate('job', 'title commission')
++      .populate('company', 'companyName billing kyc')
++      .populate('submittedBy', 'firstName lastName firmName');
++
++    if (!candidate || candidate.status !== 'JOINED') {
++      throw new Error('Candidate must have JOINED status');
++    }
++
++    // Check if invoice already exists
++    const existing = await Invoice.findOne({ candidate: candidateId });
++    if (existing) return existing;
++
++    // Calculate amounts
++    const baseAmount = candidate.payout?.commissionAmount || 0;
++    const gstPercentage = 18;
++    const gstAmount = Math.round(baseAmount * gstPercentage / 100);
++    const totalAmount = baseAmount + gstAmount;
++
++    // Due date based on company payment terms
++    const termDays = {
++      'Immediate': 0, 'Net 15': 15, 'Net 30': 30, 'Net 45': 45, 'Net 60': 60
++    };
++    const days = termDays[candidate.company?.billing?.paymentTerms] || 30;
++    const dueDate = new Date();
++    dueDate.setDate(dueDate.getDate() + days);
++
++    const invoice = await Invoice.create({
++      company: candidate.company._id,
++      candidate: candidate._id,
++      job: candidate.job._id,
++      staffingPartner: candidate.submittedBy._id,
++      amount: {
++        baseAmount,
++        gstPercentage,
++        gstAmount,
++        totalAmount,
++        currency: 'INR'
++      },
++      billingDetails: {
++        companyName: candidate.company.billing?.billingEntityName || candidate.company.companyName,
++        companyAddress: formatAddress(candidate.company.billing?.billingAddress || candidate.company.kyc?.registeredAddress),
++        companyGST: candidate.company.billing?.gstNumber || candidate.company.kyc?.gstNumber,
++        companyPAN: candidate.company.billing?.panNumber || candidate.company.kyc?.panNumber
++      },
++      dueDate,
++      status: 'DRAFT'
++    });
++
++    console.log(`[INVOICE] Generated ${invoice.invoiceNumber} — ₹${totalAmount.toLocaleString('en-IN')}`);
++    return invoice;
++  } catch (error) {
++    console.error('[INVOICE] Generation error:', error.message);
++    throw error;
++  }
++};
++*/
++// ========== END AUTO-GENERATE INVOICE ========== */
++
++/**
++ * Auto-generate invoice — STUB
++ * Returns null (invoice system disabled)
++ */
++exports.generateInvoice = async (candidateId) => {
++  console.log(`[INVOICE] Invoice generation is disabled (payout system inactive) — Candidate ID: ${candidateId}`);
++  return null;
++};
++
++/**
++ * Get invoices — STUB
++ * Returns empty array (invoice system disabled)
++ */
++exports.getInvoices = async (req, res) => {
++  res.json({
++    success: true,
++    message: 'Invoice system is currently disabled',
++    data: {
++      invoices: [],
++      summary: [],
++      pagination: {
++        current: 1,
++        pages: 0,
++        total: 0
++      }
++    }
++  });
++};
++
++/**
++ * Get single invoice — STUB
++ * Returns 404 (invoice system disabled)
++ */
++exports.getInvoice = async (req, res) => {
++  res.status(404).json({
++    success: false,
++    message: 'Invoice system is currently disabled'
++  });
++};
++
++/**
++ * Mark invoice as sent — STUB
++ * Returns 404 (invoice system disabled)
++ */
++exports.sendInvoice = async (req, res) => {
++  res.status(404).json({
++    success: false,
++    message: 'Invoice system is currently disabled'
++  });
++};
++
++/**
++ * Record payment for invoice — STUB
++ * Returns 404 (invoice system disabled)
++ */
++exports.recordPayment = async (req, res) => {
++  res.status(404).json({
++    success: false,
++    message: 'Invoice system is currently disabled'
++  });
++};
++
++/* ========== ORIGINAL IMPLEMENTATIONS - COMMENTED OUT ==========
++
++// Get invoices — role-based filtering
++exports.getInvoices = async (req, res) => {
++  try {
++    let query = {};
++
++    if (req.user.role === 'company') {
++      const company = await Company.findOne({ user: req.user._id });
++      if (!company) return res.status(404).json({ success: false, message: 'Company not found' });
++      query.company = company._id;
++    } else if (req.user.role === 'staffing_partner') {
++      const partner = await StaffingPartner.findOne({ user: req.user._id });
++      if (!partner) return res.status(404).json({ success: false, message: 'Partner not found' });
++      query.staffingPartner = partner._id;
++    }
++    // Admin sees all
++
++    const { status, page = 1, limit = 20 } = req.query;
++    if (status) query.status = status;
++
++    const pageNum = Math.max(1, parseInt(page));
++    const limitNum = Math.min(50, parseInt(limit));
++    const skip = (pageNum - 1) * limitNum;
++
++    const [invoices, total] = await Promise.all([
++      Invoice.find(query)
++        .populate('company', 'companyName')
++        .populate('candidate', 'firstName lastName')
++        .populate('job', 'title')
++        .populate('staffingPartner', 'firstName lastName firmName')
++        .sort({ createdAt: -1 })
++        .skip(skip)
++        .limit(limitNum)
++        .lean(),
++      Invoice.countDocuments(query)
++    ]);
++
++    // Summary
++    const summary = await Invoice.aggregate([
++      { $match: query },
++      {
++        $group: {
++          _id: '$status',
++          count: { $sum: 1 },
++          totalAmount: { $sum: '$amount.totalAmount' }
++        }
++      }
++    ]);
++
++    res.json({
++      success: true,
++      data: {
++        invoices,
++        summary,
++        pagination: {
++          current: pageNum,
++          pages: Math.ceil(total / limitNum),
++          total
++        }
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch invoices',
++      error: error.message
++    });
++  }
++};
++
++// Get single invoice
++exports.getInvoice = async (req, res) => {
++  try {
++    const invoice = await Invoice.findById(req.params.id)
++      .populate('company', 'companyName kyc billing')
++      .populate('candidate', 'firstName lastName email offer joining')
++      .populate('job', 'title commission')
++      .populate('staffingPartner', 'firstName lastName firmName firmDetails');
++
++    if (!invoice) {
++      return res.status(404).json({ success: false, message: 'Invoice not found' });
++    }
++
++    // Authorization check
++    if (req.user.role === 'company') {
++      const company = await Company.findOne({ user: req.user._id });
++      if (invoice.company._id.toString() !== company._id.toString()) {
++        return res.status(403).json({ success: false, message: 'Not authorized' });
++      }
++    } else if (req.user.role === 'staffing_partner') {
++      const partner = await StaffingPartner.findOne({ user: req.user._id });
++      if (invoice.staffingPartner._id.toString() !== partner._id.toString()) {
++        return res.status(403).json({ success: false, message: 'Not authorized' });
++      }
++    }
++
++    res.json({ success: true, data: invoice });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch invoice',
++      error: error.message
++    });
++  }
++};
++
++// Mark invoice as sent (Admin only)
++exports.sendInvoice = async (req, res) => {
++  try {
++    const invoice = await Invoice.findById(req.params.id);
++    if (!invoice) {
++      return res.status(404).json({ success: false, message: 'Invoice not found' });
++    }
++
++    invoice.status = 'SENT';
++    await invoice.save();
++
++    // Send email notification to company
++    const emailService = require('../services/emailService');
++    const company = await Company.findById(invoice.company).populate('user', 'email');
++
++    if (company?.user?.email) {
++      await emailService.sendEmail({
++        to: company.user.email,
++        subject: `Invoice ${invoice.invoiceNumber} — Syncro1`,
++        html: `
++          <div style="font-family: Arial; max-width: 600px; margin: 0 auto;">
++            <h2>Invoice ${invoice.invoiceNumber}</h2>
++            <p><strong>Amount:</strong> ₹${invoice.amount.totalAmount.toLocaleString('en-IN')}</p>
++            <p><strong>Due Date:</strong> ${invoice.dueDate.toDateString()}</p>
++            <p>Please review and process the payment from your dashboard.</p>
++          </div>
++        `
++      });
++    }
++
++    res.json({
++      success: true,
++      message: 'Invoice sent successfully',
++      data: invoice
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to send invoice',
++      error: error.message
++    });
++  }
++};
++
++// Record payment for invoice (Admin or Company)
++exports.recordPayment = async (req, res) => {
++  try {
++    const { transactionId, paymentMethod, notes } = req.body;
++
++    const invoice = await Invoice.findById(req.params.id);
++    if (!invoice) {
++      return res.status(404).json({ success: false, message: 'Invoice not found' });
++    }
++
++    invoice.status = 'PAID';
++    invoice.payment = {
++      paidAt: new Date(),
++      transactionId,
++      paymentMethod,
++      notes
++    };
++    await invoice.save();
++
++    res.json({
++      success: true,
++      message: 'Payment recorded successfully',
++      data: invoice
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to record payment',
++      error: error.message
++    });
++  }
++};
++
++// Helper
++function formatAddress(addr) {
++  if (!addr) return '';
++  return [addr.street, addr.city, addr.state, addr.pincode].filter(Boolean).join(', ');
++}
++
++========== END ORIGINAL IMPLEMENTATIONS ========== */
+\ No newline at end of file
+diff --git a/controllers/staffingPartnerController.js b/controllers/staffingPartnerController.js
+index 408e0cc..164aed8 100644
+--- a/controllers/staffingPartnerController.js
++++ b/controllers/staffingPartnerController.js
+@@ -3,6 +3,11 @@ const StaffingPartner = require("../models/StaffingPartner");
+ const User = require("../models/User");
+ const Job = require("../models/Job");
+ const Candidate = require("../models/Candidate");
++const Company = require("../models/Company");
++const duplicateDetection = require("../services/duplicateDetectionService");
++const notificationEngine = require("../services/notificationEngine");
++const jobAccessService = require("../services/jobAccessService");
++const candidateScoringService = require("../services/candidateScoringService");
+ 
+ // @desc    Get Staffing Partner Profile
+ // @route   GET /api/staffing-partners/profile
+@@ -105,7 +110,7 @@ exports.updateFirmDetails = async (req, res) => {
+       gstNumber,
+       cinNumber,
+       llpinNumber,
+-      employeeCount
++      employeeCount,
+     } = req.body;
+ 
+     // Handle operating address "same as registered" logic
+@@ -113,7 +118,7 @@ exports.updateFirmDetails = async (req, res) => {
+     if (operatingAddress?.sameAsRegistered && registeredOfficeAddress) {
+       finalOperatingAddress = {
+         ...registeredOfficeAddress,
+-        sameAsRegistered: true
++        sameAsRegistered: true,
+       };
+     }
+ 
+@@ -130,7 +135,7 @@ exports.updateFirmDetails = async (req, res) => {
+       gstNumber,
+       cinNumber,
+       llpinNumber,
+-      employeeCount
++      employeeCount,
+     };
+ 
+     partner.profileCompletion.firmDetails = true;
+@@ -228,24 +233,25 @@ exports.updateCompliance = async (req, res) => {
+     const { syncrotechAgreement, digitalSignature } = req.body;
+ 
+     // Get IP address
+-    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
++    const ipAddress =
++      req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+     const timestamp = new Date();
+ 
+     // Validate all clauses are accepted
+     const requiredClauses = [
+-      'noCvRecycling',
+-      'noFakeProfiles',
+-      'noDoubleRepresentation',
+-      'vendorCodeOfConduct',
+-      'dataPrivacyPolicy',
+-      'candidateConsentPolicy',
+-      'nonCircumventionClause',
+-      'commissionPayoutTerms',
+-      'replacementBackoutLiability'
++      "noCvRecycling",
++      "noFakeProfiles",
++      "noDoubleRepresentation",
++      "vendorCodeOfConduct",
++      "dataPrivacyPolicy",
++      "candidateConsentPolicy",
++      "nonCircumventionClause",
++      "commissionPayoutTerms",
++      "replacementBackoutLiability",
+     ];
+ 
+     const allAccepted = requiredClauses.every(
+-      clause => syncrotechAgreement && syncrotechAgreement[clause] === true
++      (clause) => syncrotechAgreement && syncrotechAgreement[clause] === true,
+     );
+ 
+     if (!allAccepted) {
+@@ -254,21 +260,21 @@ exports.updateCompliance = async (req, res) => {
+         message: "All compliance clauses must be accepted",
+         data: {
+           required: requiredClauses,
+-          received: syncrotechAgreement
+-        }
++          received: syncrotechAgreement,
++        },
+       });
+     }
+ 
+     // Build compliance object with timestamps
+     const complianceData = {
+-      syncrotechAgreement: {}
++      syncrotechAgreement: {},
+     };
+ 
+-    requiredClauses.forEach(clause => {
++    requiredClauses.forEach((clause) => {
+       complianceData.syncrotechAgreement[clause] = {
+         accepted: true,
+         acceptedAt: timestamp,
+-        acceptedIp: ipAddress
++        acceptedIp: ipAddress,
+       };
+     });
+ 
+@@ -299,74 +305,6 @@ exports.updateCompliance = async (req, res) => {
+   }
+ };
+ 
+-// // @desc    Update Finance Details
+-// // @route   PUT /api/staffing-partners/profile/finance
+-// exports.updateFinanceDetails = async (req, res) => {
+-//   try {
+-//     const partner = await StaffingPartner.findOne({ user: req.user._id });
+-
+-//     if (!partner) {
+-//       return res.status(404).json({
+-//         success: false,
+-//         message: "Profile not found",
+-//       });
+-//     }
+-
+-//     partner.financeDetails = { ...partner.financeDetails, ...req.body };
+-//     partner.profileCompletion.financeDetails = true;
+-//     await partner.save();
+-
+-//     res.json({
+-//       success: true,
+-//       message: "Finance details updated",
+-//       data: partner.financeDetails,
+-//     });
+-//   } catch (error) {
+-//     res.status(500).json({
+-//       success: false,
+-//       message: "Update failed",
+-//       error: error.message,
+-//     });
+-//   }
+-// };
+-
+-// // @desc    Update Payout Preferences
+-// // @route   PUT /api/staffing-partners/profile/payout-preferences
+-// exports.updatePayoutPreferences = async (req, res) => {
+-//   try {
+-//     const partner = await StaffingPartner.findOne({ user: req.user._id });
+-
+-//     if (!partner) {
+-//       return res.status(404).json({
+-//         success: false,
+-//         message: "Profile not found",
+-//       });
+-//     }
+-
+-//     partner.payoutPreferences = {
+-//       ...partner.payoutPreferences,
+-//       ...req.body,
+-//     };
+-
+-//     partner.profileCompletion.payoutPreferences = true;
+-
+-//     await partner.save();
+-
+-//     res.json({
+-//       success: true,
+-//       message: "Payout preferences updated",
+-//       data: partner.payoutPreferences,
+-//     });
+-//   } catch (error) {
+-//     res.status(500).json({
+-//       success: false,
+-//       message: "Update failed",
+-//       error: error.message,
+-//     });
+-//   }
+-// };
+-
+-
+ // @desc    Update Commercial & Payout Details
+ // @route   PUT /api/staffing-partners/profile/commercial-details
+ exports.updateCommercialDetails = async (req, res) => {
+@@ -376,7 +314,7 @@ exports.updateCommercialDetails = async (req, res) => {
+     if (!partner) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Profile not found'
++        message: "Profile not found",
+       });
+     }
+ 
+@@ -387,7 +325,7 @@ exports.updateCommercialDetails = async (req, res) => {
+       bankAccountHolderName,
+       bankName,
+       accountNumber,
+-      ifscCode
++      ifscCode,
+     } = req.body;
+ 
+     partner.commercialDetails = {
+@@ -398,7 +336,7 @@ exports.updateCommercialDetails = async (req, res) => {
+       bankAccountHolderName,
+       bankName,
+       accountNumber,
+-      ifscCode
++      ifscCode,
+     };
+ 
+     partner.profileCompletion.commercialDetails = true;
+@@ -406,14 +344,14 @@ exports.updateCommercialDetails = async (req, res) => {
+ 
+     res.json({
+       success: true,
+-      message: 'Commercial details updated successfully',
+-      data: partner.commercialDetails
++      message: "Commercial details updated successfully",
++      data: partner.commercialDetails,
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Update failed',
+-      error: error.message
++      message: "Update failed",
++      error: error.message,
+     });
+   }
+ };
+@@ -432,10 +370,10 @@ exports.updateTeamAccess = async (req, res) => {
+     }
+ 
+     // Only verified partners can manage team
+-    if (partner.verificationStatus !== 'APPROVED') {
++    if (partner.verificationStatus !== "APPROVED") {
+       return res.status(403).json({
+         success: false,
+-        message: "Partner must be verified to manage team members"
++        message: "Partner must be verified to manage team members",
+       });
+     }
+ 
+@@ -471,10 +409,10 @@ exports.addTeamMember = async (req, res) => {
+       });
+     }
+ 
+-    if (partner.verificationStatus !== 'APPROVED') {
++    if (partner.verificationStatus !== "APPROVED") {
+       return res.status(403).json({
+         success: false,
+-        message: "Partner must be verified to add team members"
++        message: "Partner must be verified to add team members",
+       });
+     }
+ 
+@@ -483,19 +421,19 @@ exports.addTeamMember = async (req, res) => {
+     if (!name || !email) {
+       return res.status(400).json({
+         success: false,
+-        message: "Name and email are required"
++        message: "Name and email are required",
+       });
+     }
+ 
+     // Check if email already exists
+     const existingMember = partner.teamAccess.teamMembers.find(
+-      m => m.email === email
++      (m) => m.email === email,
+     );
+ 
+     if (existingMember) {
+       return res.status(400).json({
+         success: false,
+-        message: "Team member with this email already exists"
++        message: "Team member with this email already exists",
+       });
+     }
+ 
+@@ -504,15 +442,15 @@ exports.addTeamMember = async (req, res) => {
+       name,
+       email,
+       mobile,
+-      role: role || 'Recruiter',
++      role: role || "Recruiter",
+       permissions: permissions || {
+         canViewJobs: true,
+         canSubmitCandidates: true,
+         canViewEarnings: false,
+-        canManageTeam: false
++        canManageTeam: false,
+       },
+       addedAt: new Date(),
+-      isActive: true
++      isActive: true,
+     });
+ 
+     await partner.save();
+@@ -544,10 +482,10 @@ exports.updateTeamMember = async (req, res) => {
+       });
+     }
+ 
+-    if (partner.verificationStatus !== 'APPROVED') {
++    if (partner.verificationStatus !== "APPROVED") {
+       return res.status(403).json({
+         success: false,
+-        message: "Partner must be verified to update team members"
++        message: "Partner must be verified to update team members",
+       });
+     }
+ 
+@@ -555,26 +493,26 @@ exports.updateTeamMember = async (req, res) => {
+     const { name, email, mobile, role, permissions, isActive } = req.body;
+ 
+     const memberIndex = partner.teamAccess.teamMembers.findIndex(
+-      m => m._id.toString() === memberId
++      (m) => m._id.toString() === memberId,
+     );
+ 
+     if (memberIndex === -1) {
+       return res.status(404).json({
+         success: false,
+-        message: "Team member not found"
++        message: "Team member not found",
+       });
+     }
+ 
+     // Check if email already exists (for different member)
+     if (email) {
+       const existingMember = partner.teamAccess.teamMembers.find(
+-        m => m.email === email && m._id.toString() !== memberId
++        (m) => m.email === email && m._id.toString() !== memberId,
+       );
+ 
+       if (existingMember) {
+         return res.status(400).json({
+           success: false,
+-          message: "Another team member with this email already exists"
++          message: "Another team member with this email already exists",
+         });
+       }
+     }
+@@ -584,8 +522,10 @@ exports.updateTeamMember = async (req, res) => {
+     if (email) partner.teamAccess.teamMembers[memberIndex].email = email;
+     if (mobile) partner.teamAccess.teamMembers[memberIndex].mobile = mobile;
+     if (role) partner.teamAccess.teamMembers[memberIndex].role = role;
+-    if (permissions) partner.teamAccess.teamMembers[memberIndex].permissions = permissions;
+-    if (typeof isActive === 'boolean') partner.teamAccess.teamMembers[memberIndex].isActive = isActive;
++    if (permissions)
++      partner.teamAccess.teamMembers[memberIndex].permissions = permissions;
++    if (typeof isActive === "boolean")
++      partner.teamAccess.teamMembers[memberIndex].isActive = isActive;
+ 
+     await partner.save();
+ 
+@@ -616,28 +556,28 @@ exports.removeTeamMember = async (req, res) => {
+       });
+     }
+ 
+-    if (partner.verificationStatus !== 'APPROVED') {
++    if (partner.verificationStatus !== "APPROVED") {
+       return res.status(403).json({
+         success: false,
+-        message: "Partner must be verified to remove team members"
++        message: "Partner must be verified to remove team members",
+       });
+     }
+ 
+     const { memberId } = req.params;
+ 
+     const memberExists = partner.teamAccess.teamMembers.some(
+-      m => m._id.toString() === memberId
++      (m) => m._id.toString() === memberId,
+     );
+ 
+     if (!memberExists) {
+       return res.status(404).json({
+         success: false,
+-        message: "Team member not found"
++        message: "Team member not found",
+       });
+     }
+ 
+     partner.teamAccess.teamMembers = partner.teamAccess.teamMembers.filter(
+-      m => m._id.toString() !== memberId
++      (m) => m._id.toString() !== memberId,
+     );
+ 
+     // If no team members left, disable team access
+@@ -680,7 +620,8 @@ exports.getTeamMembers = async (req, res) => {
+         isTeamEnabled: partner.teamAccess.isTeamEnabled,
+         teamMembers: partner.teamAccess.teamMembers,
+         totalMembers: partner.teamAccess.teamMembers.length,
+-        activeMembers: partner.teamAccess.teamMembers.filter(m => m.isActive).length
++        activeMembers: partner.teamAccess.teamMembers.filter((m) => m.isActive)
++          .length,
+       },
+     });
+   } catch (error) {
+@@ -826,6 +767,7 @@ exports.submitProfile = async (req, res) => {
+ 
+ // @desc    Get Available Jobs
+ // @route   GET /api/staffing-partners/jobs
++// ✅ ENHANCED: Uses jobAccessService for plan-based filtering
+ exports.getAvailableJobs = async (req, res) => {
+   try {
+     const partner = await StaffingPartner.findOne({ user: req.user._id });
+@@ -837,48 +779,61 @@ exports.getAvailableJobs = async (req, res) => {
+       });
+     }
+ 
+-    const {
+-      page = 1,
+-      limit = 10,
+-      category,
+-      location,
+-      experienceLevel,
+-      search,
+-    } = req.query;
+-
+-    const query = {
+-      status: "ACTIVE",
+-      eligiblePlans: partner.subscription?.plan || "FREE",
+-    };
+-
+-    if (category) query.category = category;
+-    if (location) query["location.city"] = new RegExp(location, "i");
+-    if (experienceLevel) query.experienceLevel = experienceLevel;
+-    if (search) {
+-      query.$or = [
+-        { title: new RegExp(search, "i") },
+-        { description: new RegExp(search, "i") },
+-      ];
+-    }
++    const partnerPlan = partner.subscription?.plan || "FREE";
++
++    // ✅ Use job access service with plan-based filtering
++    const result = await jobAccessService.getAccessibleJobs(
++      partner._id,
++      partnerPlan,
++      {
++        page: req.query.page,
++        limit: req.query.limit,
++        category: req.query.category,
++        location: req.query.location,
++        experienceLevel: req.query.experienceLevel,
++        employmentType: req.query.employmentType,
++        salaryMin: req.query.salaryMin,
++        salaryMax: req.query.salaryMax,
++        search: req.query.search,
++        sortBy: req.query.sortBy,
++        isUrgent: req.query.urgentOnly,
++      },
++    );
+ 
+-    const jobs = await Job.find(query)
+-      .populate("company", "companyName kyc.logo kyc.industry")
+-      .sort({ createdAt: -1 })
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
++    // ✅ If no jobs found, provide helpful debug info
++    if (result.jobs.length === 0) {
++      const totalActiveJobs = await Job.countDocuments({ status: "ACTIVE" });
++      const jobsForPlan = await Job.countDocuments({
++        status: "ACTIVE",
++        eligiblePlans: { $in: result.partnerAccess.accessiblePlans },
++      });
+ 
+-    const total = await Job.countDocuments(query);
++      return res.json({
++        success: true,
++        data: {
++          ...result,
++          debug: {
++            totalActiveJobsOnPlatform: totalActiveJobs,
++            jobsAccessibleByYourPlan: jobsForPlan,
++            yourPlan: partnerPlan,
++            plansYouCanAccess: result.partnerAccess.accessiblePlans,
++            filtersApplied: Object.keys(req.query).filter(
++              (k) => !["page", "limit"].includes(k) && req.query[k],
++            ),
++            suggestion:
++              totalActiveJobs > 0 && jobsForPlan === 0
++                ? `There are ${totalActiveJobs} active jobs, but none are available for the ${partnerPlan} plan. Consider upgrading your plan.`
++                : jobsForPlan > 0
++                  ? "Jobs exist for your plan but your filters are too restrictive. Try removing some filters."
++                  : "No active jobs on the platform at the moment. Check back later.",
++          },
++        },
++      });
++    }
+ 
+     res.json({
+       success: true,
+-      data: {
+-        jobs,
+-        pagination: {
+-          current: parseInt(page),
+-          pages: Math.ceil(total / limit),
+-          total,
+-        },
+-      },
++      data: result,
+     });
+   } catch (error) {
+     res.status(500).json({
+@@ -927,6 +882,7 @@ exports.getJobDetails = async (req, res) => {
+ 
+ // @desc    Submit Candidate for a Job
+ // @route   POST /api/staffing-partners/jobs/:jobId/candidates
++// ✅ COMPLETE: All validations, duplicate detection, notifications
+ exports.submitCandidate = async (req, res) => {
+   try {
+     const partner = await StaffingPartner.findOne({ user: req.user._id });
+@@ -953,37 +909,84 @@ exports.submitCandidate = async (req, res) => {
+       });
+     }
+ 
+-    const { firstName, lastName, email, mobile, consent, profile } = req.body;
++    // Check plan eligibility
++    const partnerPlan = partner.subscription?.plan || "FREE";
++    if (
++      job.eligiblePlans &&
++      job.eligiblePlans.length > 0 &&
++      !job.eligiblePlans.includes(partnerPlan)
++    ) {
++      return res.status(403).json({
++        success: false,
++        message: `This job requires ${job.eligiblePlans.join(" or ")} plan. You are on ${partnerPlan} plan.`,
++        requiredPlans: job.eligiblePlans,
++        currentPlan: partnerPlan,
++      });
++    }
++
++    const {
++      firstName,
++      lastName,
++      email,
++      mobile,
++      consent,
++      profile,
++      forceSubmit,
++    } = req.body;
+ 
+     // Validate required fields
+     if (!firstName || !lastName || !email || !mobile) {
+       return res.status(400).json({
+         success: false,
+-        message: "Please provide all required candidate information",
++        message: "Please provide firstName, lastName, email, and mobile",
+       });
+     }
+ 
+     if (!consent) {
+       return res.status(400).json({
+         success: false,
+-        message: "Candidate consent is required",
++        message: "Candidate consent is required before submission",
+       });
+     }
+ 
+-    // Check for duplicate submission
+-    const existingSubmission = await Candidate.findOne({
+-      job: job._id,
+-      email: email.toLowerCase(),
+-    });
++    // ✅ DUPLICATE DETECTION
++    const duplicateCheck = await duplicateDetection.checkBeforeSubmission(
++      { email, mobile },
++      job._id,
++      partner._id,
++    );
+ 
+-    if (existingSubmission) {
+-      return res.status(400).json({
++    // Hard block — cannot submit
++    if (!duplicateCheck.canSubmit) {
++      return res.status(409).json({
+         success: false,
+-        message: "This candidate has already been submitted for this job",
++        message:
++          duplicateCheck.blocks[0]?.message || "Duplicate submission blocked",
++        data: {
++          blocks: duplicateCheck.blocks,
++          warnings: duplicateCheck.warnings,
++        },
++      });
++    }
++
++    // Warnings exist — ask for confirmation unless forceSubmit
++    const highSeverityWarnings = duplicateCheck.warnings.filter(
++      (w) => w.severity === "high",
++    );
++
++    if (highSeverityWarnings.length > 0 && !forceSubmit) {
++      return res.status(200).json({
++        success: true,
++        requiresConfirmation: true,
++        message:
++          "Potential issues detected. Review warnings and resubmit with forceSubmit: true to proceed.",
++        data: {
++          warnings: duplicateCheck.warnings,
++        },
+       });
+     }
+ 
+-    // Create candidate
++    // ✅ CREATE CANDIDATE
+     const candidate = await Candidate.create({
+       submittedBy: partner._id,
+       job: job._id,
+@@ -995,6 +998,7 @@ exports.submitCandidate = async (req, res) => {
+       consent: {
+         given: consent,
+         givenAt: new Date(),
++        ipAddress: req.ip,
+       },
+       profile: profile || {},
+       status: "SUBMITTED",
+@@ -1002,22 +1006,61 @@ exports.submitCandidate = async (req, res) => {
+         {
+           status: "SUBMITTED",
+           changedBy: req.user._id,
+-          notes: "Initial submission",
++          notes:
++            duplicateCheck.warnings.length > 0
++              ? `Submitted with ${duplicateCheck.warnings.length} warning(s)`
++              : "Initial submission",
+         },
+       ],
+     });
+ 
+-    // Update metrics
+-    job.metrics.applications += 1;
+-    partner.metrics.totalSubmissions += 1;
++    // ✅ UPDATE METRICS
++    await Job.findByIdAndUpdate(job._id, {
++      $inc: { "metrics.applications": 1 },
++    });
++    await StaffingPartner.findByIdAndUpdate(partner._id, {
++      $inc: { "metrics.totalSubmissions": 1 },
++    });
++
++    // ✅ NOTIFY COMPANY about new candidate
++    const company = await Company.findById(job.company).populate("user", "_id");
+ 
+-    await job.save();
+-    await partner.save();
++    if (company?.user) {
++      await notificationEngine.send({
++        recipientId: company.user._id,
++        type: "NEW_CANDIDATE_SUBMITTED",
++        title: `New candidate for "${job.title}"`,
++        message: `${partner.firmName} submitted ${firstName} ${lastName} for the ${job.title} position. Review their profile in your dashboard.`,
++        data: {
++          entityType: "Candidate",
++          entityId: candidate._id,
++          actionUrl: `/company/jobs/${job._id}/candidates`,
++          metadata: {
++            partnerName: `${partner.firstName} ${partner.lastName}`,
++            firmName: partner.firmName,
++            candidateName: `${firstName} ${lastName}`,
++            candidateExperience: profile?.totalExperience,
++            candidateLocation: profile?.currentLocation,
++          },
++        },
++        channels: {
++          inApp: true,
++          email: true,
++        },
++        priority: job.isUrgent ? "high" : "medium",
++      });
++    }
+ 
+     res.status(201).json({
+       success: true,
+-      message: "Candidate submitted successfully",
+-      data: candidate,
++      message:
++        duplicateCheck.warnings.length > 0
++          ? "Candidate submitted with warnings"
++          : "Candidate submitted successfully",
++      data: {
++        candidate,
++        warnings: duplicateCheck.warnings,
++      },
+     });
+   } catch (error) {
+     res.status(500).json({
+@@ -1191,7 +1234,10 @@ exports.getDashboard = async (req, res) => {
+       (completedSections / totalSections) * 100,
+     );
+ 
+-    const payoutReady = partner.profileCompletion.commercialDetails;
++    // ✅ UPDATED: Payout system disabled
++    // const payoutReady = partner.profileCompletion.commercialDetails;
++    const payoutReady = false; // Payout system disabled
++
+     res.json({
+       success: true,
+       data: {
+@@ -1221,6 +1267,7 @@ exports.getDashboard = async (req, res) => {
+   }
+ };
+ 
++/* ========== GET EARNINGS - DISABLED (Payout system inactive) ==========
+ // @desc    Get Earnings/Payouts
+ // @route   GET /api/staffing-partners/earnings
+ exports.getEarnings = async (req, res) => {
+@@ -1272,4 +1319,93 @@ exports.getEarnings = async (req, res) => {
+       error: error.message,
+     });
+   }
++};
++========== END GET EARNINGS ========== */
++
++// @desc    Get Earnings/Payouts
++// @route   GET /api/staffing-partners/earnings
++// ✅ STUB: Returns empty data (payout system disabled)
++exports.getEarnings = async (req, res) => {
++  res.json({
++    success: true,
++    message: "Earnings feature is currently disabled",
++    data: {
++      summary: {
++        totalEarnings: 0,
++        paidEarnings: 0,
++        pendingEarnings: 0,
++        totalPlacements: 0,
++      },
++      placements: [],
++    },
++  });
++};
++
++// @desc    Withdraw Candidate
++// @route   PUT /api/staffing-partners/submissions/:id/withdraw
++// ✅ COMPLETE: Uses lifecycle service for proper validation
++exports.withdrawCandidate = async (req, res) => {
++  try {
++    const partner = await StaffingPartner.findOne({ user: req.user._id });
++    const { reason } = req.body;
++
++    if (!partner) {
++      return res.status(404).json({
++        success: false,
++        message: "Partner profile not found",
++      });
++    }
++
++    // Verify this candidate belongs to this partner
++    const candidate = await Candidate.findOne({
++      _id: req.params.id,
++      submittedBy: partner._id,
++    });
++
++    if (!candidate) {
++      return res.status(404).json({
++        success: false,
++        message: "Submission not found or does not belong to you",
++      });
++    }
++
++    // Use lifecycle service for proper validation + notifications
++    const candidateLifecycleService = require("../services/candidateLifecycleService");
++
++    try {
++      const updated = await candidateLifecycleService.updateStatus(
++        candidate._id,
++        "WITHDRAWN",
++        req.user._id,
++        "staffing_partner",
++        reason || "Withdrawn by staffing partner",
++      );
++
++      res.json({
++        success: true,
++        message: "Candidate withdrawn successfully",
++        data: {
++          candidateId: updated._id,
++          previousStatus: candidate.status,
++          newStatus: "WITHDRAWN",
++        },
++      });
++    } catch (error) {
++      if (error.statusCode === 400) {
++        return res.status(400).json({
++          success: false,
++          message: error.message,
++          currentStatus: candidate.status,
++          allowedTransitions: error.allowedTransitions,
++        });
++      }
++      throw error;
++    }
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: "Withdrawal failed",
++      error: error.message,
++    });
++  }
+ };
+\ No newline at end of file
+diff --git a/models/Candidate.js b/models/Candidate.js
+index d02c185..5f80f4d 100644
+--- a/models/Candidate.js
++++ b/models/Candidate.js
+@@ -101,6 +101,14 @@ const candidateSchema = new mongoose.Schema({
+     default: 'SUBMITTED'
+   },
+ 
++  // 🆕 Submission Metadata
++  submissionMetadata: {
++    duplicateWarnings: [mongoose.Schema.Types.Mixed],
++    forceSubmitted: { type: Boolean, default: false },
++    submittedFromPlan: String,
++    matchScore: Number
++  },
++
+   // Status History
+   statusHistory: [{
+     status: String,
+diff --git a/models/Job.js b/models/Job.js
+index 0dfde3e..8eb3b9f 100644
+--- a/models/Job.js
++++ b/models/Job.js
+@@ -69,7 +69,7 @@ const jobSchema = new mongoose.Schema({
+     }
+   },
+   
+-  // Commission for Staffing Partners
++  // Commission for Staffing Partners - CURRENTLY NOT USED
+   commission: {
+     type: {
+       type: String,
+@@ -78,7 +78,8 @@ const jobSchema = new mongoose.Schema({
+     },
+     value: {
+       type: Number,
+-      required: true
++      // required: true  // COMMENTED - Commission system disabled
++      default: 0
+     },
+     paymentTerms: String
+   },
+diff --git a/models/notificationService.js b/models/notificationService.js
+deleted file mode 100644
+index f558e2a..0000000
+--- a/models/notificationService.js
++++ /dev/null
+@@ -1,126 +0,0 @@
+-// backend/services/notificationService.js
+-const emailService = require('./emailService');
+-
+-class NotificationService {
+-  
+-  // Notify partner when candidate status changes
+-  async notifyPartnerStatusChange(candidate, newStatus) {
+-    const partner = await require('../models/StaffingPartner')
+-      .findById(candidate.submittedBy)
+-      .populate('user', 'email');
+-    
+-    if (!partner?.user?.email) return;
+-
+-    const statusMessages = {
+-      SHORTLISTED: 'has been shortlisted',
+-      INTERVIEW_SCHEDULED: 'has an interview scheduled',
+-      INTERVIEWED: 'interview has been completed',
+-      OFFERED: 'has received an offer',
+-      OFFER_ACCEPTED: 'has accepted the offer',
+-      JOINED: 'has joined the company',
+-      REJECTED: 'application was not successful'
+-    };
+-
+-    const message = statusMessages[newStatus] || 'status has been updated';
+-
+-    const html = `
+-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+-        <h2>Candidate Status Update</h2>
+-        <p>Hi ${partner.firstName},</p>
+-        <p>Your candidate <strong>${candidate.firstName} ${candidate.lastName}</strong> ${message}.</p>
+-        <p><strong>Position:</strong> ${candidate.job?.title || 'N/A'}</p>
+-        <p><strong>New Status:</strong> ${newStatus.replace(/_/g, ' ')}</p>
+-        <p>Login to your dashboard to view more details.</p>
+-        <br>
+-        <p>Best regards,<br>Syncro1 Platform Team</p>
+-      </div>
+-    `;
+-
+-    return emailService.sendEmail({
+-      to: partner.user.email,
+-      subject: `Candidate Update: ${candidate.firstName} ${candidate.lastName}`,
+-      html
+-    });
+-  }
+-
+-  // Notify company of new candidate submission
+-  async notifyCompanyNewCandidate(candidate) {
+-    const company = await require('../models/Company')
+-      .findById(candidate.company)
+-      .populate('user', 'email');
+-
+-    if (!company?.user?.email) return;
+-
+-    const html = `
+-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+-        <h2>New Candidate Submission</h2>
+-        <p>Hi ${company.decisionMakerName},</p>
+-        <p>A new candidate has been submitted for your job posting.</p>
+-        <p><strong>Candidate:</strong> ${candidate.firstName} ${candidate.lastName}</p>
+-        <p><strong>Position:</strong> ${candidate.job?.title || 'N/A'}</p>
+-        <p>Login to your dashboard to review the candidate.</p>
+-        <br>
+-        <p>Best regards,<br>Syncro1 Platform Team</p>
+-      </div>
+-    `;
+-
+-    return emailService.sendEmail({
+-      to: company.user.email,
+-      subject: `New Candidate: ${candidate.firstName} ${candidate.lastName}`,
+-      html
+-    });
+-  }
+-
+-  // Notify partner when verified
+-  async notifyPartnerVerified(partner) {
+-    const user = await require('../models/User').findById(partner.user);
+-    if (!user?.email) return;
+-
+-    return emailService.sendVerificationApproved(
+-      user.email, 
+-      `${partner.firstName} ${partner.lastName}`, 
+-      'staffing_partner'
+-    );
+-  }
+-
+-  // Notify company when verified
+-  async notifyCompanyVerified(company) {
+-    const user = await require('../models/User').findById(company.user);
+-    if (!user?.email) return;
+-
+-    return emailService.sendVerificationApproved(
+-      user.email, 
+-      company.decisionMakerName, 
+-      'company'
+-    );
+-  }
+-
+-  // Notify partner of payout approval
+-  async notifyPayoutApproved(payout) {
+-    const partner = await require('../models/StaffingPartner')
+-      .findById(payout.staffingPartner)
+-      .populate('user', 'email');
+-
+-    if (!partner?.user?.email) return;
+-
+-    const html = `
+-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+-        <h2>🎉 Payout Approved!</h2>
+-        <p>Hi ${partner.firstName},</p>
+-        <p>Great news! Your payout has been approved.</p>
+-        <p><strong>Amount:</strong> ₹${payout.amount.net.toLocaleString('en-IN')}</p>
+-        <p>The amount will be credited to your registered bank account within 3-5 business days.</p>
+-        <br>
+-        <p>Best regards,<br>Syncro1 Platform Team</p>
+-      </div>
+-    `;
+-
+-    return emailService.sendEmail({
+-      to: partner.user.email,
+-      subject: 'Payout Approved - ₹' + payout.amount.net.toLocaleString('en-IN'),
+-      html
+-    });
+-  }
+-}
+-
+-module.exports = new NotificationService();
+\ No newline at end of file
+diff --git a/routes/adminRoutes.js b/routes/adminRoutes.js
+index 325675f..88ae200 100644
+--- a/routes/adminRoutes.js
++++ b/routes/adminRoutes.js
+@@ -6,8 +6,8 @@ const {
+   getPendingVerifications,
+   verifyPartner,
+   verifyCompany,
+-  getPayouts,
+-  processPayout,
++  // getPayouts,      // ❌ DISABLED - Payout system inactive
++  // processPayout,   // ❌ DISABLED - Payout system inactive
+   getUsers,
+   updateUserStatus,
+   getAnalytics
+@@ -17,14 +17,22 @@ const { protect, authorize } = require('../middleware/auth');
+ router.use(protect);
+ router.use(authorize('admin'));
+ 
++// ==================== DASHBOARD & ANALYTICS ====================
+ router.get('/dashboard', getDashboard);
++router.get('/analytics', getAnalytics);
++
++// ==================== VERIFICATIONS ====================
+ router.get('/verifications', getPendingVerifications);
+ router.put('/verify/partner/:id', verifyPartner);
+ router.put('/verify/company/:id', verifyCompany);
+-router.get('/payouts', getPayouts);
+-router.put('/payouts/:id', processPayout);
++
++// ==================== PAYOUT ROUTES - DISABLED ====================
++// router.get('/payouts', getPayouts);
++// router.put('/payouts/:id', processPayout);
++// ========== Payout system is currently inactive ==========
++
++// ==================== USER MANAGEMENT ====================
+ router.get('/users', getUsers);
+ router.put('/users/:id/status', updateUserStatus);
+-router.get('/analytics', getAnalytics);
+ 
+ module.exports = router;
+\ No newline at end of file
+diff --git a/routes/companyRoutes.js b/routes/companyRoutes.js
+index 18710bb..5c2fec2 100644
+--- a/routes/companyRoutes.js
++++ b/routes/companyRoutes.js
+@@ -33,7 +33,7 @@ const {
+   updateInterviewFeedback,
+   makeOffer,
+   updateOfferResponse,
+-  confirmJoining,
++  // confirmJoining,  // ❌ DISABLED - Commission system inactive
+   addNote
+ } = require('../controllers/companyController');
+ 
+@@ -147,7 +147,7 @@ router.post('/candidates/:id/interviews', checkStatus('VERIFIED', 'ACTIVE'), sch
+ router.put('/candidates/:id/interviews/:interviewId', checkStatus('VERIFIED', 'ACTIVE'), updateInterviewFeedback);
+ router.post('/candidates/:id/offer', checkStatus('VERIFIED', 'ACTIVE'), makeOffer);
+ router.put('/candidates/:id/offer', checkStatus('VERIFIED', 'ACTIVE'), updateOfferResponse);
+-router.post('/candidates/:id/joining', checkStatus('VERIFIED', 'ACTIVE'), confirmJoining);
++// router.post('/candidates/:id/joining', checkStatus('VERIFIED', 'ACTIVE'), confirmJoining); // ❌ DISABLED - Commission system inactive
+ router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), addNote);
+ 
+ module.exports = router;
+\ No newline at end of file
+diff --git a/routes/staffingPartnerRoutes.js b/routes/staffingPartnerRoutes.js
+index d66b123..1214385 100644
+--- a/routes/staffingPartnerRoutes.js
++++ b/routes/staffingPartnerRoutes.js
+@@ -2,6 +2,7 @@
+ const express = require('express');
+ const router = express.Router();
+ const StaffingPartner = require('../models/StaffingPartner');
++
+ const {
+   getProfile,
+   getProfileCompletion,
+@@ -14,17 +15,22 @@ const {
+   updateTeamAccess,
+   addTeamMember,
+   removeTeamMember,
++  updateTeamMember,
++  getTeamMembers,
+   submitProfile,
+   getAvailableJobs,
+   getJobDetails,
+   submitCandidate,
++  withdrawCandidate,
+   uploadResume,
+   getMySubmissions,
+   getSubmission,
+   getDashboard,
+   getEarnings
+ } = require('../controllers/staffingPartnerController');
++
+ const { protect, authorize, checkStatus } = require('../middleware/auth');
++
+ const {
+   uploadResume: uploadResumeMiddleware,
+   uploadPartnerDocuments,
+@@ -54,16 +60,12 @@ router.put('/profile/Syncro1-competency', updateSyncro1Competency);
+ // Section 4: Geographic Reach
+ router.put('/profile/geographic-reach', updateGeographicReach);
+ 
+-// Section 5: Compliance & Ethical Declarations
++// Section 5: Compliance
+ router.put('/profile/compliance', updateCompliance);
+ 
+-// Section 6: Finance & Payout Preferences
+-// router.put('/profile/finance', updateFinanceDetails);
+-// router.put('/profile/payout-preferences', updatePayoutPreferences);
+-
++// Section 6: Commercial Details
+ router.put('/profile/commercial-details', updateCommercialDetails);
+ 
+-
+ // Section 7: Documents
+ router.post(
+   '/profile/documents',
+@@ -90,6 +92,7 @@ router.post(
+ 
+       partner.documents = { ...partner.documents, ...documents };
+       partner.profileCompletion.documents = true;
++
+       await partner.save();
+ 
+       res.json({
+@@ -108,9 +111,35 @@ router.post(
+ );
+ 
+ // Section 8: Team Access (After Verification Only)
+-router.put('/profile/team-access', checkStatus('VERIFIED', 'ACTIVE'), updateTeamAccess);
+-router.post('/profile/team-access/member', checkStatus('VERIFIED', 'ACTIVE'), addTeamMember);
+-router.delete('/profile/team-access/member/:memberId', checkStatus('VERIFIED', 'ACTIVE'), removeTeamMember);
++router.put(
++  '/profile/team-access',
++  checkStatus('VERIFIED', 'ACTIVE'),
++  updateTeamAccess
++);
++
++router.post(
++  '/profile/team-access/member',
++  checkStatus('VERIFIED', 'ACTIVE'),
++  addTeamMember
++);
++
++router.delete(
++  '/profile/team-access/member/:memberId',
++  checkStatus('VERIFIED', 'ACTIVE'),
++  removeTeamMember
++);
++
++router.get(
++  '/profile/team-access/members',
++  checkStatus('VERIFIED', 'ACTIVE'),
++  getTeamMembers
++);
++
++router.put(
++  '/profile/team-access/member/:memberId',
++  checkStatus('VERIFIED', 'ACTIVE'),
++  updateTeamMember
++);
+ 
+ // Submit for Verification
+ router.post('/profile/submit', submitProfile);
+@@ -118,16 +147,111 @@ router.post('/profile/submit', submitProfile);
+ // ==================== JOBS ROUTES ====================
+ router.get('/jobs', getAvailableJobs);
+ router.get('/jobs/:id', getJobDetails);
++
++// Pre-submission candidate-job fit check
++router.post('/jobs/:jobId/check-fit', async (req, res) => {
++  try {
++    const candidateScoringService = require('../services/candidateScoringService');
++    const Job = require('../models/Job');
++
++    const job = await Job.findById(req.params.jobId);
++
++    if (!job) {
++      return res.status(404).json({
++        success: false,
++        message: 'Job not found'
++      });
++    }
++
++    if (!req.body.profile) {
++      return res.status(400).json({
++        success: false,
++        message: 'Please provide candidate profile in request body'
++      });
++    }
++
++    const result = candidateScoringService.preSubmissionCheck(
++      req.body.profile,
++      job
++    );
++
++    res.json({
++      success: true,
++      data: result
++    });
++
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Fit check failed',
++      error: error.message
++    });
++  }
++});
++
++// Pre-submission duplicate check
++router.post('/jobs/:jobId/check-duplicate', async (req, res) => {
++  try {
++    const duplicateDetection = require('../services/duplicateDetectionService');
++
++    const partner = await StaffingPartner.findOne({
++      user: req.user._id
++    });
++
++    if (!partner) {
++      return res.status(404).json({
++        success: false,
++        message: 'Partner not found'
++      });
++    }
++
++    const { email, mobile } = req.body;
++
++    if (!email || !mobile) {
++      return res.status(400).json({
++        success: false,
++        message: 'Please provide email and mobile'
++      });
++    }
++
++    const result = await duplicateDetection.checkBeforeSubmission(
++      { email, mobile },
++      req.params.jobId,
++      partner._id
++    );
++
++    res.json({
++      success: true,
++      data: result
++    });
++
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Duplicate check failed',
++      error: error.message
++    });
++  }
++});
++
++// Submit candidate
+ router.post('/jobs/:jobId/candidates', submitCandidate);
+ 
+ // ==================== SUBMISSIONS ROUTES ====================
+ router.get('/submissions', getMySubmissions);
+ router.get('/submissions/:id', getSubmission);
+ 
++// Withdraw candidate
++router.put('/submissions/:id/withdraw', withdrawCandidate);
++
+ // ==================== EARNINGS ====================
+ router.get('/earnings', getEarnings);
+ 
+ // ==================== CANDIDATE ROUTES ====================
+-router.post('/candidates/:id/resume', uploadResumeMiddleware, uploadResume);
++router.post(
++  '/candidates/:id/resume',
++  uploadResumeMiddleware,
++  uploadResume
++);
+ 
+ module.exports = router;
+\ No newline at end of file
+diff --git a/server.js b/server.js
+index d1232f6..6836291 100644
+--- a/server.js
++++ b/server.js
+@@ -1,4 +1,5 @@
+ // backend/server.js
++
+ const cookieParser = require('cookie-parser');
+ const express = require('express');
+ const cors = require('cors');
+@@ -14,37 +15,45 @@ dotenv.config();
+ // Connect to database
+ connectDB();
+ 
++// ✅ Register Notification model BEFORE routes
++require('./models/Notification');
++
+ const app = express();
+ 
+-// Security middleware
+-app.use(helmet({
+-  crossOriginResourcePolicy: { policy: "cross-origin" }
+-}));
++/* =========================================================
++   SECURITY MIDDLEWARE
++========================================================= */
++
++app.use(
++  helmet({
++    crossOriginResourcePolicy: { policy: "cross-origin" },
++  })
++);
++
++// =========================================================
++// RATE LIMITING
++// =========================================================
+ 
+-// CORS configuration handled later (after cookie parsing)
+-// Rate limiting
+ const limiter = rateLimit({
+   windowMs: 15 * 60 * 1000, // 15 minutes
+-  max: 100, // limit each IP to 100 requests per windowMs
++  max: 100,
+   message: {
+     success: false,
+-    message: 'Too many requests from this IP, please try again after 15 minutes'
++    message: 'Too many requests from this IP, please try again after 15 minutes',
+   },
+   standardHeaders: true,
+   legacyHeaders: false,
+ });
+ 
+-// More strict rate limiting for auth routes
+ const authLimiter = rateLimit({
+-  windowMs: 15 * 60 * 1000, // 15 minutes
++  windowMs: 15 * 60 * 1000,
+   max: 20,
+   message: {
+     success: false,
+-    message: 'Too many authentication attempts, please try again after 15 minutes'
++    message: 'Too many authentication attempts, please try again after 15 minutes',
+   },
+ });
+ 
+-// Conditionally apply rate limiting based on environment variable
+ const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== 'false';
+ 
+ if (rateLimitEnabled) {
+@@ -55,43 +64,58 @@ if (rateLimitEnabled) {
+   console.log('⏸️ Rate limiting disabled');
+ }
+ 
++/* =========================================================
++   BODY PARSING
++========================================================= */
+ 
+-// ✅ Parse JSON/body first
+ app.use(express.json({ limit: '10mb' }));
+ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+ 
+-// ✅ Parse cookies before routes
++/* =========================================================
++   COOKIE PARSER
++========================================================= */
++
+ app.use(cookieParser());
+ 
+-// ✅ Single CORS config
+-app.use(cors({
+-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+-  credentials: true,
+-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+-  allowedHeaders: ['Content-Type', 'Authorization']
+-}));
++/* =========================================================
++   CORS CONFIGURATION
++========================================================= */
++
++app.use(
++  cors({
++    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
++    credentials: true,
++    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
++    allowedHeaders: ['Content-Type', 'Authorization'],
++  })
++);
+ 
+-// (optional but fine) respond to preflight quickly
++// Respond quickly to preflight
+ app.options('*', cors());
+ 
+-// Serve static uploads
++/* =========================================================
++   STATIC UPLOADS
++========================================================= */
++
+ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+ 
+-// Health check route
++/* =========================================================
++   HEALTH CHECK
++========================================================= */
++
+ app.get('/api/health', (req, res) => {
+   res.json({
+     success: true,
+     message: 'Server is running',
+     timestamp: new Date().toISOString(),
+-    environment: process.env.NODE_ENV
++    environment: process.env.NODE_ENV,
+   });
+ });
+ 
++/* =========================================================
++   API ROUTES
++========================================================= */
+ 
+-
+-
+-
+-// API Routes
+ app.use('/api/auth', require('./routes/authRoutes'));
+ app.use('/api/staffing-partners', require('./routes/staffingPartnerRoutes'));
+ app.use('/api/companies', require('./routes/companyRoutes'));
+@@ -100,26 +124,33 @@ app.use('/api/candidates', require('./routes/candidateRoutes'));
+ app.use('/api/admin', require('./routes/adminRoutes'));
+ app.use('/api/payments', require('./routes/paymentRoutes'));
+ 
+-// Error handling middleware
++// ✅ Newly added routes
++app.use('/api/notifications', require('./routes/notificationRoutes'));
++// app.use('/api/invoices', require('./routes/invoiceRoutes')); // DISABLED - Payout system inactive
++
++/* =========================================================
++   ERROR HANDLER
++========================================================= */
++
+ app.use((err, req, res, next) => {
+   console.error('Error:', err);
+ 
+   // Mongoose validation error
+   if (err.name === 'ValidationError') {
+-    const messages = Object.values(err.errors).map(e => e.message);
++    const messages = Object.values(err.errors).map((e) => e.message);
+     return res.status(400).json({
+       success: false,
+       message: 'Validation Error',
+-      errors: messages
++      errors: messages,
+     });
+   }
+ 
+-  // Mongoose duplicate key error
++  // Duplicate key error
+   if (err.code === 11000) {
+     const field = Object.keys(err.keyValue)[0];
+     return res.status(400).json({
+       success: false,
+-      message: `${field} already exists`
++      message: `${field} already exists`,
+     });
+   }
+ 
+@@ -127,14 +158,14 @@ app.use((err, req, res, next) => {
+   if (err.name === 'JsonWebTokenError') {
+     return res.status(401).json({
+       success: false,
+-      message: 'Invalid token'
++      message: 'Invalid token',
+     });
+   }
+ 
+   if (err.name === 'TokenExpiredError') {
+     return res.status(401).json({
+       success: false,
+-      message: 'Token expired'
++      message: 'Token expired',
+     });
+   }
+ 
+@@ -142,18 +173,26 @@ app.use((err, req, res, next) => {
+   res.status(err.statusCode || 500).json({
+     success: false,
+     message: err.message || 'Internal Server Error',
+-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
++    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+   });
+ });
+ 
+-// Serve React build (frontend) after all API routes
++/* =========================================================
++   SERVE FRONTEND BUILD
++========================================================= */
++
+ app.use(express.static(path.join(__dirname, '../Syncro1_Frontend/build')));
+ 
+ app.get('*', (req, res) => {
+-  res.sendFile(path.resolve(__dirname, '../Syncro1_Frontend/build', 'index.html'));
++  res.sendFile(
++    path.resolve(__dirname, '../Syncro1_Frontend/build', 'index.html')
++  );
+ });
+ 
+-// Start server
++/* =========================================================
++   START SERVER
++========================================================= */
++
+ const PORT = process.env.PORT || 5000;
+ 
+ const server = app.listen(PORT, () => {
+@@ -164,20 +203,31 @@ const server = app.listen(PORT, () => {
+   console.log(`   📡 API:      http://localhost:${PORT}/api`);
+   console.log(`   💚 Health:   http://localhost:${PORT}/api/health`);
+   console.log('   ───────────────────────────────────────────────────');
+-  console.log('   WhatsApp:   ' + (process.env.WHATSAPP_ENABLED === 'true' ? '✅ Enabled' : '⏸️  Disabled (Mock)'));
+-  console.log('   Payments:   ' + (process.env.PAYMENT_ENABLED === 'true' ? '✅ Enabled' : '⏸️  Disabled (Mock)'));
++  console.log(
++    '   WhatsApp:   ' +
++      (process.env.WHATSAPP_ENABLED === 'true'
++        ? '✅ Enabled'
++        : '⏸️  Disabled (Mock)')
++  );
++  console.log(
++    '   Payments:   ' +
++      (process.env.PAYMENT_ENABLED === 'true'
++        ? '✅ Enabled'
++        : '⏸️  Disabled (Mock)')
++  );
+   console.log('═══════════════════════════════════════════════════════');
+   console.log('');
+ });
+ 
+-// Handle unhandled promise rejections
+-process.on('unhandledRejection', (err, promise) => {
++/* =========================================================
++   PROCESS ERROR HANDLING
++========================================================= */
++
++process.on('unhandledRejection', (err) => {
+   console.error('Unhandled Rejection:', err.message);
+-  // Close server & exit process
+   server.close(() => process.exit(1));
+ });
+ 
+-// Handle uncaught exceptions
+ process.on('uncaughtException', (err) => {
+   console.error('Uncaught Exception:', err.message);
+   process.exit(1);

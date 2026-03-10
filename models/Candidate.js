@@ -101,6 +101,14 @@ const candidateSchema = new mongoose.Schema({
     default: 'SUBMITTED'
   },
 
+  // 🆕 Submission Metadata
+  submissionMetadata: {
+    duplicateWarnings: [mongoose.Schema.Types.Mixed],
+    forceSubmitted: { type: Boolean, default: false },
+    submittedFromPlan: String,
+    matchScore: Number
+  },
+
   // Status History
   statusHistory: [{
     status: String,

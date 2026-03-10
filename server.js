@@ -1,4 +1,5 @@
 // backend/server.js
+
 const cookieParser = require('cookie-parser');
 const express = require('express');
 const cors = require('cors');
@@ -14,37 +15,45 @@ dotenv.config();
 // Connect to database
 connectDB();
 
+// ✅ Register Notification model BEFORE routes
+require('./models/Notification');
+
 const app = express();
 
-// Security middleware
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
-}));
+/* =========================================================
+   SECURITY MIDDLEWARE
+========================================================= */
 
-// CORS configuration handled later (after cookie parsing)
-// Rate limiting
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+// =========================================================
+// RATE LIMITING
+// =========================================================
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 100,
   message: {
     success: false,
-    message: 'Too many requests from this IP, please try again after 15 minutes'
+    message: 'Too many requests from this IP, please try again after 15 minutes',
   },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
-// More strict rate limiting for auth routes
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 20,
   message: {
     success: false,
-    message: 'Too many authentication attempts, please try again after 15 minutes'
+    message: 'Too many authentication attempts, please try again after 15 minutes',
   },
 });
 
-// Conditionally apply rate limiting based on environment variable
 const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== 'false';
 
 if (rateLimitEnabled) {
@@ -55,43 +64,58 @@ if (rateLimitEnabled) {
   console.log('⏸️ Rate limiting disabled');
 }
 
+/* =========================================================
+   BODY PARSING
+========================================================= */
 
-// ✅ Parse JSON/body first
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// ✅ Parse cookies before routes
+/* =========================================================
+   COOKIE PARSER
+========================================================= */
+
 app.use(cookieParser());
 
-// ✅ Single CORS config
-app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+/* =========================================================
+   CORS CONFIGURATION
+========================================================= */
 
-// (optional but fine) respond to preflight quickly
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+
+// Respond quickly to preflight
 app.options('*', cors());
 
-// Serve static uploads
+/* =========================================================
+   STATIC UPLOADS
+========================================================= */
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Health check route
+/* =========================================================
+   HEALTH CHECK
+========================================================= */
+
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
     message: 'Server is running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV,
   });
 });
 
+/* =========================================================
+   API ROUTES
+========================================================= */
 
-
-
-
-// API Routes
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/staffing-partners', require('./routes/staffingPartnerRoutes'));
 app.use('/api/companies', require('./routes/companyRoutes'));
@@ -100,26 +124,33 @@ app.use('/api/candidates', require('./routes/candidateRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
 
-// Error handling middleware
+// ✅ Newly added routes
+app.use('/api/notifications', require('./routes/notificationRoutes'));
+// app.use('/api/invoices', require('./routes/invoiceRoutes')); // DISABLED - Payout system inactive
+
+/* =========================================================
+   ERROR HANDLER
+========================================================= */
+
 app.use((err, req, res, next) => {
   console.error('Error:', err);
 
   // Mongoose validation error
   if (err.name === 'ValidationError') {
-    const messages = Object.values(err.errors).map(e => e.message);
+    const messages = Object.values(err.errors).map((e) => e.message);
     return res.status(400).json({
       success: false,
       message: 'Validation Error',
-      errors: messages
+      errors: messages,
     });
   }
 
-  // Mongoose duplicate key error
+  // Duplicate key error
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue)[0];
     return res.status(400).json({
       success: false,
-      message: `${field} already exists`
+      message: `${field} already exists`,
     });
   }
 
@@ -127,14 +158,14 @@ app.use((err, req, res, next) => {
   if (err.name === 'JsonWebTokenError') {
     return res.status(401).json({
       success: false,
-      message: 'Invalid token'
+      message: 'Invalid token',
     });
   }
 
   if (err.name === 'TokenExpiredError') {
     return res.status(401).json({
       success: false,
-      message: 'Token expired'
+      message: 'Token expired',
     });
   }
 
@@ -142,18 +173,26 @@ app.use((err, req, res, next) => {
   res.status(err.statusCode || 500).json({
     success: false,
     message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
 
-// Serve React build (frontend) after all API routes
+/* =========================================================
+   SERVE FRONTEND BUILD
+========================================================= */
+
 app.use(express.static(path.join(__dirname, '../Syncro1_Frontend/build')));
 
 app.get('*', (req, res) => {
-  res.sendFile(path.resolve(__dirname, '../Syncro1_Frontend/build', 'index.html'));
+  res.sendFile(
+    path.resolve(__dirname, '../Syncro1_Frontend/build', 'index.html')
+  );
 });
 
-// Start server
+/* =========================================================
+   START SERVER
+========================================================= */
+
 const PORT = process.env.PORT || 5000;
 
 const server = app.listen(PORT, () => {
@@ -164,20 +203,31 @@ const server = app.listen(PORT, () => {
   console.log(`   📡 API:      http://localhost:${PORT}/api`);
   console.log(`   💚 Health:   http://localhost:${PORT}/api/health`);
   console.log('   ───────────────────────────────────────────────────');
-  console.log('   WhatsApp:   ' + (process.env.WHATSAPP_ENABLED === 'true' ? '✅ Enabled' : '⏸️  Disabled (Mock)'));
-  console.log('   Payments:   ' + (process.env.PAYMENT_ENABLED === 'true' ? '✅ Enabled' : '⏸️  Disabled (Mock)'));
+  console.log(
+    '   WhatsApp:   ' +
+      (process.env.WHATSAPP_ENABLED === 'true'
+        ? '✅ Enabled'
+        : '⏸️  Disabled (Mock)')
+  );
+  console.log(
+    '   Payments:   ' +
+      (process.env.PAYMENT_ENABLED === 'true'
+        ? '✅ Enabled'
+        : '⏸️  Disabled (Mock)')
+  );
   console.log('═══════════════════════════════════════════════════════');
   console.log('');
 });
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err, promise) => {
+/* =========================================================
+   PROCESS ERROR HANDLING
+========================================================= */
+
+process.on('unhandledRejection', (err) => {
   console.error('Unhandled Rejection:', err.message);
-  // Close server & exit process
   server.close(() => process.exit(1));
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err.message);
   process.exit(1);

@@ -33,7 +33,7 @@ const {
   updateInterviewFeedback,
   makeOffer,
   updateOfferResponse,
-  confirmJoining,
+  // confirmJoining,  // ❌ DISABLED - Commission system inactive
   addNote
 } = require('../controllers/companyController');
 
@@ -147,7 +147,7 @@ router.post('/candidates/:id/interviews', checkStatus('VERIFIED', 'ACTIVE'), sch
 router.put('/candidates/:id/interviews/:interviewId', checkStatus('VERIFIED', 'ACTIVE'), updateInterviewFeedback);
 router.post('/candidates/:id/offer', checkStatus('VERIFIED', 'ACTIVE'), makeOffer);
 router.put('/candidates/:id/offer', checkStatus('VERIFIED', 'ACTIVE'), updateOfferResponse);
-router.post('/candidates/:id/joining', checkStatus('VERIFIED', 'ACTIVE'), confirmJoining);
+// router.post('/candidates/:id/joining', checkStatus('VERIFIED', 'ACTIVE'), confirmJoining); // ❌ DISABLED - Commission system inactive
 router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), addNote);
 
 module.exports = router;

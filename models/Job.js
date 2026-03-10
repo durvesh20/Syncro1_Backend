@@ -69,7 +69,7 @@ const jobSchema = new mongoose.Schema({
     }
   },
   
-  // Commission for Staffing Partners
+  // Commission for Staffing Partners - CURRENTLY NOT USED
   commission: {
     type: {
       type: String,
@@ -78,7 +78,8 @@ const jobSchema = new mongoose.Schema({
     },
     value: {
       type: Number,
-      required: true
+      // required: true  // COMMENTED - Commission system disabled
+      default: 0
     },
     paymentTerms: String
   },
