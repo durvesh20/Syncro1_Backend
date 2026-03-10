@@ -4,7 +4,7 @@ const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
 const Job = require('../models/Job');
 const Candidate = require('../models/Candidate');
-const Payout = require('../models/Payout');
+// const Payout = require('../models/Payout'); // ❌ DISABLED - Payout system inactive
 const emailService = require('../services/emailService');
 
 // @desc    Get Dashboard Overview
@@ -20,8 +20,8 @@ exports.getDashboard = async (req, res) => {
       pendingVerifications: {
         partners: await StaffingPartner.countDocuments({ verificationStatus: 'UNDER_REVIEW' }),
         companies: await Company.countDocuments({ verificationStatus: 'UNDER_REVIEW' })
-      },
-      pendingPayouts: await Payout.countDocuments({ status: 'PENDING' })
+      }
+      // pendingPayouts: await Payout.countDocuments({ status: 'PENDING' }) // ❌ DISABLED
     };
 
     // Recent activities
@@ -173,7 +173,7 @@ exports.verifyCompany = async (req, res) => {
   }
 };
 
-
+/* ========== PAYOUT ROUTES - DISABLED ==========
 // @desc    Manage Payouts
 // @route   GET /api/admin/payouts
 exports.getPayouts = async (req, res) => {
@@ -258,6 +258,7 @@ exports.processPayout = async (req, res) => {
     });
   }
 };
+========== END PAYOUT ROUTES ========== */
 
 // @desc    Get All Users
 // @route   GET /api/admin/users
@@ -378,8 +379,8 @@ exports.getAnalytics = async (req, res) => {
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$joining.confirmedAt' } },
-          count: { $sum: 1 },
-          totalValue: { $sum: '$payout.commissionAmount' }
+          count: { $sum: 1 }
+          // totalValue: { $sum: '$payout.commissionAmount' } // ❌ DISABLED - Payout system inactive
         }
       },
       { $sort: { _id: 1 } }
@@ -414,9 +415,3 @@ exports.getAnalytics = async (req, res) => {
     });
   }
 };
-
-
-
-
-
-
