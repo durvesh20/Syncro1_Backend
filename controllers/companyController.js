@@ -778,23 +778,25 @@ exports.createJob = async (req, res) => {
       ...req.body,
       company: company._id,
       postedBy: req.user._id,
-      status: "ACTIVE",
+      status: "DRAFT",              // ✅ Fixed
+      approvalStatus: "DRAFT",      // ✅ Fixed
       eligiblePlans,
     };
 
     const job = await Job.create(jobData);
 
     company.metrics.totalJobsPosted += 1;
-    company.metrics.activeJobs += 1;
+    // ❌ DON'T increment activeJobs here - only after approval
+    // company.metrics.activeJobs += 1;  // Remove this line
     await company.save();
 
     console.log(
-      `[JOB] Created: "${job.title}" — Visible to plans: ${eligiblePlans.join(", ")}`,
+      `[JOB] Created as DRAFT: "${job.title}" — Requires admin approval before becoming visible`,
     );
 
     res.status(201).json({
       success: true,
-      message: "Job created successfully",
+      message: "Job created as draft. Submit for approval to make it visible to partners.",
       data: job,
     });
   } catch (error) {
@@ -1565,6 +1567,417 @@ exports.addNote = async (req, res) => {
       success: false,
       message: "Failed to add note",
       error: error.message,
+    });
+  }
+};
+
+
+// ==================== JOB APPROVAL WORKFLOW ====================
+
+// @desc    Submit job for admin approval
+// @route   POST /api/companies/jobs/:id/submit-for-approval
+exports.submitJobForApproval = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // Authorization check
+    if (job.company.toString() !== company._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to submit this job'
+      });
+    }
+
+    // Validation: Can only submit DRAFT or REJECTED jobs
+    if (!['DRAFT', 'REJECTED'].includes(job.approvalStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot submit job with status: ${job.approvalStatus}`,
+        currentStatus: job.approvalStatus
+      });
+    }
+
+    // Validate required fields are complete
+    const requiredFields = ['title', 'description', 'category', 'employmentType', 'experienceLevel', 'location.city', 'location.state'];
+    const missingFields = [];
+
+    requiredFields.forEach(field => {
+      const keys = field.split('.');
+      let value = job;
+      for (const key of keys) {
+        value = value?.[key];
+      }
+      if (!value) missingFields.push(field);
+    });
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please complete all required fields before submitting',
+        missingFields
+      });
+    }
+
+    // Update job status
+    job.approvalStatus = 'PENDING_APPROVAL';
+    job.status = 'PENDING_APPROVAL';
+    job.addToHistory('SUBMITTED', req.user._id, {}, 'Job submitted for approval');
+    await job.save();
+
+    // Notify all admins
+    const notificationEngine = require('../services/notificationEngine');
+    const adminUsers = await User.find({ role: 'admin' });
+
+    for (const admin of adminUsers) {
+      await notificationEngine.send({
+        recipientId: admin._id,
+        type: 'JOB_SUBMITTED_FOR_APPROVAL',
+        title: `New job requires approval: "${job.title}"`,
+        message: `${company.companyName} has submitted a new job posting "${job.title}" for approval.`,
+        data: {
+          entityType: 'Job',
+          entityId: job._id,
+          actionUrl: `/admin/jobs/pending/${job._id}`,
+          metadata: {
+            jobTitle: job.title,
+            companyName: company.companyName,
+            category: job.category,
+            location: `${job.location.city}, ${job.location.state}`,
+            vacancies: job.vacancies
+          }
+        },
+        channels: { inApp: true, email: true },
+        priority: 'high'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Job submitted for admin approval successfully',
+      data: {
+        jobId: job._id,
+        approvalStatus: 'PENDING_APPROVAL',
+        submittedAt: new Date(),
+        estimatedReviewTime: '24-48 hours'
+      }
+    });
+  } catch (error) {
+    console.error('Submit job error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit job for approval',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Request edit on active job
+// @route   POST /api/companies/jobs/:id/request-edit
+exports.requestJobEdit = async (req, res) => {
+  try {
+    const JobEditRequest = require('../models/JobEditRequest');
+    const company = await Company.findOne({ user: req.user._id });
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // Authorization check
+    if (job.company.toString() !== company._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized'
+      });
+    }
+
+    // Can only request edit on ACTIVE jobs
+    if (job.approvalStatus !== 'ACTIVE') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot request edit on job with status: ${job.approvalStatus}. Only ACTIVE jobs can be edited.`,
+        hint: job.approvalStatus === 'DRAFT' ? 'You can edit this job directly.' : 'Wait for current approval process to complete.'
+      });
+    }
+
+    // Check for existing pending edit request
+    const existingRequest = await JobEditRequest.findOne({
+      job: job._id,
+      status: 'PENDING'
+    });
+
+    if (existingRequest) {
+      return res.status(400).json({
+        success: false,
+        message: 'You already have a pending edit request for this job',
+        data: {
+          editRequestId: existingRequest._id,
+          requestedAt: existingRequest.createdAt,
+          status: existingRequest.status
+        }
+      });
+    }
+
+    const { requestedChanges, changeDescription, priority } = req.body;
+
+    // Validate requested changes
+    if (!requestedChanges || typeof requestedChanges !== 'object' || Object.keys(requestedChanges).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please specify what fields you want to change',
+        example: {
+          requestedChanges: {
+            salary: { old: { min: 1000000, max: 1500000 }, new: { min: 1200000, max: 1800000 } },
+            vacancies: { old: 2, new: 5 }
+          }
+        }
+      });
+    }
+
+    // Validate change description
+    if (!changeDescription || changeDescription.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please explain why you need this edit (minimum 10 characters)'
+      });
+    }
+
+    // Validate that requested fields exist and values are different
+    const validatedChanges = {};
+    const invalidFields = [];
+
+    for (const [field, change] of Object.entries(requestedChanges)) {
+      if (!change.old || !change.new) {
+        invalidFields.push(`${field}: Must provide both 'old' and 'new' values`);
+        continue;
+      }
+
+      // Check if field exists in job
+      const currentValue = field.split('.').reduce((obj, key) => obj?.[key], job);
+      
+      if (currentValue === undefined) {
+        invalidFields.push(`${field}: Field does not exist in job`);
+        continue;
+      }
+
+      // Check if old value matches current
+      if (JSON.stringify(currentValue) !== JSON.stringify(change.old)) {
+        invalidFields.push(`${field}: Old value doesn't match current value`);
+        continue;
+      }
+
+      // Check if new value is different
+      if (JSON.stringify(change.old) === JSON.stringify(change.new)) {
+        invalidFields.push(`${field}: New value is same as old value`);
+        continue;
+      }
+
+      validatedChanges[field] = change;
+    }
+
+    if (invalidFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid changes requested',
+        errors: invalidFields
+      });
+    }
+
+    // Create edit request
+    const editRequest = await JobEditRequest.create({
+      job: job._id,
+      company: company._id,
+      requestedBy: req.user._id,
+      requestedChanges: validatedChanges,
+      changeDescription: changeDescription.trim(),
+      priority: priority || 'MEDIUM',
+      ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Update job
+    job.approvalStatus = 'EDIT_REQUESTED';
+    job.editRequestCount += 1;
+    job.lastEditRequestAt = new Date();
+    job.addToHistory('EDIT_REQUESTED', req.user._id, validatedChanges, changeDescription);
+    await job.save();
+
+    // Notify admins
+    const notificationEngine = require('../services/notificationEngine');
+    const adminUsers = await User.find({ role: 'admin' });
+
+    const priorityLabel = { LOW: '🔵', MEDIUM: '🟡', HIGH: '🟠', URGENT: '🔴' }[priority || 'MEDIUM'];
+
+    for (const admin of adminUsers) {
+      await notificationEngine.send({
+        recipientId: admin._id,
+        type: 'JOB_EDIT_REQUESTED',
+        title: `${priorityLabel} Edit request for "${job.title}"`,
+        message: `${company.companyName} requested to edit "${job.title}". Priority: ${priority || 'MEDIUM'}. Changes: ${Object.keys(validatedChanges).join(', ')}`,
+        data: {
+          entityType: 'JobEditRequest',
+          entityId: editRequest._id,
+          actionUrl: `/admin/edit-requests/${editRequest._id}`,
+          metadata: {
+            jobId: job._id,
+            jobTitle: job.title,
+            companyName: company.companyName,
+            priority: priority || 'MEDIUM',
+            changedFields: Object.keys(validatedChanges),
+            changeCount: Object.keys(validatedChanges).length
+          }
+        },
+        channels: { inApp: true, email: priority === 'URGENT' },
+        priority: priority === 'URGENT' ? 'urgent' : 'high'
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Edit request submitted successfully',
+      data: {
+        editRequestId: editRequest._id,
+        status: 'PENDING',
+        changedFields: Object.keys(validatedChanges),
+        estimatedReviewTime: priority === 'URGENT' ? '12-24 hours' : '24-48 hours',
+        note: 'Your job will remain visible to partners while edit request is being reviewed'
+      }
+    });
+  } catch (error) {
+    console.error('Request edit error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create edit request',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get edit requests for a job
+// @route   GET /api/companies/jobs/:id/edit-requests
+exports.getJobEditRequests = async (req, res) => {
+  try {
+    const JobEditRequest = require('../models/JobEditRequest');
+    const company = await Company.findOne({ user: req.user._id });
+    const job = await Job.findById(req.params.id);
+
+    if (!job || job.company.toString() !== company._id.toString()) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    const editRequests = await JobEditRequest.find({ job: job._id })
+      .populate('reviewedBy', 'email')
+      .sort({ createdAt: -1 });
+
+    const stats = {
+      total: editRequests.length,
+      pending: editRequests.filter(r => r.status === 'PENDING').length,
+      approved: editRequests.filter(r => r.status === 'APPROVED').length,
+      rejected: editRequests.filter(r => r.status === 'REJECTED').length,
+      cancelled: editRequests.filter(r => r.status === 'CANCELLED').length
+    };
+
+    res.json({
+      success: true,
+      data: {
+        editRequests,
+        stats,
+        job: {
+          id: job._id,
+          title: job.title,
+          approvalStatus: job.approvalStatus,
+          canRequestEdit: job.approvalStatus === 'ACTIVE' && stats.pending === 0
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch edit requests',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Cancel pending edit request
+// @route   DELETE /api/companies/jobs/:id/edit-requests/:editRequestId
+exports.cancelEditRequest = async (req, res) => {
+  try {
+    const JobEditRequest = require('../models/JobEditRequest');
+    const company = await Company.findOne({ user: req.user._id });
+    const job = await Job.findById(req.params.id);
+
+    if (!job || job.company.toString() !== company._id.toString()) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    const editRequest = await JobEditRequest.findById(req.params.editRequestId);
+
+    if (!editRequest) {
+      return res.status(404).json({
+        success: false,
+        message: 'Edit request not found'
+      });
+    }
+
+    if (editRequest.job.toString() !== job._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'Edit request does not belong to this job'
+      });
+    }
+
+    if (editRequest.status !== 'PENDING') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel edit request with status: ${editRequest.status}`
+      });
+    }
+
+    editRequest.status = 'CANCELLED';
+    await editRequest.save();
+
+    // Update job status back to ACTIVE if this was the only pending request
+    const otherPending = await JobEditRequest.countDocuments({
+      job: job._id,
+      status: 'PENDING'
+    });
+
+    if (otherPending === 0 && job.approvalStatus === 'EDIT_REQUESTED') {
+      job.approvalStatus = 'ACTIVE';
+      await job.save();
+    }
+
+    res.json({
+      success: true,
+      message: 'Edit request cancelled successfully',
+      data: {
+        editRequestId: editRequest._id,
+        jobStatus: job.approvalStatus
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cancel edit request',
+      error: error.message
     });
   }
 };
