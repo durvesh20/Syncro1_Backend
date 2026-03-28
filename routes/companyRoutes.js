@@ -23,6 +23,12 @@ const {
   getJob,
   updateJob,
   deleteJob,
+
+  // Job Approval Workflow
+  submitJobForApproval,
+  requestJobEdit,
+  getJobEditRequests,
+  cancelEditRequest,
   
   // Candidate Management
   getJobCandidates,
@@ -138,6 +144,36 @@ router.route('/jobs/:id')
   .delete(checkStatus('VERIFIED', 'ACTIVE'), deleteJob);
 
 router.get('/jobs/:jobId/candidates', checkStatus('VERIFIED', 'ACTIVE'), getJobCandidates);
+
+// ==================== JOB APPROVAL WORKFLOW ====================
+
+// Submit job for approval (must be verified company)
+router.post(
+  '/jobs/:id/submit-for-approval',
+  checkStatus('VERIFIED', 'ACTIVE'),
+  submitJobForApproval
+);
+
+// Request edit on active job
+router.post(
+  '/jobs/:id/request-edit',
+  checkStatus('VERIFIED', 'ACTIVE'),
+  requestJobEdit
+);
+
+// Get edit requests for a job
+router.get(
+  '/jobs/:id/edit-requests',
+  checkStatus('VERIFIED', 'ACTIVE'),
+  getJobEditRequests
+);
+
+// Cancel pending edit request
+router.delete(
+  '/jobs/:id/edit-requests/:editRequestId',
+  checkStatus('VERIFIED', 'ACTIVE'),
+  cancelEditRequest
+);
 
 // ==================== CANDIDATE ROUTES ====================
 router.get('/candidates', getAllCandidates);

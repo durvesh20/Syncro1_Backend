@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const {
+  // Dashboard & Analytics
   getDashboard,
   getPendingVerifications,
   verifyPartner,
@@ -10,10 +11,23 @@ const {
   // processPayout,   // ❌ DISABLED - Payout system inactive
   getUsers,
   updateUserStatus,
-  getAnalytics
+  getAnalytics,
+
+  // Job Approval Workflow
+  getPendingJobs,
+  approveJob,
+  rejectJob,
+  getPendingEditRequests,
+  getEditRequest,
+  approveEditRequest,
+  rejectEditRequest,
+  discontinueJob,
+  getJobEditHistory
 } = require('../controllers/adminController');
+
 const { protect, authorize } = require('../middleware/auth');
 
+// Apply admin auth middleware
 router.use(protect);
 router.use(authorize('admin'));
 
@@ -34,5 +48,20 @@ router.put('/verify/company/:id', verifyCompany);
 // ==================== USER MANAGEMENT ====================
 router.get('/users', getUsers);
 router.put('/users/:id/status', updateUserStatus);
+
+// ==================== JOB APPROVAL ====================
+router.get('/jobs/pending', getPendingJobs);
+router.put('/jobs/:id/approve', approveJob);
+router.put('/jobs/:id/reject', rejectJob);
+router.get('/jobs/:id/edit-history', getJobEditHistory);
+
+// ==================== EDIT REQUESTS ====================
+router.get('/edit-requests/pending', getPendingEditRequests);
+router.get('/edit-requests/:id', getEditRequest);
+router.put('/edit-requests/:id/approve', approveEditRequest);
+router.put('/edit-requests/:id/reject', rejectEditRequest);
+
+// ==================== JOB DISCONTINUATION ====================
+router.post('/jobs/:id/discontinue', discontinueJob);
 
 module.exports = router;
