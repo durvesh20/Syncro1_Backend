@@ -394,6 +394,8 @@ return sendTokenResponse(res, token, userPayload, {
 // @route   POST /api/auth/change-password
 exports.changePassword = async (req, res) => {
   try {
+        console.log("BODY:", req.body);
+
     const { currentPassword, newPassword, confirmPassword } = req.body;
 
     // Validate
