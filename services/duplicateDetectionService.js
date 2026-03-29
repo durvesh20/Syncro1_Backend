@@ -22,6 +22,14 @@ const DUPLICATE_CONFIG = {
 class DuplicateDetectionService {
 
   /**
+   * ✅ FIX #5: Normalize mobile number - last 10 digits only
+   */
+  _normalizeMobile(mobile) {
+    if (!mobile) return '';
+    return mobile.replace(/\D/g, '').slice(-10); // Remove non-digits, take last 10
+  }
+
+  /**
    * Check if a candidate can be submitted to a job
    * Called by staffing partner BEFORE submission
    * 
@@ -50,14 +58,19 @@ class DuplicateDetectionService {
     };
 
     const normalizedEmail = email.toLowerCase().trim();
+    // ✅ FIX #5: Normalize mobile before queries
+    const normalizedMobile = this._normalizeMobile(mobile);
 
     // ═══════════════════════════════════════════════════════════════
     // Rule 1: Same person + same job = ALWAYS HARD BLOCK
     // ═══════════════════════════════════════════════════════════════
     const sameJobMatch = await Candidate.findOne({
       job: jobId,
-      $or: [{ email: normalizedEmail }, { mobile }]
-    }).populate('submittedBy', 'firstName lastName firmName');
+      $or: [
+        { email: normalizedEmail },
+        { mobile: new RegExp(normalizedMobile + '$') } // ✅ FIX #5: Match last 10 digits
+      ]
+    });
 
     if (sameJobMatch) {
       const isSamePartner = sameJobMatch.submittedBy?._id.toString() === partnerId.toString();
@@ -87,7 +100,10 @@ class DuplicateDetectionService {
     const sameCompanyMatch = await Candidate.findOne({
       company: job.company,
       job: { $ne: jobId },
-      $or: [{ email: normalizedEmail }, { mobile }],
+      $or: [
+        { email: normalizedEmail },
+        { mobile: new RegExp(normalizedMobile + '$') } // ✅ FIX #5: Match last 10 digits
+      ],
       status: { $nin: DUPLICATE_CONFIG.completedStatuses }
     })
       .populate('job', 'title')
@@ -129,7 +145,10 @@ class DuplicateDetectionService {
 
     const otherPartnerMatch = await Candidate.findOne({
       submittedBy: { $ne: partnerId },
-      $or: [{ email: normalizedEmail }, { mobile }],
+      $or: [
+        { email: normalizedEmail },
+        { mobile: new RegExp(normalizedMobile + '$') } // ✅ FIX #5: Match last 10 digits
+      ],
       createdAt: { $gte: cooldownDate },
       status: { $nin: DUPLICATE_CONFIG.completedStatuses }
     })
@@ -189,7 +208,10 @@ class DuplicateDetectionService {
       submittedBy: partnerId,
       job: { $ne: jobId },
       company: { $ne: job.company },
-      $or: [{ email: normalizedEmail }, { mobile }],
+      $or: [
+        { email: normalizedEmail },
+        { mobile: new RegExp(normalizedMobile + '$') } // ✅ FIX #5: Match last 10 digits
+      ],
       createdAt: { $gte: selfCooldownDate },
       status: { $nin: DUPLICATE_CONFIG.completedStatuses }
     })

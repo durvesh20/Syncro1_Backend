@@ -1,9 +1,9 @@
 // backend/controllers/authController.js
+const crypto = require('crypto');
 const User = require('../models/User');
 const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
 const generateToken = require('../utils/generateToken');
-const { generateTempPassword } = require('../utils/generatePassword');
 const emailService = require('../services/emailService');
 const whatsappService = require('../services/whatsappService');
 const otpService = require('../services/otpService');
@@ -12,29 +12,36 @@ const sendTokenResponse = require('../utils/sendTokenResponse');
 // Check if we should skip mobile OTP (for development)
 const skipMobileOTP = process.env.WHATSAPP_ENABLED !== 'true';
 
-// backend/controllers/authController.js
-
-// @desc    Register Staffing Partner - Step 1 (Basic Info + Send OTPs)
-// @route   POST /api/auth/register/staffing-partner/init
+// @desc Register Staffing Partner - Step 1 (Basic Info + Send Verification)
+// @route POST /api/auth/register/staffing-partner/init
 exports.initStaffingPartnerRegistration = async (req, res) => {
   try {
-    const { 
-      firstName, 
-      lastName, 
-      email, 
-      mobile, 
+    const {
+      firstName,
+      lastName,
+      email,
+      mobile,
+      password,
       firmName,
       designation,
-      linkedinProfile, 
-      city, 
-      state 
+      linkedinProfile,
+      city,
+      state
     } = req.body;
 
     // Validate required fields
-    if (!firstName || !lastName || !email || !mobile || !firmName || !designation || !city || !state) {
+    if (!firstName || !lastName || !email || !mobile || !password || !firmName || !designation || !city || !state) {
       return res.status(400).json({
         success: false,
         message: 'Please provide all required fields'
+      });
+    }
+
+    // Validate password
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters'
       });
     }
 
@@ -47,27 +54,24 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       });
     }
 
-    // Generate OTPs
-    const emailOTP = otpService.generateOTP();
+    // Generate email verification token & mobile OTP
+    const emailToken = crypto.randomBytes(32).toString('hex');
     const mobileOTP = otpService.generateOTP();
 
     // Create user with pending verification
-    const tempPassword = generateTempPassword();
     const user = await User.create({
       email,
       mobile,
-      password: tempPassword,
+      password,
       role: 'staffing_partner',
-      status: 'REGISTERED',
-      emailOTP: {
-        code: emailOTP,
-        expiresAt: otpService.getExpiryTime()
-      },
+      status: 'PENDING_EMAIL_VERIFICATION',
+      emailVerified: false,
+      emailVerificationToken: emailToken,
+      emailVerificationExpires: Date.now() + 30 * 60 * 1000, // 30 min
       mobileOTP: {
         code: mobileOTP,
         expiresAt: otpService.getExpiryTime()
       },
-      tempPassword,
       mobileVerified: skipMobileOTP
     });
 
@@ -84,8 +88,9 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       profileCompletion: { basicInfo: true }
     });
 
-    // Send Email OTP
-    await emailService.sendOTP(email, emailOTP);
+    // Send Email Verification Link
+    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
+    await emailService.sendVerificationLink(email, verifyUrl);
 
     // Send Mobile OTP (or mock it)
     await whatsappService.sendOTP(mobile, mobileOTP);
@@ -93,8 +98,8 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
     res.status(201).json({
       success: true,
       message: skipMobileOTP 
-        ? 'Registration initiated. Please verify your email. (Mobile OTP skipped in development)'
-        : 'Registration initiated. Please verify your email and mobile.',
+        ? 'Registration successful! Check your email for verification link. (Mobile OTP skipped in development)'
+        : 'Registration successful! Check your email for verification link and verify your mobile.',
       data: {
         userId: user._id,
         email: user.email,
@@ -102,13 +107,15 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
         skipMobileOTP,
         ...(process.env.NODE_ENV === 'development' && {
           devInfo: {
-            emailOTP,
+            emailToken,
             mobileOTP,
-            note: 'OTPs shown only in development mode'
+            verifyUrl,
+            note: 'Tokens shown only in development mode'
           }
         })
       }
     });
+
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({
@@ -119,63 +126,192 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
   }
 };
 
-// @desc    Verify Email OTP
-// @route   POST /api/auth/verify/email
-exports.verifyEmailOTP = async (req, res) => {
+// @desc Register Company - Step 1
+// @route POST /api/auth/register/company/init
+exports.initCompanyRegistration = async (req, res) => {
   try {
-    const { userId, otp } = req.body;
+    const {
+      firstName,
+      lastName,
+      email,
+      mobile,
+      password,
+      companyName,
+      designation,
+      department,
+      linkedinProfile,
+      city,
+      state
+    } = req.body;
 
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    if (user.emailVerified) {
+    // Validate required fields
+    if (!firstName || !lastName || !email || !mobile || !password || !companyName || !designation || !department || !city || !state) {
       return res.status(400).json({
         success: false,
-        message: 'Email already verified'
+        message: 'Please provide all required fields',
+        required: {
+          firstName: !firstName ? 'missing' : 'ok',
+          lastName: !lastName ? 'missing' : 'ok',
+          email: !email ? 'missing' : 'ok',
+          mobile: !mobile ? 'missing' : 'ok',
+          password: !password ? 'missing' : 'ok',
+          companyName: !companyName ? 'missing' : 'ok',
+          designation: !designation ? 'missing' : 'ok',
+          department: !department ? 'missing' : 'ok',
+          city: !city ? 'missing' : 'ok',
+          state: !state ? 'missing' : 'ok'
+        }
       });
     }
 
-    const verification = user.verifyOTP('email', otp);
-    if (!verification.valid) {
+    // Validate password
+    if (password.length < 8) {
       return res.status(400).json({
         success: false,
-        message: verification.message
+        message: 'Password must be at least 8 characters'
       });
     }
 
-    user.emailVerified = true;
-    user.emailOTP = undefined;
-    await user.save();
+    // Check if user already exists
+    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or mobile already exists'
+      });
+    }
 
-    // Check if both verifications are complete
-    const bothVerified = user.emailVerified && user.mobileVerified;
+    // Generate email verification token & mobile OTP
+    const emailToken = crypto.randomBytes(32).toString('hex');
+    const mobileOTP = otpService.generateOTP();
 
-    res.json({
+    // Create user
+    const user = await User.create({
+      email,
+      mobile,
+      password,
+      role: 'company',
+      status: 'PENDING_EMAIL_VERIFICATION',
+      emailVerified: false,
+      emailVerificationToken: emailToken,
+      emailVerificationExpires: Date.now() + 30 * 60 * 1000,
+      mobileOTP: {
+        code: mobileOTP,
+        expiresAt: otpService.getExpiryTime()
+      },
+      mobileVerified: skipMobileOTP
+    });
+
+    // Create company profile - combine firstName + lastName
+    await Company.create({
+      user: user._id,
+      companyName,
+      decisionMakerName: `${firstName} ${lastName}`,
+      designation,
+      department,
+      linkedinProfile: linkedinProfile || '',
+      city,
+      state,
+      profileCompletion: { basicInfo: true }
+    });
+
+    // Send email verification link
+    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
+    await emailService.sendVerificationLink(email, verifyUrl);
+
+    // Send mobile OTP
+    await whatsappService.sendOTP(mobile, mobileOTP);
+
+    res.status(201).json({
       success: true,
-      message: 'Email verified successfully',
+      message: skipMobileOTP 
+        ? 'Registration successful! Check your email for verification link.'
+        : 'Registration successful! Check your email for verification link and verify your mobile.',
       data: {
-        emailVerified: true,
-        mobileVerified: user.mobileVerified,
-        bothVerified,
-        canProceed: bothVerified
+        userId: user._id,
+        email: user.email,
+        mobile: user.mobile,
+        skipMobileOTP,
+        ...(process.env.NODE_ENV === 'development' && {
+          devInfo: {
+            emailToken,
+            mobileOTP,
+            verifyUrl,
+            note: 'Tokens shown only in development mode'
+          }
+        })
       }
     });
+
   } catch (error) {
+    console.error('Company registration error:', error);
     res.status(500).json({
       success: false,
-      message: 'Verification failed',
+      message: 'Registration failed',
       error: error.message
     });
   }
 };
 
-// @desc    Verify Mobile OTP
-// @route   POST /api/auth/verify/mobile
+// @desc Verify Email via Token (from link)
+// @route GET /api/auth/verify-email
+exports.verifyEmailByToken = async (req, res) => {
+  try {
+    const { token } = req.query;
+    
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification token is required'
+      });
+    }
+
+    // Find user by email verification token
+    const user = await User.findOne({
+      emailVerificationToken: token,
+      emailVerificationExpires: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired verification token'
+      });
+    }
+
+    // Update user status
+    user.isEmailVerified = true;
+    user.emailVerificationToken = undefined;
+    user.emailVerificationExpires = undefined;
+    
+    // Update status based on mobile verification
+    if (user.isMobileVerified) {
+      user.status = 'VERIFIED';
+    }
+    
+    await user.save();
+
+    // ✅ CORRECT: Return JSON response
+    return res.status(200).json({
+      success: true,
+      message: 'Email verified successfully! You can now login.',
+      data: {
+        emailVerified: true,
+        status: user.status
+      }
+    });
+
+  } catch (error) {
+    console.error('Email verification error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Email verification failed'
+    });
+  }
+};
+
+// @desc Verify Mobile OTP
+// @route POST /api/auth/verify/mobile
 exports.verifyMobileOTP = async (req, res) => {
   try {
     const { userId, otp } = req.body;
@@ -192,6 +328,12 @@ exports.verifyMobileOTP = async (req, res) => {
     if (skipMobileOTP) {
       user.mobileVerified = true;
       user.mobileOTP = undefined;
+
+      // Update status if both verified
+      if (user.emailVerified) {
+        user.status = 'ACTIVE';
+      }
+
       await user.save();
 
       return res.json({
@@ -200,8 +342,7 @@ exports.verifyMobileOTP = async (req, res) => {
         data: {
           emailVerified: user.emailVerified,
           mobileVerified: true,
-          bothVerified: user.emailVerified,
-          canProceed: user.emailVerified
+          status: user.status
         }
       });
     }
@@ -223,9 +364,13 @@ exports.verifyMobileOTP = async (req, res) => {
 
     user.mobileVerified = true;
     user.mobileOTP = undefined;
-    await user.save();
 
-    const bothVerified = user.emailVerified && user.mobileVerified;
+    // Update status if both verified
+    if (user.emailVerified && user.mobileVerified) {
+      user.status = 'ACTIVE';
+    }
+
+    await user.save();
 
     res.json({
       success: true,
@@ -233,10 +378,10 @@ exports.verifyMobileOTP = async (req, res) => {
       data: {
         emailVerified: user.emailVerified,
         mobileVerified: true,
-        bothVerified,
-        canProceed: bothVerified
+        status: user.status
       }
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -246,82 +391,8 @@ exports.verifyMobileOTP = async (req, res) => {
   }
 };
 
-// @desc    Complete Registration (after OTPs verified)
-// @route   POST /api/auth/register/complete
-exports.completeRegistration = async (req, res) => {
-  try {
-    const { userId } = req.body;
-
-    const user = await User.findById(userId).select('+tempPassword');
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    if (!user.emailVerified) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please verify your email first'
-      });
-    }
-
-    // In development with WhatsApp disabled, skip mobile verification check
-    if (!skipMobileOTP && !user.mobileVerified) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please verify your mobile first'
-      });
-    }
-
-    // Get profile based on role
-    let profile;
-    let name;
-    if (user.role === 'staffing_partner') {
-      profile = await StaffingPartner.findOne({ user: user._id });
-      name = `${profile.firstName} ${profile.lastName}`;
-    } else if (user.role === 'company') {
-      profile = await Company.findOne({ user: user._id });
-      name = profile.decisionMakerName;
-    }
-
-    // Store temp password before clearing
-    const tempPasswordToSend = user.tempPassword;
-
-    // Update status
-    user.status = 'PROFILE_INCOMPLETE';
-    user.tempPassword = undefined;
-    await user.save();
-
-    // Send temporary password email
-    await emailService.sendTempPassword(user.email, tempPasswordToSend, name);
-
-    res.json({
-      success: true,
-      message: 'Registration complete. Temporary password sent to your email.',
-      data: {
-        email: user.email,
-        // In development, show temp password for easy testing
-        ...(process.env.NODE_ENV === 'development' && {
-          devInfo: {
-            tempPassword: tempPasswordToSend,
-            note: 'Temp password shown only in development mode'
-          }
-        })
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Registration completion failed',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Login
-// @route   POST /api/auth/login
+// @desc Login
+// @route POST /api/auth/login
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -352,6 +423,26 @@ exports.login = async (req, res) => {
       });
     }
 
+    // Check mobile verification
+    if (!user.mobileVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please verify your mobile number first',
+        requiresVerification: 'mobile',
+        userId: user._id
+      });
+    }
+
+    // Check email verification
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please verify your email before logging in. Check your inbox for the verification link.',
+        requiresVerification: 'email',
+        userId: user._id
+      });
+    }
+
     // Update last login
     user.lastLogin = new Date();
     await user.save();
@@ -363,23 +454,24 @@ exports.login = async (req, res) => {
     } else if (user.role === 'company') {
       profile = await Company.findOne({ user: user._id });
     }
-// Generate token
-const token = generateToken(user._id, user.role);
 
-// Build user payload (no password)
-const userPayload = {
-  id: user._id,
-  email: user.email,
-  role: user.role,
-  status: user.status,
-  isPasswordChanged: user.isPasswordChanged
-};
+    // Generate token
+    const token = generateToken(user._id, user.role);
 
-// Send token in cookie
-return sendTokenResponse(res, token, userPayload, {
-  profile,
-  requirePasswordChange: !user.isPasswordChanged
-});
+    // Build user payload (no password)
+    const userPayload = {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+      status: user.status,
+      isPasswordChanged: user.isPasswordChanged
+    };
+
+    // Send token in cookie
+    return sendTokenResponse(res, token, userPayload, {
+      profile,
+      requirePasswordChange: !user.isPasswordChanged
+    });
 
   } catch (error) {
     res.status(500).json({
@@ -390,12 +482,10 @@ return sendTokenResponse(res, token, userPayload, {
   }
 };
 
-// @desc    Change Password (First Login / Force Change)
-// @route   POST /api/auth/change-password
+// @desc Change Password (First Login / Force Change)
+// @route POST /api/auth/change-password
 exports.changePassword = async (req, res) => {
   try {
-        console.log("BODY:", req.body);
-
     const { currentPassword, newPassword, confirmPassword } = req.body;
 
     // Validate
@@ -443,32 +533,32 @@ exports.changePassword = async (req, res) => {
     // Update password
     user.password = newPassword;
     user.isPasswordChanged = true;
-    
+
     // Update status if it was PASSWORD_CHANGED or earlier
     if (['REGISTERED', 'PROFILE_INCOMPLETE'].includes(user.status)) {
       user.status = 'PASSWORD_CHANGED';
     }
-    
+
     await user.save();
 
-// Generate new token
-const token = generateToken(user._id, user.role);
+    // Generate new token
+    const token = generateToken(user._id, user.role);
 
-// Refresh auth cookie
-res.cookie('token', token, {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-  maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-});
+    // Refresh auth cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
 
-res.json({
-  success: true,
-  message: 'Password changed successfully',
-  data: {
-    status: user.status
-  }
-});
+    res.json({
+      success: true,
+      message: 'Password changed successfully',
+      data: {
+        status: user.status
+      }
+    });
 
   } catch (error) {
     res.status(500).json({
@@ -479,8 +569,8 @@ res.json({
   }
 };
 
-// @desc    Resend OTP
-// @route   POST /api/auth/resend-otp
+// @desc Resend OTP
+// @route POST /api/auth/resend-otp
 exports.resendOTP = async (req, res) => {
   try {
     const { userId, type } = req.body; // type: 'email' or 'mobile'
@@ -515,35 +605,49 @@ exports.resendOTP = async (req, res) => {
       });
     }
 
-    const otp = otpService.generateOTP();
-    
     if (type === 'email') {
-      user.emailOTP = {
-        code: otp,
-        expiresAt: otpService.getExpiryTime()
-      };
+      // Generate new email token
+      const emailToken = crypto.randomBytes(32).toString('hex');
+      user.emailVerificationToken = emailToken;
+      user.emailVerificationExpires = Date.now() + 30 * 60 * 1000;
       await user.save();
-      await emailService.sendOTP(user.email, otp);
+
+      const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
+      await emailService.sendVerificationLink(user.email, verifyUrl);
+
+      return res.json({
+        success: true,
+        message: 'Verification email sent',
+        ...(process.env.NODE_ENV === 'development' && {
+          devInfo: {
+            emailToken,
+            verifyUrl,
+            note: 'Token shown only in development mode'
+          }
+        })
+      });
+
     } else if (type === 'mobile') {
+      const otp = otpService.generateOTP();
       user.mobileOTP = {
         code: otp,
         expiresAt: otpService.getExpiryTime()
       };
       await user.save();
       await whatsappService.sendOTP(user.mobile, otp);
+
+      return res.json({
+        success: true,
+        message: 'OTP sent to your mobile',
+        ...(process.env.NODE_ENV === 'development' && {
+          devInfo: {
+            otp,
+            note: 'OTP shown only in development mode'
+          }
+        })
+      });
     }
 
-    res.json({
-      success: true,
-      message: `OTP sent to your ${type}`,
-      // In development, return OTP for testing
-      ...(process.env.NODE_ENV === 'development' && {
-        devInfo: {
-          otp,
-          note: 'OTP shown only in development mode'
-        }
-      })
-    });
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -553,12 +657,71 @@ exports.resendOTP = async (req, res) => {
   }
 };
 
-// @desc    Get Current User
-// @route   GET /api/auth/me
+// @desc Resend Email Verification Link
+// @route POST /api/auth/resend-email-verification
+exports.resendEmailVerification = async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (user.emailVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email already verified'
+      });
+    }
+
+    const emailToken = crypto.randomBytes(32).toString('hex');
+    user.emailVerificationToken = emailToken;
+    user.emailVerificationExpires = Date.now() + 30 * 60 * 1000;
+
+    await user.save();
+
+    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
+    await emailService.sendVerificationLink(user.email, verifyUrl);
+
+    res.json({
+      success: true,
+      message: 'Verification email resent. Please check your inbox.',
+      ...(process.env.NODE_ENV === 'development' && {
+        devInfo: { 
+          emailToken,
+          verifyUrl 
+        }
+      })
+    });
+
+  } catch (error) {
+    console.error('Resend email error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to resend verification email',
+      error: error.message
+    });
+  }
+};
+
+// @desc Get Current User
+// @route GET /api/auth/me
 exports.getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
-    
+
     let profile = null;
     if (user.role === 'staffing_partner') {
       profile = await StaffingPartner.findOne({ user: user._id });
@@ -584,6 +747,7 @@ exports.getMe = async (req, res) => {
         profile
       }
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -593,123 +757,8 @@ exports.getMe = async (req, res) => {
   }
 };
 
-// @desc    Register Company - Step 1
-// @route   POST /api/auth/register/company/init
-exports.initCompanyRegistration = async (req, res) => {
-  try {
-    const { 
-      firstName,           
-      lastName,            
-      email, 
-      mobile,
-      companyName,         
-      designation,         
-      department,          
-      linkedinProfile, 
-      city, 
-      state 
-    } = req.body;
-
-    // ✅ FIXED: Validate form fields (NOT decisionMakerName)
-    if (!firstName || !lastName || !email || !mobile || !companyName || !designation || !department || !city || !state) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide all required fields',
-        required: {
-          firstName: !firstName ? 'missing' : 'ok',
-          lastName: !lastName ? 'missing' : 'ok',
-          email: !email ? 'missing' : 'ok',
-          mobile: !mobile ? 'missing' : 'ok',
-          companyName: !companyName ? 'missing' : 'ok',
-          designation: !designation ? 'missing' : 'ok',
-          department: !department ? 'missing' : 'ok',
-          city: !city ? 'missing' : 'ok',
-          state: !state ? 'missing' : 'ok'
-        }
-      });
-    }
-
-    // Check if user already exists
-    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User with this email or mobile already exists'
-      });
-    }
-
-    // Generate OTPs
-    const emailOTP = otpService.generateOTP();
-    const mobileOTP = otpService.generateOTP();
-
-    // Create user
-    const tempPassword = generateTempPassword();
-    const user = await User.create({
-      email,
-      mobile,
-      password: tempPassword,
-      role: 'company',
-      status: 'REGISTERED',
-      emailOTP: {
-        code: emailOTP,
-        expiresAt: otpService.getExpiryTime()
-      },
-      mobileOTP: {
-        code: mobileOTP,
-        expiresAt: otpService.getExpiryTime()
-      },
-      tempPassword,
-      mobileVerified: skipMobileOTP
-    });
-
-    // ✅ Create company profile - combine firstName + lastName
-    await Company.create({
-      user: user._id,
-      companyName,
-      decisionMakerName: `${firstName} ${lastName}`,  // ✅ Combine names
-      designation,
-      department,
-      linkedinProfile: linkedinProfile || '',
-      city,
-      state,
-      profileCompletion: { basicInfo: true }
-    });
-
-    // Send OTPs
-    await emailService.sendOTP(email, emailOTP);
-    await whatsappService.sendOTP(mobile, mobileOTP);
-
-    res.status(201).json({
-      success: true,
-      message: skipMobileOTP 
-        ? 'Registration initiated. Please verify your email.'
-        : 'Registration initiated. Please verify your email and mobile.',
-      data: {
-        userId: user._id,
-        email: user.email,
-        mobile: user.mobile,
-        skipMobileOTP,
-        ...(process.env.NODE_ENV === 'development' && {
-          devInfo: {
-            emailOTP,
-            mobileOTP,
-            note: 'OTPs shown only in development mode'
-          }
-        })
-      }
-    });
-  } catch (error) {
-    console.error('Company registration error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Registration failed',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Forgot Password
-// @route   POST /api/auth/forgot-password
+// @desc Forgot Password
+// @route POST /api/auth/forgot-password
 exports.forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -749,6 +798,7 @@ exports.forgotPassword = async (req, res) => {
         })
       }
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -758,8 +808,8 @@ exports.forgotPassword = async (req, res) => {
   }
 };
 
-// @desc    Reset Password
-// @route   POST /api/auth/reset-password
+// @desc Reset Password
+// @route POST /api/auth/reset-password
 exports.resetPassword = async (req, res) => {
   try {
     const { userId, otp, newPassword, confirmPassword } = req.body;
@@ -810,6 +860,7 @@ exports.resetPassword = async (req, res) => {
       success: true,
       message: 'Password reset successfully. You can now login with your new password.'
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -819,8 +870,8 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
-// @desc    Logout - Clear JWT cookie
-// @route   POST /api/auth/logout
+// @desc Logout - Clear JWT cookie
+// @route POST /api/auth/logout
 exports.logout = async (req, res) => {
   res.clearCookie('token', {
     httpOnly: true,
@@ -833,5 +884,3 @@ exports.logout = async (req, res) => {
     message: 'Logged out successfully',
   });
 };
-
-

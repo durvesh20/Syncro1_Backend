@@ -19,7 +19,6 @@ class EmailService {
   }
 
   async sendEmail(options) {
-    // Log email in development
     console.log('=================================================');
     console.log('📧 Email Notification');
     console.log(`   To: ${options.to}`);
@@ -44,7 +43,6 @@ class EmailService {
       return { success: true, messageId: info.messageId };
     } catch (error) {
       console.error('   Email error:', error.message);
-      // Don't fail registration if email fails in development
       if (process.env.NODE_ENV === 'development') {
         return { success: true, error: error.message, fallback: true };
       }
@@ -52,12 +50,68 @@ class EmailService {
     }
   }
 
+  async sendVerificationLink(email, verifyUrl) {
+    console.log('=================================================');
+    console.log('🔗 Email Verification Link');
+    console.log(`   Email: ${email}`);
+    console.log(`   Link: ${verifyUrl}`);
+    console.log('=================================================');
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+          .header h1 { margin: 0; font-size: 24px; }
+          .content { padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb; }
+          .button { display: inline-block; padding: 14px 28px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 20px 0; }
+          .link-box { background: #e5e7eb; padding: 10px; border-radius: 4px; word-break: break-all; font-size: 12px; margin-top: 20px; }
+          .warning { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin: 20px 0; font-size: 14px; }
+          .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; background: #f3f4f6; border-radius: 0 0 10px 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>🚀 Syncro1</h1>
+          </div>
+          <div class="content">
+            <h2>Verify Your Email Address</h2>
+            <p>Thank you for registering! Please click the button below to verify your email address:</p>
+            <div style="text-align: center;">
+              <a href="${verifyUrl}" class="button">Verify Email Address</a>
+            </div>
+            <div class="warning">
+              ⏰ This link is valid for <strong>30 minutes</strong> only.
+            </div>
+            <p>If the button doesn't work, copy and paste this link in your browser:</p>
+            <div class="link-box">${verifyUrl}</div>
+            <p style="margin-top: 20px;">If you didn't create an account, please ignore this email.</p>
+          </div>
+          <div class="footer">
+            <p>© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
+            <p>This is an automated message, please do not reply.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: email,
+      subject: '🔗 Verify Your Email - Syncro1',
+      html
+    });
+  }
+
   async sendOTP(email, otp, type = 'verification') {
     const subject = type === 'verification' 
       ? 'Email Verification OTP' 
       : 'Password Reset OTP';
 
-    // Always log OTP in console for development
     console.log('=================================================');
     console.log('🔐 OTP Generated');
     console.log(`   Email: ${email}`);
@@ -111,7 +165,6 @@ class EmailService {
   }
 
   async sendTempPassword(email, tempPassword, name) {
-    // Always log temp password in console for development
     console.log('=================================================');
     console.log('🔑 Temporary Password Generated');
     console.log(`   Email: ${email}`);
@@ -294,8 +347,6 @@ class EmailService {
     });
   }
 
-  // ==================== JOB APPROVAL EMAILS ====================
-
   async sendJobApproved(email, companyName, jobTitle, jobId, adminNotes) {
     const html = `
       <!DOCTYPE html>
@@ -354,14 +405,9 @@ class EmailService {
                 View Job Dashboard →
               </a>
             </p>
-
-            <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
-              💡 <strong>Tip:</strong> If you need to make changes to this job, you can request an edit from your dashboard. All edits require admin approval to maintain quality standards.
-            </p>
           </div>
           <div class="footer">
             <p>© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
-            <p>This is an automated notification. Please do not reply to this email.</p>
           </div>
         </div>
       </body>
@@ -427,10 +473,6 @@ class EmailService {
               <a href="${process.env.FRONTEND_URL}/company/jobs/${jobId}/edit" class="button">
                 Edit Job Posting →
               </a>
-            </p>
-
-            <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
-              💡 <strong>Need help?</strong> If you have questions about the feedback, please contact our support team.
             </p>
           </div>
           <div class="footer">
@@ -565,11 +607,9 @@ class EmailService {
             ${isWarning ? `
               <div class="warning-box">
                 <strong>⚠️ Warning:</strong> This job now has <strong>${rejectedCount} rejected edit request${rejectedCount > 1 ? 's' : ''}</strong>.
-                ${rejectedCount >= 5 ? '<br><br>🚨 <strong>CRITICAL:</strong> This job may be discontinued due to excessive edit requests. We recommend creating a new job posting with finalized requirements.' : '<br><br>Multiple rejected edits may result in job discontinuation. Please ensure all requirements are finalized before requesting changes.'}
+                ${rejectedCount >= 5 ? '<br><br>🚨 <strong>CRITICAL:</strong> This job may be discontinued due to excessive edit requests.' : ''}
               </div>
             ` : ''}
-
-            <p>The job remains active with its current details. If you need to make changes, please review the feedback and create a new edit request with the correct information.</p>
 
             <p style="text-align: center;">
               <a href="${process.env.FRONTEND_URL}/company/jobs/${jobId}" class="button">
@@ -605,7 +645,6 @@ class EmailService {
           .critical-box { background: #fee2e2; border-left: 4px solid #ef4444; padding: 20px; margin: 20px 0; border-radius: 4px; color: #991b1b; }
           .stats { background: white; border-radius: 8px; padding: 20px; margin: 20px 0; }
           .stats-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
-          .next-steps { background: #dbeafe; border-left: 4px solid #3b82f6; padding: 15px; margin: 20px 0; border-radius: 4px; }
           .button { display: inline-block; padding: 14px 28px; background: #10b981; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 20px; }
           .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; background: #f3f4f6; border-radius: 0 0 10px 10px; }
         </style>
@@ -638,36 +677,16 @@ class EmailService {
                 <span>Rejected edits:</span>
                 <strong style="color: #ef4444;">${editStats.rejected}</strong>
               </div>
-              <div class="stats-row">
-                <span>Rejection rate:</span>
-                <strong>${editStats.rejectionRate}%</strong>
-              </div>
             </div>
-
-            <div class="next-steps">
-              <h3 style="margin-top: 0;">📝 Next Steps:</h3>
-              <ol style="margin-bottom: 0;">
-                <li>Review your job requirements and finalize all details</li>
-                <li>Create a new job posting with clear, accurate information</li>
-                <li>Ensure all requirements are complete before submitting</li>
-              </ol>
-            </div>
-
-            <p><strong>Important:</strong> The discontinued job is no longer visible to talent partners. Any active candidates for this job have been notified.</p>
 
             <p style="text-align: center;">
               <a href="${process.env.FRONTEND_URL}/company/jobs/create" class="button">
                 Create New Job Posting →
               </a>
             </p>
-
-            <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
-              💡 <strong>Tip:</strong> To avoid discontinuation in the future, please ensure all job details are finalized and accurate before submission. Multiple edit requests may indicate unclear requirements.
-            </p>
           </div>
           <div class="footer">
             <p>© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
-            <p>If you have questions, please contact our support team.</p>
           </div>
         </div>
       </body>
@@ -681,7 +700,6 @@ class EmailService {
     });
   }
 
-  // Helper method to format values in change tables
   _formatValue(value) {
     if (value === null || value === undefined) return '<em>Not set</em>';
     if (typeof value === 'object') return JSON.stringify(value);

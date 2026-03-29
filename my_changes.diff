@@ -1,0 +1,3267 @@
+diff --git a/controllers/adminController.js b/controllers/adminController.js
+index f0f9155..fd795cb 100644
+--- a/controllers/adminController.js
++++ b/controllers/adminController.js
+@@ -1,4 +1,4 @@
+-// backend/controllers/adminController.js
++// backend/controllers/adminController.js - FIXED
+ const User = require('../models/User');
+ const StaffingPartner = require('../models/StaffingPartner');
+ const Company = require('../models/Company');
+@@ -276,11 +276,15 @@ exports.getUsers = async (req, res) => {
+       ];
+     }
+ 
++    // ✅ FIX #10: Sanitize pagination
++    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
++    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
++
+     const users = await User.find(query)
+       .select('-password')
+       .sort({ createdAt: -1 })
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
++      .skip((sanitizedPage - 1) * sanitizedLimit)
++      .limit(sanitizedLimit);
+ 
+     const total = await User.countDocuments(query);
+ 
+@@ -289,8 +293,8 @@ exports.getUsers = async (req, res) => {
+       data: {
+         users,
+         pagination: {
+-          current: parseInt(page),
+-          pages: Math.ceil(total / limit),
++          current: sanitizedPage,
++          pages: Math.ceil(total / sanitizedLimit),
+           total
+         }
+       }
+@@ -426,12 +430,16 @@ exports.getPendingJobs = async (req, res) => {
+ 
+     const query = { approvalStatus: 'PENDING_APPROVAL' };
+ 
++    // ✅ FIX #10: Sanitize pagination
++    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
++    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
++
+     const jobs = await Job.find(query)
+       .populate('company', 'companyName kyc.industry kyc.employeeCount')
+       .populate('postedBy', 'email')
+       .sort({ createdAt: sortBy === 'oldest' ? 1 : -1 })
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
++      .skip((sanitizedPage - 1) * sanitizedLimit)
++      .limit(sanitizedLimit);
+ 
+     const total = await Job.countDocuments(query);
+ 
+@@ -447,8 +455,8 @@ exports.getPendingJobs = async (req, res) => {
+       data: {
+         jobs: jobsWithAge,
+         pagination: {
+-          current: parseInt(page),
+-          pages: Math.ceil(total / limit),
++          current: sanitizedPage,
++          pages: Math.ceil(total / sanitizedLimit),
+           total
+         },
+         stats: {
+@@ -657,6 +665,10 @@ exports.getPendingEditRequests = async (req, res) => {
+     const query = { status: 'PENDING' };
+     if (priority) query.priority = priority;
+ 
++    // ✅ FIX #10: Sanitize pagination
++    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
++    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
++
+     let sort = {};
+     if (sortBy === 'priority') {
+       // URGENT > HIGH > MEDIUM > LOW, then oldest first
+@@ -673,8 +685,8 @@ exports.getPendingEditRequests = async (req, res) => {
+       .populate('company', 'companyName')
+       .populate('requestedBy', 'email')
+       .sort(sort)
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
++      .skip((sanitizedPage - 1) * sanitizedLimit)
++      .limit(sanitizedLimit);
+ 
+     const total = await JobEditRequest.countDocuments(query);
+ 
+@@ -706,8 +718,8 @@ exports.getPendingEditRequests = async (req, res) => {
+       data: {
+         editRequests: sortedRequests,
+         pagination: {
+-          current: parseInt(page),
+-          pages: Math.ceil(total / limit),
++          current: sanitizedPage,
++          pages: Math.ceil(total / sanitizedLimit),
+           total
+         },
+         stats: {
+@@ -831,8 +843,8 @@ exports.approveEditRequest = async (req, res) => {
+       }
+     }
+ 
+-    // Mark job as modified for validation
+-job.markModified(fieldName);
++    // ✅ FIX #1: Use Job model method for proper markModified
++    job.applyEditChanges(appliedChanges);
+ 
+     // Update job
+     job.approvalStatus = 'ACTIVE';
+@@ -1228,6 +1240,4 @@ exports._buildTimeline = (job, editRequests, changeHistory) => {
+ 
+   // Sort by timestamp descending
+   return events.sort((a, b) => b.timestamp - a.timestamp);
+-};
+-
+-
++};
+\ No newline at end of file
+diff --git a/controllers/authController.js b/controllers/authController.js
+index 7ea676b..ce20878 100644
+--- a/controllers/authController.js
++++ b/controllers/authController.js
+@@ -1,9 +1,9 @@
+ // backend/controllers/authController.js
++const crypto = require('crypto');
+ const User = require('../models/User');
+ const StaffingPartner = require('../models/StaffingPartner');
+ const Company = require('../models/Company');
+ const generateToken = require('../utils/generateToken');
+-const { generateTempPassword } = require('../utils/generatePassword');
+ const emailService = require('../services/emailService');
+ const whatsappService = require('../services/whatsappService');
+ const otpService = require('../services/otpService');
+@@ -12,32 +12,39 @@ const sendTokenResponse = require('../utils/sendTokenResponse');
+ // Check if we should skip mobile OTP (for development)
+ const skipMobileOTP = process.env.WHATSAPP_ENABLED !== 'true';
+ 
+-// backend/controllers/authController.js
+-
+-// @desc    Register Staffing Partner - Step 1 (Basic Info + Send OTPs)
+-// @route   POST /api/auth/register/staffing-partner/init
++// @desc Register Staffing Partner - Step 1 (Basic Info + Send Verification)
++// @route POST /api/auth/register/staffing-partner/init
+ exports.initStaffingPartnerRegistration = async (req, res) => {
+   try {
+-    const { 
+-      firstName, 
+-      lastName, 
+-      email, 
+-      mobile, 
++    const {
++      firstName,
++      lastName,
++      email,
++      mobile,
++      password,
+       firmName,
+       designation,
+-      linkedinProfile, 
+-      city, 
+-      state 
++      linkedinProfile,
++      city,
++      state
+     } = req.body;
+ 
+     // Validate required fields
+-    if (!firstName || !lastName || !email || !mobile || !firmName || !designation || !city || !state) {
++    if (!firstName || !lastName || !email || !mobile || !password || !firmName || !designation || !city || !state) {
+       return res.status(400).json({
+         success: false,
+         message: 'Please provide all required fields'
+       });
+     }
+ 
++    // Validate password
++    if (password.length < 8) {
++      return res.status(400).json({
++        success: false,
++        message: 'Password must be at least 8 characters'
++      });
++    }
++
+     // Check if user already exists
+     const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
+     if (existingUser) {
+@@ -47,27 +54,24 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+       });
+     }
+ 
+-    // Generate OTPs
+-    const emailOTP = otpService.generateOTP();
++    // Generate email verification token & mobile OTP
++    const emailToken = crypto.randomBytes(32).toString('hex');
+     const mobileOTP = otpService.generateOTP();
+ 
+     // Create user with pending verification
+-    const tempPassword = generateTempPassword();
+     const user = await User.create({
+       email,
+       mobile,
+-      password: tempPassword,
++      password,
+       role: 'staffing_partner',
+-      status: 'REGISTERED',
+-      emailOTP: {
+-        code: emailOTP,
+-        expiresAt: otpService.getExpiryTime()
+-      },
++      status: 'PENDING_EMAIL_VERIFICATION',
++      emailVerified: false,
++      emailVerificationToken: emailToken,
++      emailVerificationExpires: Date.now() + 30 * 60 * 1000, // 30 min
+       mobileOTP: {
+         code: mobileOTP,
+         expiresAt: otpService.getExpiryTime()
+       },
+-      tempPassword,
+       mobileVerified: skipMobileOTP
+     });
+ 
+@@ -84,8 +88,9 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+       profileCompletion: { basicInfo: true }
+     });
+ 
+-    // Send Email OTP
+-    await emailService.sendOTP(email, emailOTP);
++    // Send Email Verification Link
++    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
++    await emailService.sendVerificationLink(email, verifyUrl);
+ 
+     // Send Mobile OTP (or mock it)
+     await whatsappService.sendOTP(mobile, mobileOTP);
+@@ -93,8 +98,8 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+     res.status(201).json({
+       success: true,
+       message: skipMobileOTP 
+-        ? 'Registration initiated. Please verify your email. (Mobile OTP skipped in development)'
+-        : 'Registration initiated. Please verify your email and mobile.',
++        ? 'Registration successful! Check your email for verification link. (Mobile OTP skipped in development)'
++        : 'Registration successful! Check your email for verification link and verify your mobile.',
+       data: {
+         userId: user._id,
+         email: user.email,
+@@ -102,13 +107,15 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+         skipMobileOTP,
+         ...(process.env.NODE_ENV === 'development' && {
+           devInfo: {
+-            emailOTP,
++            emailToken,
+             mobileOTP,
+-            note: 'OTPs shown only in development mode'
++            verifyUrl,
++            note: 'Tokens shown only in development mode'
+           }
+         })
+       }
+     });
++
+   } catch (error) {
+     console.error('Registration error:', error);
+     res.status(500).json({
+@@ -119,63 +126,192 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+   }
+ };
+ 
+-// @desc    Verify Email OTP
+-// @route   POST /api/auth/verify/email
+-exports.verifyEmailOTP = async (req, res) => {
++// @desc Register Company - Step 1
++// @route POST /api/auth/register/company/init
++exports.initCompanyRegistration = async (req, res) => {
+   try {
+-    const { userId, otp } = req.body;
++    const {
++      firstName,
++      lastName,
++      email,
++      mobile,
++      password,
++      companyName,
++      designation,
++      department,
++      linkedinProfile,
++      city,
++      state
++    } = req.body;
+ 
+-    const user = await User.findById(userId);
+-    if (!user) {
+-      return res.status(404).json({
++    // Validate required fields
++    if (!firstName || !lastName || !email || !mobile || !password || !companyName || !designation || !department || !city || !state) {
++      return res.status(400).json({
+         success: false,
+-        message: 'User not found'
++        message: 'Please provide all required fields',
++        required: {
++          firstName: !firstName ? 'missing' : 'ok',
++          lastName: !lastName ? 'missing' : 'ok',
++          email: !email ? 'missing' : 'ok',
++          mobile: !mobile ? 'missing' : 'ok',
++          password: !password ? 'missing' : 'ok',
++          companyName: !companyName ? 'missing' : 'ok',
++          designation: !designation ? 'missing' : 'ok',
++          department: !department ? 'missing' : 'ok',
++          city: !city ? 'missing' : 'ok',
++          state: !state ? 'missing' : 'ok'
++        }
+       });
+     }
+ 
+-    if (user.emailVerified) {
++    // Validate password
++    if (password.length < 8) {
+       return res.status(400).json({
+         success: false,
+-        message: 'Email already verified'
++        message: 'Password must be at least 8 characters'
+       });
+     }
+ 
+-    const verification = user.verifyOTP('email', otp);
+-    if (!verification.valid) {
++    // Check if user already exists
++    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
++    if (existingUser) {
+       return res.status(400).json({
+         success: false,
+-        message: verification.message
++        message: 'User with this email or mobile already exists'
+       });
+     }
+ 
+-    user.emailVerified = true;
+-    user.emailOTP = undefined;
+-    await user.save();
++    // Generate email verification token & mobile OTP
++    const emailToken = crypto.randomBytes(32).toString('hex');
++    const mobileOTP = otpService.generateOTP();
+ 
+-    // Check if both verifications are complete
+-    const bothVerified = user.emailVerified && user.mobileVerified;
++    // Create user
++    const user = await User.create({
++      email,
++      mobile,
++      password,
++      role: 'company',
++      status: 'PENDING_EMAIL_VERIFICATION',
++      emailVerified: false,
++      emailVerificationToken: emailToken,
++      emailVerificationExpires: Date.now() + 30 * 60 * 1000,
++      mobileOTP: {
++        code: mobileOTP,
++        expiresAt: otpService.getExpiryTime()
++      },
++      mobileVerified: skipMobileOTP
++    });
+ 
+-    res.json({
++    // Create company profile - combine firstName + lastName
++    await Company.create({
++      user: user._id,
++      companyName,
++      decisionMakerName: `${firstName} ${lastName}`,
++      designation,
++      department,
++      linkedinProfile: linkedinProfile || '',
++      city,
++      state,
++      profileCompletion: { basicInfo: true }
++    });
++
++    // Send email verification link
++    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
++    await emailService.sendVerificationLink(email, verifyUrl);
++
++    // Send mobile OTP
++    await whatsappService.sendOTP(mobile, mobileOTP);
++
++    res.status(201).json({
+       success: true,
+-      message: 'Email verified successfully',
++      message: skipMobileOTP 
++        ? 'Registration successful! Check your email for verification link.'
++        : 'Registration successful! Check your email for verification link and verify your mobile.',
+       data: {
+-        emailVerified: true,
+-        mobileVerified: user.mobileVerified,
+-        bothVerified,
+-        canProceed: bothVerified
++        userId: user._id,
++        email: user.email,
++        mobile: user.mobile,
++        skipMobileOTP,
++        ...(process.env.NODE_ENV === 'development' && {
++          devInfo: {
++            emailToken,
++            mobileOTP,
++            verifyUrl,
++            note: 'Tokens shown only in development mode'
++          }
++        })
+       }
+     });
++
+   } catch (error) {
++    console.error('Company registration error:', error);
+     res.status(500).json({
+       success: false,
+-      message: 'Verification failed',
++      message: 'Registration failed',
+       error: error.message
+     });
+   }
+ };
+ 
+-// @desc    Verify Mobile OTP
+-// @route   POST /api/auth/verify/mobile
++// @desc Verify Email via Token (from link)
++// @route GET /api/auth/verify-email
++exports.verifyEmailByToken = async (req, res) => {
++  try {
++    const { token } = req.query;
++    
++    if (!token) {
++      return res.status(400).json({
++        success: false,
++        message: 'Verification token is required'
++      });
++    }
++
++    // Find user by email verification token
++    const user = await User.findOne({
++      emailVerificationToken: token,
++      emailVerificationExpires: { $gt: Date.now() }
++    });
++
++    if (!user) {
++      return res.status(400).json({
++        success: false,
++        message: 'Invalid or expired verification token'
++      });
++    }
++
++    // Update user status
++    user.isEmailVerified = true;
++    user.emailVerificationToken = undefined;
++    user.emailVerificationExpires = undefined;
++    
++    // Update status based on mobile verification
++    if (user.isMobileVerified) {
++      user.status = 'VERIFIED';
++    }
++    
++    await user.save();
++
++    // ✅ CORRECT: Return JSON response
++    return res.status(200).json({
++      success: true,
++      message: 'Email verified successfully! You can now login.',
++      data: {
++        emailVerified: true,
++        status: user.status
++      }
++    });
++
++  } catch (error) {
++    console.error('Email verification error:', error);
++    return res.status(500).json({
++      success: false,
++      message: 'Email verification failed'
++    });
++  }
++};
++
++// @desc Verify Mobile OTP
++// @route POST /api/auth/verify/mobile
+ exports.verifyMobileOTP = async (req, res) => {
+   try {
+     const { userId, otp } = req.body;
+@@ -192,6 +328,12 @@ exports.verifyMobileOTP = async (req, res) => {
+     if (skipMobileOTP) {
+       user.mobileVerified = true;
+       user.mobileOTP = undefined;
++
++      // Update status if both verified
++      if (user.emailVerified) {
++        user.status = 'ACTIVE';
++      }
++
+       await user.save();
+ 
+       return res.json({
+@@ -200,8 +342,7 @@ exports.verifyMobileOTP = async (req, res) => {
+         data: {
+           emailVerified: user.emailVerified,
+           mobileVerified: true,
+-          bothVerified: user.emailVerified,
+-          canProceed: user.emailVerified
++          status: user.status
+         }
+       });
+     }
+@@ -223,9 +364,13 @@ exports.verifyMobileOTP = async (req, res) => {
+ 
+     user.mobileVerified = true;
+     user.mobileOTP = undefined;
+-    await user.save();
+ 
+-    const bothVerified = user.emailVerified && user.mobileVerified;
++    // Update status if both verified
++    if (user.emailVerified && user.mobileVerified) {
++      user.status = 'ACTIVE';
++    }
++
++    await user.save();
+ 
+     res.json({
+       success: true,
+@@ -233,95 +378,21 @@ exports.verifyMobileOTP = async (req, res) => {
+       data: {
+         emailVerified: user.emailVerified,
+         mobileVerified: true,
+-        bothVerified,
+-        canProceed: bothVerified
++        status: user.status
+       }
+     });
+-  } catch (error) {
+-    res.status(500).json({
+-      success: false,
+-      message: 'Verification failed',
+-      error: error.message
+-    });
+-  }
+-};
+-
+-// @desc    Complete Registration (after OTPs verified)
+-// @route   POST /api/auth/register/complete
+-exports.completeRegistration = async (req, res) => {
+-  try {
+-    const { userId } = req.body;
+-
+-    const user = await User.findById(userId).select('+tempPassword');
+-    if (!user) {
+-      return res.status(404).json({
+-        success: false,
+-        message: 'User not found'
+-      });
+-    }
+-
+-    if (!user.emailVerified) {
+-      return res.status(400).json({
+-        success: false,
+-        message: 'Please verify your email first'
+-      });
+-    }
+ 
+-    // In development with WhatsApp disabled, skip mobile verification check
+-    if (!skipMobileOTP && !user.mobileVerified) {
+-      return res.status(400).json({
+-        success: false,
+-        message: 'Please verify your mobile first'
+-      });
+-    }
+-
+-    // Get profile based on role
+-    let profile;
+-    let name;
+-    if (user.role === 'staffing_partner') {
+-      profile = await StaffingPartner.findOne({ user: user._id });
+-      name = `${profile.firstName} ${profile.lastName}`;
+-    } else if (user.role === 'company') {
+-      profile = await Company.findOne({ user: user._id });
+-      name = profile.decisionMakerName;
+-    }
+-
+-    // Store temp password before clearing
+-    const tempPasswordToSend = user.tempPassword;
+-
+-    // Update status
+-    user.status = 'PROFILE_INCOMPLETE';
+-    user.tempPassword = undefined;
+-    await user.save();
+-
+-    // Send temporary password email
+-    await emailService.sendTempPassword(user.email, tempPasswordToSend, name);
+-
+-    res.json({
+-      success: true,
+-      message: 'Registration complete. Temporary password sent to your email.',
+-      data: {
+-        email: user.email,
+-        // In development, show temp password for easy testing
+-        ...(process.env.NODE_ENV === 'development' && {
+-          devInfo: {
+-            tempPassword: tempPasswordToSend,
+-            note: 'Temp password shown only in development mode'
+-          }
+-        })
+-      }
+-    });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Registration completion failed',
++      message: 'Verification failed',
+       error: error.message
+     });
+   }
+ };
+ 
+-// @desc    Login
+-// @route   POST /api/auth/login
++// @desc Login
++// @route POST /api/auth/login
+ exports.login = async (req, res) => {
+   try {
+     const { email, password } = req.body;
+@@ -352,6 +423,26 @@ exports.login = async (req, res) => {
+       });
+     }
+ 
++    // Check mobile verification
++    if (!user.mobileVerified) {
++      return res.status(403).json({
++        success: false,
++        message: 'Please verify your mobile number first',
++        requiresVerification: 'mobile',
++        userId: user._id
++      });
++    }
++
++    // Check email verification
++    if (!user.emailVerified) {
++      return res.status(403).json({
++        success: false,
++        message: 'Please verify your email before logging in. Check your inbox for the verification link.',
++        requiresVerification: 'email',
++        userId: user._id
++      });
++    }
++
+     // Update last login
+     user.lastLogin = new Date();
+     await user.save();
+@@ -363,23 +454,24 @@ exports.login = async (req, res) => {
+     } else if (user.role === 'company') {
+       profile = await Company.findOne({ user: user._id });
+     }
+-// Generate token
+-const token = generateToken(user._id, user.role);
+ 
+-// Build user payload (no password)
+-const userPayload = {
+-  id: user._id,
+-  email: user.email,
+-  role: user.role,
+-  status: user.status,
+-  isPasswordChanged: user.isPasswordChanged
+-};
++    // Generate token
++    const token = generateToken(user._id, user.role);
++
++    // Build user payload (no password)
++    const userPayload = {
++      id: user._id,
++      email: user.email,
++      role: user.role,
++      status: user.status,
++      isPasswordChanged: user.isPasswordChanged
++    };
+ 
+-// Send token in cookie
+-return sendTokenResponse(res, token, userPayload, {
+-  profile,
+-  requirePasswordChange: !user.isPasswordChanged
+-});
++    // Send token in cookie
++    return sendTokenResponse(res, token, userPayload, {
++      profile,
++      requirePasswordChange: !user.isPasswordChanged
++    });
+ 
+   } catch (error) {
+     res.status(500).json({
+@@ -390,12 +482,10 @@ return sendTokenResponse(res, token, userPayload, {
+   }
+ };
+ 
+-// @desc    Change Password (First Login / Force Change)
+-// @route   POST /api/auth/change-password
++// @desc Change Password (First Login / Force Change)
++// @route POST /api/auth/change-password
+ exports.changePassword = async (req, res) => {
+   try {
+-        console.log("BODY:", req.body);
+-
+     const { currentPassword, newPassword, confirmPassword } = req.body;
+ 
+     // Validate
+@@ -443,32 +533,32 @@ exports.changePassword = async (req, res) => {
+     // Update password
+     user.password = newPassword;
+     user.isPasswordChanged = true;
+-    
++
+     // Update status if it was PASSWORD_CHANGED or earlier
+     if (['REGISTERED', 'PROFILE_INCOMPLETE'].includes(user.status)) {
+       user.status = 'PASSWORD_CHANGED';
+     }
+-    
++
+     await user.save();
+ 
+-// Generate new token
+-const token = generateToken(user._id, user.role);
+-
+-// Refresh auth cookie
+-res.cookie('token', token, {
+-  httpOnly: true,
+-  secure: process.env.NODE_ENV === 'production',
+-  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+-  maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+-});
+-
+-res.json({
+-  success: true,
+-  message: 'Password changed successfully',
+-  data: {
+-    status: user.status
+-  }
+-});
++    // Generate new token
++    const token = generateToken(user._id, user.role);
++
++    // Refresh auth cookie
++    res.cookie('token', token, {
++      httpOnly: true,
++      secure: process.env.NODE_ENV === 'production',
++      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
++      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
++    });
++
++    res.json({
++      success: true,
++      message: 'Password changed successfully',
++      data: {
++        status: user.status
++      }
++    });
+ 
+   } catch (error) {
+     res.status(500).json({
+@@ -479,8 +569,8 @@ res.json({
+   }
+ };
+ 
+-// @desc    Resend OTP
+-// @route   POST /api/auth/resend-otp
++// @desc Resend OTP
++// @route POST /api/auth/resend-otp
+ exports.resendOTP = async (req, res) => {
+   try {
+     const { userId, type } = req.body; // type: 'email' or 'mobile'
+@@ -515,50 +605,123 @@ exports.resendOTP = async (req, res) => {
+       });
+     }
+ 
+-    const otp = otpService.generateOTP();
+-    
+     if (type === 'email') {
+-      user.emailOTP = {
+-        code: otp,
+-        expiresAt: otpService.getExpiryTime()
+-      };
++      // Generate new email token
++      const emailToken = crypto.randomBytes(32).toString('hex');
++      user.emailVerificationToken = emailToken;
++      user.emailVerificationExpires = Date.now() + 30 * 60 * 1000;
+       await user.save();
+-      await emailService.sendOTP(user.email, otp);
++
++      const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
++      await emailService.sendVerificationLink(user.email, verifyUrl);
++
++      return res.json({
++        success: true,
++        message: 'Verification email sent',
++        ...(process.env.NODE_ENV === 'development' && {
++          devInfo: {
++            emailToken,
++            verifyUrl,
++            note: 'Token shown only in development mode'
++          }
++        })
++      });
++
+     } else if (type === 'mobile') {
++      const otp = otpService.generateOTP();
+       user.mobileOTP = {
+         code: otp,
+         expiresAt: otpService.getExpiryTime()
+       };
+       await user.save();
+       await whatsappService.sendOTP(user.mobile, otp);
++
++      return res.json({
++        success: true,
++        message: 'OTP sent to your mobile',
++        ...(process.env.NODE_ENV === 'development' && {
++          devInfo: {
++            otp,
++            note: 'OTP shown only in development mode'
++          }
++        })
++      });
++    }
++
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to resend OTP',
++      error: error.message
++    });
++  }
++};
++
++// @desc Resend Email Verification Link
++// @route POST /api/auth/resend-email-verification
++exports.resendEmailVerification = async (req, res) => {
++  try {
++    const { userId } = req.body;
++
++    if (!userId) {
++      return res.status(400).json({
++        success: false,
++        message: 'User ID is required'
++      });
+     }
+ 
++    const user = await User.findById(userId);
++
++    if (!user) {
++      return res.status(404).json({
++        success: false,
++        message: 'User not found'
++      });
++    }
++
++    if (user.emailVerified) {
++      return res.status(400).json({
++        success: false,
++        message: 'Email already verified'
++      });
++    }
++
++    const emailToken = crypto.randomBytes(32).toString('hex');
++    user.emailVerificationToken = emailToken;
++    user.emailVerificationExpires = Date.now() + 30 * 60 * 1000;
++
++    await user.save();
++
++    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
++    await emailService.sendVerificationLink(user.email, verifyUrl);
++
+     res.json({
+       success: true,
+-      message: `OTP sent to your ${type}`,
+-      // In development, return OTP for testing
++      message: 'Verification email resent. Please check your inbox.',
+       ...(process.env.NODE_ENV === 'development' && {
+-        devInfo: {
+-          otp,
+-          note: 'OTP shown only in development mode'
++        devInfo: { 
++          emailToken,
++          verifyUrl 
+         }
+       })
+     });
++
+   } catch (error) {
++    console.error('Resend email error:', error);
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to resend OTP',
++      message: 'Failed to resend verification email',
+       error: error.message
+     });
+   }
+ };
+ 
+-// @desc    Get Current User
+-// @route   GET /api/auth/me
++// @desc Get Current User
++// @route GET /api/auth/me
+ exports.getMe = async (req, res) => {
+   try {
+     const user = await User.findById(req.user._id);
+-    
++
+     let profile = null;
+     if (user.role === 'staffing_partner') {
+       profile = await StaffingPartner.findOne({ user: user._id });
+@@ -584,132 +747,18 @@ exports.getMe = async (req, res) => {
+         profile
+       }
+     });
+-  } catch (error) {
+-    res.status(500).json({
+-      success: false,
+-      message: 'Failed to fetch user',
+-      error: error.message
+-    });
+-  }
+-};
+-
+-// @desc    Register Company - Step 1
+-// @route   POST /api/auth/register/company/init
+-exports.initCompanyRegistration = async (req, res) => {
+-  try {
+-    const { 
+-      firstName,           
+-      lastName,            
+-      email, 
+-      mobile,
+-      companyName,         
+-      designation,         
+-      department,          
+-      linkedinProfile, 
+-      city, 
+-      state 
+-    } = req.body;
+-
+-    // ✅ FIXED: Validate form fields (NOT decisionMakerName)
+-    if (!firstName || !lastName || !email || !mobile || !companyName || !designation || !department || !city || !state) {
+-      return res.status(400).json({
+-        success: false,
+-        message: 'Please provide all required fields',
+-        required: {
+-          firstName: !firstName ? 'missing' : 'ok',
+-          lastName: !lastName ? 'missing' : 'ok',
+-          email: !email ? 'missing' : 'ok',
+-          mobile: !mobile ? 'missing' : 'ok',
+-          companyName: !companyName ? 'missing' : 'ok',
+-          designation: !designation ? 'missing' : 'ok',
+-          department: !department ? 'missing' : 'ok',
+-          city: !city ? 'missing' : 'ok',
+-          state: !state ? 'missing' : 'ok'
+-        }
+-      });
+-    }
+-
+-    // Check if user already exists
+-    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
+-    if (existingUser) {
+-      return res.status(400).json({
+-        success: false,
+-        message: 'User with this email or mobile already exists'
+-      });
+-    }
+-
+-    // Generate OTPs
+-    const emailOTP = otpService.generateOTP();
+-    const mobileOTP = otpService.generateOTP();
+-
+-    // Create user
+-    const tempPassword = generateTempPassword();
+-    const user = await User.create({
+-      email,
+-      mobile,
+-      password: tempPassword,
+-      role: 'company',
+-      status: 'REGISTERED',
+-      emailOTP: {
+-        code: emailOTP,
+-        expiresAt: otpService.getExpiryTime()
+-      },
+-      mobileOTP: {
+-        code: mobileOTP,
+-        expiresAt: otpService.getExpiryTime()
+-      },
+-      tempPassword,
+-      mobileVerified: skipMobileOTP
+-    });
+-
+-    // ✅ Create company profile - combine firstName + lastName
+-    await Company.create({
+-      user: user._id,
+-      companyName,
+-      decisionMakerName: `${firstName} ${lastName}`,  // ✅ Combine names
+-      designation,
+-      department,
+-      linkedinProfile: linkedinProfile || '',
+-      city,
+-      state,
+-      profileCompletion: { basicInfo: true }
+-    });
+-
+-    // Send OTPs
+-    await emailService.sendOTP(email, emailOTP);
+-    await whatsappService.sendOTP(mobile, mobileOTP);
+ 
+-    res.status(201).json({
+-      success: true,
+-      message: skipMobileOTP 
+-        ? 'Registration initiated. Please verify your email.'
+-        : 'Registration initiated. Please verify your email and mobile.',
+-      data: {
+-        userId: user._id,
+-        email: user.email,
+-        mobile: user.mobile,
+-        skipMobileOTP,
+-        ...(process.env.NODE_ENV === 'development' && {
+-          devInfo: {
+-            emailOTP,
+-            mobileOTP,
+-            note: 'OTPs shown only in development mode'
+-          }
+-        })
+-      }
+-    });
+   } catch (error) {
+-    console.error('Company registration error:', error);
+     res.status(500).json({
+       success: false,
+-      message: 'Registration failed',
++      message: 'Failed to fetch user',
+       error: error.message
+     });
+   }
+ };
+ 
+-// @desc    Forgot Password
+-// @route   POST /api/auth/forgot-password
++// @desc Forgot Password
++// @route POST /api/auth/forgot-password
+ exports.forgotPassword = async (req, res) => {
+   try {
+     const { email } = req.body;
+@@ -749,6 +798,7 @@ exports.forgotPassword = async (req, res) => {
+         })
+       }
+     });
++
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+@@ -758,8 +808,8 @@ exports.forgotPassword = async (req, res) => {
+   }
+ };
+ 
+-// @desc    Reset Password
+-// @route   POST /api/auth/reset-password
++// @desc Reset Password
++// @route POST /api/auth/reset-password
+ exports.resetPassword = async (req, res) => {
+   try {
+     const { userId, otp, newPassword, confirmPassword } = req.body;
+@@ -810,6 +860,7 @@ exports.resetPassword = async (req, res) => {
+       success: true,
+       message: 'Password reset successfully. You can now login with your new password.'
+     });
++
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+@@ -819,8 +870,8 @@ exports.resetPassword = async (req, res) => {
+   }
+ };
+ 
+-// @desc    Logout - Clear JWT cookie
+-// @route   POST /api/auth/logout
++// @desc Logout - Clear JWT cookie
++// @route POST /api/auth/logout
+ exports.logout = async (req, res) => {
+   res.clearCookie('token', {
+     httpOnly: true,
+@@ -832,6 +883,4 @@ exports.logout = async (req, res) => {
+     success: true,
+     message: 'Logged out successfully',
+   });
+-};
+-
+-
++};
+\ No newline at end of file
+diff --git a/controllers/companyController.js b/controllers/companyController.js
+index 9c268e0..cf7f735 100644
+--- a/controllers/companyController.js
++++ b/controllers/companyController.js
+@@ -6,6 +6,21 @@ const Candidate = require("../models/Candidate");
+ const candidateLifecycleService = require("../services/candidateLifecycleService");
+ const StatusMachine = require("../utils/statusMachine");
+ 
++// ==================== HELPER FUNCTIONS ====================
++
++/**
++ * ✅ FIX #4: Validate email format
++ */
++const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
++
++/**
++ * ✅ FIX #10: Sanitize pagination to prevent abuse
++ */
++const sanitizePagination = (page, limit) => ({
++  page: Math.max(1, Math.min(1000, parseInt(page) || 1)),
++  limit: Math.max(1, Math.min(100, parseInt(limit) || 20))
++});
++
+ // ==================== 1. PRIMARY ACCOUNT (Decision Maker) ====================
+ 
+ // @desc    Update Primary Account / Basic Info
+@@ -74,6 +89,7 @@ exports.updateBasicInfo = async (req, res) => {
+       },
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update basic info error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Update failed",
+@@ -150,6 +166,7 @@ exports.updateKYC = async (req, res) => {
+       data: company.kyc,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update KYC error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Update failed",
+@@ -205,6 +222,7 @@ exports.updateHiringPreferences = async (req, res) => {
+       data: company.hiringPreferences,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update hiring preferences error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Update failed",
+@@ -260,6 +278,7 @@ exports.updateBilling = async (req, res) => {
+       data: company.billing,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update billing error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Update failed",
+@@ -303,6 +322,7 @@ exports.updateTeamAccess = async (req, res) => {
+       data: company.teamAccess,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update team access error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Update failed",
+@@ -340,6 +360,14 @@ exports.addTeamMember = async (req, res) => {
+       });
+     }
+ 
++    // ✅ FIX #4: Validate email format
++    if (!isValidEmail(email)) {
++      return res.status(400).json({
++        success: false,
++        message: "Invalid email format",
++      });
++    }
++
+     const existingMember = company.teamAccess.teamMembers.find(
+       (m) => m.email === email,
+     );
+@@ -369,6 +397,7 @@ exports.addTeamMember = async (req, res) => {
+       data: company.teamAccess,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Add team member error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to add team member",
+@@ -404,6 +433,7 @@ exports.removeTeamMember = async (req, res) => {
+       data: company.teamAccess,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Remove team member error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to remove team member",
+@@ -498,6 +528,7 @@ exports.updateLegalConsents = async (req, res) => {
+       data: company.legalConsents,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update legal consents error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Update failed",
+@@ -544,6 +575,7 @@ exports.uploadDocuments = async (req, res) => {
+       data: company.documents,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Upload documents error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Upload failed",
+@@ -582,6 +614,7 @@ exports.getProfile = async (req, res) => {
+       data: responseData,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get profile error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to fetch profile",
+@@ -624,6 +657,7 @@ exports.getProfileCompletion = async (req, res) => {
+       },
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get profile completion error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to fetch completion status",
+@@ -678,6 +712,7 @@ exports.submitProfile = async (req, res) => {
+       },
+     });
+   } catch (error) {
++    console.error('[COMPANY] Submit profile error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Submission failed",
+@@ -704,6 +739,30 @@ exports.getDashboard = async (req, res) => {
+       { $group: { _id: "$status", count: { $sum: 1 } } },
+     ]);
+ 
++    // ✅ NEW: Approval status breakdown
++    const approvalStats = await Job.aggregate([
++      { $match: { company: company._id } },
++      { $group: { _id: "$approvalStatus", count: { $sum: 1 } } }
++    ]);
++
++    // ✅ NEW: Get rejected jobs for alerts
++    const rejectedJobs = await Job.find({
++      company: company._id,
++      approvalStatus: 'REJECTED'
++    })
++      .select('title rejectionReason rejectedAt')
++      .sort({ rejectedAt: -1 })
++      .limit(5); // Show top 5 most recent
++
++    // ✅ NEW: Get pending approval jobs
++    const pendingApprovalJobs = await Job.find({
++      company: company._id,
++      approvalStatus: 'PENDING_APPROVAL'
++    })
++      .select('title createdAt')
++      .sort({ createdAt: -1 })
++      .limit(5);
++
+     const recentCandidates = await Candidate.find({ company: company._id })
+       .populate("job", "title")
+       .populate("submittedBy", "firstName lastName")
+@@ -741,12 +800,43 @@ exports.getDashboard = async (req, res) => {
+         },
+         metrics: company.metrics,
+         jobStats,
++        
++        // ✅ NEW: Approval stats
++        approvalStats: approvalStats.reduce((acc, curr) => {
++          acc[curr._id] = curr.count;
++          return acc;
++        }, {}),
++        
++        // ✅ NEW: Alerts section
++        alerts: {
++          rejectedJobs: {
++            count: rejectedJobs.length,
++            jobs: rejectedJobs.map(job => ({
++              id: job._id,
++              title: job.title,
++              reason: job.rejectionReason,
++              rejectedAt: job.rejectedAt,
++              daysAgo: Math.floor((Date.now() - new Date(job.rejectedAt)) / (1000 * 60 * 60 * 24))
++            }))
++          },
++          pendingApproval: {
++            count: pendingApprovalJobs.length,
++            jobs: pendingApprovalJobs.map(job => ({
++              id: job._id,
++              title: job.title,
++              submittedAt: job.createdAt,
++              daysAgo: Math.floor((Date.now() - new Date(job.createdAt)) / (1000 * 60 * 60 * 24))
++            }))
++          }
++        },
++        
+         recentCandidates,
+         hiringFunnel,
+         activeJobs,
+       },
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get dashboard error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to fetch dashboard",
+@@ -778,16 +868,14 @@ exports.createJob = async (req, res) => {
+       ...req.body,
+       company: company._id,
+       postedBy: req.user._id,
+-      status: "DRAFT",              // ✅ Fixed
+-      approvalStatus: "DRAFT",      // ✅ Fixed
++      status: "DRAFT",
++      approvalStatus: "DRAFT",
+       eligiblePlans,
+     };
+ 
+     const job = await Job.create(jobData);
+ 
+     company.metrics.totalJobsPosted += 1;
+-    // ❌ DON'T increment activeJobs here - only after approval
+-    // company.metrics.activeJobs += 1;  // Remove this line
+     await company.save();
+ 
+     console.log(
+@@ -800,6 +888,7 @@ exports.createJob = async (req, res) => {
+       data: job,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Create job error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Job creation failed",
+@@ -821,15 +910,20 @@ exports.getJobs = async (req, res) => {
+       });
+     }
+ 
+-    const { page = 1, limit = 10, status } = req.query;
++    // ✅ FIX #10: Sanitize pagination
++    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
++    const { status, approvalStatus } = req.query; // ✅ Added approvalStatus
+ 
+     const query = { company: company._id };
+     if (status) query.status = status;
++    if (approvalStatus) query.approvalStatus = approvalStatus; // ✅ NEW LINE
++
++    const skip = (page - 1) * limit;
+ 
+     const jobs = await Job.find(query)
+       .sort({ createdAt: -1 })
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
++      .skip(skip)
++      .limit(limit);
+ 
+     const total = await Job.countDocuments(query);
+ 
+@@ -838,13 +932,15 @@ exports.getJobs = async (req, res) => {
+       data: {
+         jobs,
+         pagination: {
+-          current: parseInt(page),
++          current: page,
+           pages: Math.ceil(total / limit),
+           total,
++          limit
+         },
+       },
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get jobs error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to fetch jobs",
+@@ -853,6 +949,76 @@ exports.getJobs = async (req, res) => {
+   }
+ };
+ 
++// @desc    Get Rejected Job Posts
++// @route   GET /api/companies/jobs/rejected
++exports.getRejectedJobs = async (req, res) => {
++  try {
++    const company = await Company.findOne({ user: req.user._id });
++
++    if (!company) {
++      return res.status(404).json({
++        success: false,
++        message: 'Company not found'
++      });
++    }
++
++    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
++
++    const query = {
++      company: company._id,
++      approvalStatus: 'REJECTED'
++    };
++
++    const skip = (page - 1) * limit;
++
++    const jobs = await Job.find(query)
++      .select('title category employmentType experienceLevel location vacancies salary rejectionReason rejectedAt createdAt')
++      .sort({ rejectedAt: -1 }) // Most recently rejected first
++      .skip(skip)
++      .limit(limit);
++
++    const total = await Job.countDocuments(query);
++
++    res.json({
++      success: true,
++      data: {
++        jobs: jobs.map(job => ({
++          _id: job._id,
++          title: job.title,
++          category: job.category,
++          employmentType: job.employmentType,
++          experienceLevel: job.experienceLevel,
++          location: job.location,
++          vacancies: job.vacancies,
++          salary: job.salary,
++          rejectionReason: job.rejectionReason,
++          rejectedAt: job.rejectedAt,
++          submittedAt: job.createdAt,
++          canEdit: true,
++          canResubmit: true,
++          daysAgo: Math.floor((Date.now() - new Date(job.rejectedAt)) / (1000 * 60 * 60 * 24))
++        })),
++        pagination: {
++          current: page,
++          pages: Math.ceil(total / limit),
++          total,
++          limit
++        },
++        message: total === 0 
++          ? '✅ No rejected jobs! All your submissions are either approved or pending review.' 
++          : `You have ${total} rejected job post${total > 1 ? 's' : ''} that need${total === 1 ? 's' : ''} revision.`
++      }
++    });
++  } catch (error) {
++    console.error('[COMPANY] Get rejected jobs error:', error);
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch rejected jobs',
++      error: error.message
++    });
++  }
++};
++
+ // @desc    Get Single Job
+ // @route   GET /api/companies/jobs/:id
+ exports.getJob = async (req, res) => {
+@@ -871,6 +1037,7 @@ exports.getJob = async (req, res) => {
+       data: job,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get job error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to fetch job",
+@@ -901,6 +1068,7 @@ exports.updateJob = async (req, res) => {
+       data: job,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update job error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Update failed",
+@@ -936,6 +1104,7 @@ exports.deleteJob = async (req, res) => {
+       message: "Job closed successfully",
+     });
+   } catch (error) {
++    console.error('[COMPANY] Delete job error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to close job",
+@@ -948,16 +1117,20 @@ exports.deleteJob = async (req, res) => {
+ // @route   GET /api/companies/jobs/:jobId/candidates
+ exports.getJobCandidates = async (req, res) => {
+   try {
+-    const { page = 1, limit = 10, status } = req.query;
++    // ✅ FIX #10: Sanitize pagination
++    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
++    const { status } = req.query;
+ 
+     const query = { job: req.params.jobId };
+     if (status) query.status = status;
+ 
++    const skip = (page - 1) * limit;
++
+     const candidates = await Candidate.find(query)
+       .populate("submittedBy", "firstName lastName firmName")
+       .sort({ createdAt: -1 })
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
++      .skip(skip)
++      .limit(limit);
+ 
+     const total = await Candidate.countDocuments(query);
+ 
+@@ -966,13 +1139,15 @@ exports.getJobCandidates = async (req, res) => {
+       data: {
+         candidates,
+         pagination: {
+-          current: parseInt(page),
++          current: page,
+           pages: Math.ceil(total / limit),
+           total,
++          limit
+         },
+       },
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get job candidates error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to fetch candidates",
+@@ -994,17 +1169,21 @@ exports.getAllCandidates = async (req, res) => {
+       });
+     }
+ 
+-    const { page = 1, limit = 10, status } = req.query;
++    // ✅ FIX #10: Sanitize pagination
++    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
++    const { status } = req.query;
+ 
+     const query = { company: company._id };
+     if (status) query.status = status;
+ 
++    const skip = (page - 1) * limit;
++
+     const candidates = await Candidate.find(query)
+       .populate("submittedBy", "firstName lastName firmName")
+       .populate("job", "title")
+       .sort({ createdAt: -1 })
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
++      .skip(skip)
++      .limit(limit);
+ 
+     const total = await Candidate.countDocuments(query);
+ 
+@@ -1013,13 +1192,15 @@ exports.getAllCandidates = async (req, res) => {
+       data: {
+         candidates,
+         pagination: {
+-          current: parseInt(page),
++          current: page,
+           pages: Math.ceil(total / limit),
+           total,
++          limit
+         },
+       },
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get all candidates error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to fetch candidates",
+@@ -1077,6 +1258,7 @@ exports.getCandidate = async (req, res) => {
+       data: responseData,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get candidate error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to fetch candidate",
+@@ -1087,7 +1269,6 @@ exports.getCandidate = async (req, res) => {
+ 
+ // @desc    Update Candidate Status
+ // @route   PUT /api/companies/candidates/:id/status
+-// ✅ COMPLETE: Uses lifecycle service, validates transitions, returns next actions
+ exports.updateCandidateStatus = async (req, res) => {
+   try {
+     const { status, notes } = req.body;
+@@ -1209,6 +1390,7 @@ exports.updateCandidateStatus = async (req, res) => {
+       throw error;
+     }
+   } catch (error) {
++    console.error('[COMPANY] Update candidate status error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Status update failed",
+@@ -1240,13 +1422,23 @@ exports.scheduleInterview = async (req, res) => {
+       });
+     }
+ 
++    const { type, scheduledAt, interviewerName, interviewerEmail, meetingLink } = req.body;
++
++    // ✅ FIX #4: Validate interviewer email if provided
++    if (interviewerEmail && !isValidEmail(interviewerEmail)) {
++      return res.status(400).json({
++        success: false,
++        message: "Invalid interviewer email format",
++      });
++    }
++
+     const interview = {
+       round: candidate.interviews.length + 1,
+-      type: req.body.type,
+-      scheduledAt: req.body.scheduledAt,
+-      interviewerName: req.body.interviewerName,
+-      interviewerEmail: req.body.interviewerEmail,
+-      meetingLink: req.body.meetingLink,
++      type,
++      scheduledAt,
++      interviewerName,
++      interviewerEmail,
++      meetingLink,
+       result: "PENDING",
+     };
+ 
+@@ -1266,6 +1458,7 @@ exports.scheduleInterview = async (req, res) => {
+       data: candidate,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Schedule interview error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to schedule interview",
+@@ -1326,6 +1519,7 @@ exports.updateInterviewFeedback = async (req, res) => {
+       data: candidate,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update interview feedback error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to update feedback",
+@@ -1379,6 +1573,7 @@ exports.makeOffer = async (req, res) => {
+       data: candidate,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Make offer error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to make offer",
+@@ -1434,6 +1629,7 @@ exports.updateOfferResponse = async (req, res) => {
+       data: candidate,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Update offer response error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to update offer response",
+@@ -1442,90 +1638,6 @@ exports.updateOfferResponse = async (req, res) => {
+   }
+ };
+ 
+-/* ========== CONFIRM JOINING - DISABLED (Commission system inactive) ==========
+-// @desc    Confirm Joining
+-// @route   POST /api/companies/candidates/:id/joining
+-exports.confirmJoining = async (req, res) => {
+-  try {
+-    const candidate = await Candidate.findById(req.params.id).populate({
+-      path: "company",
+-      select: "user",
+-    });
+-
+-    if (!candidate) {
+-      return res.status(404).json({
+-        success: false,
+-        message: "Candidate not found",
+-      });
+-    }
+-
+-    if (candidate.company.user.toString() !== req.user._id.toString()) {
+-      return res.status(403).json({
+-        success: false,
+-        message: "Not authorized",
+-      });
+-    }
+-
+-    const job = await Job.findById(candidate.job);
+-    const company = await Company.findById(candidate.company._id);
+-
+-    candidate.joining = {
+-      actualJoiningDate: req.body.joiningDate,
+-      confirmed: true,
+-      confirmedAt: new Date(),
+-      documentsSubmitted: req.body.documentsSubmitted || false,
+-    };
+-    candidate.status = "JOINED";
+-    candidate.statusHistory.push({
+-      status: "JOINED",
+-      changedBy: req.user._id,
+-      notes: `Joined on ${new Date(req.body.joiningDate).toDateString()}`,
+-    });
+-
+-    // ========== COMMISSION CALCULATION - DISABLED ==========
+-    if (job && candidate.offer) {
+-      const commissionAmount =
+-        job.commission.type === "percentage"
+-          ? (candidate.offer.salary * job.commission.value) / 100
+-          : job.commission.value;
+-
+-      candidate.payout = {
+-        commissionAmount,
+-        status: "PENDING",
+-      };
+-    }
+-    // ========== END COMMISSION ==========
+-
+-    if (job) {
+-      job.filledPositions += 1;
+-      if (job.filledPositions >= job.vacancies) {
+-        job.status = "FILLED";
+-      }
+-      await job.save();
+-    }
+-
+-    if (company) {
+-      company.metrics.totalHires += 1;
+-      await company.save();
+-    }
+-
+-    await candidate.save();
+-
+-    res.json({
+-      success: true,
+-      message: "Joining confirmed successfully",
+-      data: candidate,
+-    });
+-  } catch (error) {
+-    res.status(500).json({
+-      success: false,
+-      message: "Failed to confirm joining",
+-      error: error.message,
+-    });
+-  }
+-};
+-========== END CONFIRM JOINING ========== */
+-
+ // @desc    Add Note to Candidate
+ // @route   POST /api/companies/candidates/:id/notes
+ exports.addNote = async (req, res) => {
+@@ -1563,6 +1675,7 @@ exports.addNote = async (req, res) => {
+       data: candidate.notes,
+     });
+   } catch (error) {
++    console.error('[COMPANY] Add note error:', error);
+     res.status(500).json({
+       success: false,
+       message: "Failed to add note",
+@@ -1571,7 +1684,6 @@ exports.addNote = async (req, res) => {
+   }
+ };
+ 
+-
+ // ==================== JOB APPROVAL WORKFLOW ====================
+ 
+ // @desc    Submit job for admin approval
+@@ -1632,32 +1744,41 @@ exports.submitJobForApproval = async (req, res) => {
+     job.addToHistory('SUBMITTED', req.user._id, {}, 'Job submitted for approval');
+     await job.save();
+ 
+-    // Notify all admins
+-    const notificationEngine = require('../services/notificationEngine');
+-    const adminUsers = await User.find({ role: 'admin' });
++    // ✅ FIX #12: Fire and forget for notifications (non-blocking)
++    const notifyAdmins = async () => {
++      try {
++        // ✅ FIX #2: Lazy load to avoid circular dependencies
++        const notificationEngine = require('../services/notificationEngine');
++        const adminUsers = await User.find({ role: 'admin' });
++
++        for (const admin of adminUsers) {
++          await notificationEngine.send({
++            recipientId: admin._id,
++            type: 'JOB_SUBMITTED_FOR_APPROVAL',
++            title: `New job requires approval: "${job.title}"`,
++            message: `${company.companyName} has submitted a new job posting "${job.title}" for approval.`,
++            data: {
++              entityType: 'Job',
++              entityId: job._id,
++              actionUrl: `/admin/jobs/pending/${job._id}`,
++              metadata: {
++                jobTitle: job.title,
++                companyName: company.companyName,
++                category: job.category,
++                location: `${job.location.city}, ${job.location.state}`,
++                vacancies: job.vacancies
++              }
++            },
++            channels: { inApp: true, email: true },
++            priority: 'high'
++          });
++        }
++      } catch (notifError) {
++        console.error('[NOTIFICATION] Failed to notify admins:', notifError.message);
++      }
++    };
+ 
+-    for (const admin of adminUsers) {
+-      await notificationEngine.send({
+-        recipientId: admin._id,
+-        type: 'JOB_SUBMITTED_FOR_APPROVAL',
+-        title: `New job requires approval: "${job.title}"`,
+-        message: `${company.companyName} has submitted a new job posting "${job.title}" for approval.`,
+-        data: {
+-          entityType: 'Job',
+-          entityId: job._id,
+-          actionUrl: `/admin/jobs/pending/${job._id}`,
+-          metadata: {
+-            jobTitle: job.title,
+-            companyName: company.companyName,
+-            category: job.category,
+-            location: `${job.location.city}, ${job.location.state}`,
+-            vacancies: job.vacancies
+-          }
+-        },
+-        channels: { inApp: true, email: true },
+-        priority: 'high'
+-      });
+-    }
++    notifyAdmins(); // Don't await - fire and forget
+ 
+     res.json({
+       success: true,
+@@ -1670,7 +1791,7 @@ exports.submitJobForApproval = async (req, res) => {
+       }
+     });
+   } catch (error) {
+-    console.error('Submit job error:', error);
++    console.error('[COMPANY] Submit job error:', error);
+     res.status(500).json({
+       success: false,
+       message: 'Failed to submit job for approval',
+@@ -1813,35 +1934,43 @@ exports.requestJobEdit = async (req, res) => {
+     job.addToHistory('EDIT_REQUESTED', req.user._id, validatedChanges, changeDescription);
+     await job.save();
+ 
+-    // Notify admins
+-    const notificationEngine = require('../services/notificationEngine');
+-    const adminUsers = await User.find({ role: 'admin' });
+-
+-    const priorityLabel = { LOW: '🔵', MEDIUM: '🟡', HIGH: '🟠', URGENT: '🔴' }[priority || 'MEDIUM'];
++    // ✅ FIX #12: Fire and forget for notifications (non-blocking)
++    const notifyAdmins = async () => {
++      try {
++        // ✅ FIX #2: Lazy load
++        const notificationEngine = require('../services/notificationEngine');
++        const adminUsers = await User.find({ role: 'admin' });
++        const priorityLabel = { LOW: '🔵', MEDIUM: '🟡', HIGH: '🟠', URGENT: '🔴' }[priority || 'MEDIUM'];
++
++        for (const admin of adminUsers) {
++          await notificationEngine.send({
++            recipientId: admin._id,
++            type: 'JOB_EDIT_REQUESTED',
++            title: `${priorityLabel} Edit request for "${job.title}"`,
++            message: `${company.companyName} requested to edit "${job.title}". Priority: ${priority || 'MEDIUM'}. Changes: ${Object.keys(validatedChanges).join(', ')}`,
++            data: {
++              entityType: 'JobEditRequest',
++              entityId: editRequest._id,
++              actionUrl: `/admin/edit-requests/${editRequest._id}`,
++              metadata: {
++                jobId: job._id,
++                jobTitle: job.title,
++                companyName: company.companyName,
++                priority: priority || 'MEDIUM',
++                changedFields: Object.keys(validatedChanges),
++                changeCount: Object.keys(validatedChanges).length
++              }
++            },
++            channels: { inApp: true, email: priority === 'URGENT' },
++            priority: priority === 'URGENT' ? 'urgent' : 'high'
++          });
++        }
++      } catch (notifError) {
++        console.error('[NOTIFICATION] Failed to notify admins:', notifError.message);
++      }
++    };
+ 
+-    for (const admin of adminUsers) {
+-      await notificationEngine.send({
+-        recipientId: admin._id,
+-        type: 'JOB_EDIT_REQUESTED',
+-        title: `${priorityLabel} Edit request for "${job.title}"`,
+-        message: `${company.companyName} requested to edit "${job.title}". Priority: ${priority || 'MEDIUM'}. Changes: ${Object.keys(validatedChanges).join(', ')}`,
+-        data: {
+-          entityType: 'JobEditRequest',
+-          entityId: editRequest._id,
+-          actionUrl: `/admin/edit-requests/${editRequest._id}`,
+-          metadata: {
+-            jobId: job._id,
+-            jobTitle: job.title,
+-            companyName: company.companyName,
+-            priority: priority || 'MEDIUM',
+-            changedFields: Object.keys(validatedChanges),
+-            changeCount: Object.keys(validatedChanges).length
+-          }
+-        },
+-        channels: { inApp: true, email: priority === 'URGENT' },
+-        priority: priority === 'URGENT' ? 'urgent' : 'high'
+-      });
+-    }
++    notifyAdmins(); // Don't await - fire and forget
+ 
+     res.status(201).json({
+       success: true,
+@@ -1855,7 +1984,7 @@ exports.requestJobEdit = async (req, res) => {
+       }
+     });
+   } catch (error) {
+-    console.error('Request edit error:', error);
++    console.error('[COMPANY] Request edit error:', error);
+     res.status(500).json({
+       success: false,
+       message: 'Failed to create edit request',
+@@ -1905,6 +2034,7 @@ exports.getJobEditRequests = async (req, res) => {
+       }
+     });
+   } catch (error) {
++    console.error('[COMPANY] Get job edit requests error:', error);
+     res.status(500).json({
+       success: false,
+       message: 'Failed to fetch edit requests',
+@@ -1974,10 +2104,11 @@ exports.cancelEditRequest = async (req, res) => {
+       }
+     });
+   } catch (error) {
++    console.error('[COMPANY] Cancel edit request error:', error);
+     res.status(500).json({
+       success: false,
+       message: 'Failed to cancel edit request',
+       error: error.message
+     });
+   }
+-};
+\ No newline at end of file
++};
+diff --git a/controllers/staffingPartnerController.js b/controllers/staffingPartnerController.js
+index 164aed8..24fe1b4 100644
+--- a/controllers/staffingPartnerController.js
++++ b/controllers/staffingPartnerController.js
+@@ -1126,28 +1126,31 @@ exports.getMySubmissions = async (req, res) => {
+       });
+     }
+ 
+-    const { page = 1, limit = 10, status } = req.query;
++    const { limit = 10, status, cursor } = req.query;
+ 
+     const query = { submittedBy: partner._id };
+     if (status) query.status = status;
++    if (cursor) query._id = { $lt: cursor };
+ 
+     const submissions = await Candidate.find(query)
+       .populate("job", "title company commission")
+       .populate("company", "companyName")
+-      .sort({ createdAt: -1 })
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
++      .sort({ _id: -1 })
++      .limit(parseInt(limit) + 1);
+ 
+-    const total = await Candidate.countDocuments(query);
++    const hasMore = submissions.length > limit;
++    const results = hasMore ? submissions.slice(0, limit) : submissions;
++    const nextCursor =
++      results.length > 0 ? results[results.length - 1]._id : null;
+ 
+     res.json({
+       success: true,
+       data: {
+-        submissions,
++        submissions: results,
+         pagination: {
+-          current: parseInt(page),
+-          pages: Math.ceil(total / limit),
+-          total,
++          nextCursor,
++          hasMore,
++          limit: parseInt(limit),
+         },
+       },
+     });
+diff --git a/models/Candidate.js b/models/Candidate.js
+index 5f80f4d..e3dd72f 100644
+--- a/models/Candidate.js
++++ b/models/Candidate.js
+@@ -1,4 +1,4 @@
+-// backend/models/Candidate.js
++// backend/models/Candidate.js - FIXED
+ const mongoose = require('mongoose');
+ 
+ const candidateSchema = new mongoose.Schema({
+@@ -223,9 +223,11 @@ const candidateSchema = new mongoose.Schema({
+   timestamps: true
+ });
+ 
+-// Index for faster queries
++// ✅ FIX #8: Added missing indexes for high-traffic queries
+ candidateSchema.index({ job: 1, submittedBy: 1 });
+ candidateSchema.index({ email: 1, job: 1 });
+ candidateSchema.index({ status: 1 });
++candidateSchema.index({ company: 1, status: 1, createdAt: -1 }); // Company dashboard queries
++candidateSchema.index({ submittedBy: 1, createdAt: -1 }); // Partner submissions sorted by date
+ 
+ module.exports = mongoose.model('Candidate', candidateSchema);
+\ No newline at end of file
+diff --git a/models/Job.js b/models/Job.js
+index 3f142bf..b3cde39 100644
+--- a/models/Job.js
++++ b/models/Job.js
+@@ -1,4 +1,4 @@
+-// backend/models/Job.js - UPDATED VERSION
++// backend/models/Job.js - FIXED VERSION
+ const mongoose = require('mongoose');
+ 
+ const jobSchema = new mongoose.Schema({
+@@ -130,18 +130,17 @@ const jobSchema = new mongoose.Schema({
+   approvalStatus: {
+     type: String,
+     enum: [
+-      'DRAFT',              // Company is still editing
+-      'PENDING_APPROVAL',   // Submitted to admin for review
+-      'APPROVED',           // Admin approved (same as ACTIVE)
+-      'REJECTED',           // Admin rejected
+-      'ACTIVE',             // Approved and published
+-      'EDIT_REQUESTED',     // Company requested edit on active job
+-      'DISCONTINUED'        // Admin discontinued due to excessive edits
++      'DRAFT',
++      'PENDING_APPROVAL',
++      'APPROVED',
++      'REJECTED',
++      'ACTIVE',
++      'EDIT_REQUESTED',
++      'DISCONTINUED'
+     ],
+     default: 'DRAFT'
+   },
+ 
+-  // Admin approval tracking
+   approvedBy: {
+     type: mongoose.Schema.Types.ObjectId,
+     ref: 'User'
+@@ -201,7 +200,7 @@ const jobSchema = new mongoose.Schema({
+         'CLOSED'
+       ]
+     },
+-    changes: mongoose.Schema.Types.Mixed, // Detailed diff
++    changes: mongoose.Schema.Types.Mixed,
+     notes: String
+   }],
+ 
+@@ -248,6 +247,8 @@ jobSchema.index({ status: 1, eligiblePlans: 1 });
+ jobSchema.index({ slug: 1 });
+ jobSchema.index({ category: 1, status: 1 });
+ jobSchema.index({ 'location.city': 1, status: 1 });
++// ✅ FIX #8: Added missing index
++jobSchema.index({ company: 1, status: 1, createdAt: -1 });
+ 
+ // ==================== VIRTUAL FIELDS ====================
+ jobSchema.virtual('isPendingReview').get(function() {
+@@ -264,7 +265,6 @@ jobSchema.virtual('requiresApproval').get(function() {
+ 
+ // ==================== MIDDLEWARE ====================
+ 
+-// Generate slug before saving
+ jobSchema.pre('save', function(next) {
+   if (this.isModified('title') && !this.slug) {
+     this.slug = this.title
+@@ -275,7 +275,6 @@ jobSchema.pre('save', function(next) {
+   next();
+ });
+ 
+-// Generate shareable link
+ jobSchema.pre('save', function(next) {
+   if (!this.shareableLink && this.slug) {
+     this.shareableLink = `${process.env.FRONTEND_URL}/jobs/${this.slug}`;
+@@ -283,7 +282,6 @@ jobSchema.pre('save', function(next) {
+   next();
+ });
+ 
+-// Validate experience range
+ jobSchema.pre('save', function(next) {
+   if (this.experienceRange && this.experienceRange.min > this.experienceRange.max) {
+     next(new Error('Experience range min cannot be greater than max'));
+@@ -291,7 +289,6 @@ jobSchema.pre('save', function(next) {
+   next();
+ });
+ 
+-// Validate salary range
+ jobSchema.pre('save', function(next) {
+   if (this.salary && this.salary.min && this.salary.max && this.salary.min > this.salary.max) {
+     next(new Error('Salary min cannot be greater than max'));
+@@ -301,7 +298,6 @@ jobSchema.pre('save', function(next) {
+ 
+ // ==================== METHODS ====================
+ 
+-// Add to change history
+ jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, notes = '') {
+   this.changeHistory.push({
+     changedAt: new Date(),
+@@ -312,12 +308,23 @@ jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, n
+   });
+ };
+ 
+-// Check if job can accept new edit request
++// ✅ FIX #1: Proper markModified with actual field names
++jobSchema.methods.applyEditChanges = function(appliedChanges) {
++  Object.keys(appliedChanges).forEach(field => {
++    const keys = field.split('.');
++    let obj = this;
++    for (let i = 0; i < keys.length - 1; i++) {
++      obj = obj[keys[i]];
++    }
++    obj[keys[keys.length - 1]] = appliedChanges[field];
++    this.markModified(field);
++  });
++};
++
+ jobSchema.methods.canAcceptEditRequest = function() {
+   if (this.approvalStatus !== 'ACTIVE') return false;
+-  if (this.rejectedEditCount >= 5) return false; // Hard limit
++  if (this.rejectedEditCount >= 5) return false;
+   
+-  // Check for pending request
+   const JobEditRequest = mongoose.model('JobEditRequest');
+   return JobEditRequest.countDocuments({
+     job: this._id,
+@@ -325,7 +332,6 @@ jobSchema.methods.canAcceptEditRequest = function() {
+   }).then(count => count === 0);
+ };
+ 
+-// Get edit request stats
+ jobSchema.methods.getEditStats = function() {
+   return {
+     total: this.editRequestCount,
+diff --git a/models/User.js b/models/User.js
+index ff2d460..6909d34 100644
+--- a/models/User.js
++++ b/models/User.js
+@@ -29,6 +29,8 @@ const userSchema = new mongoose.Schema({
+   status: {
+     type: String,
+     enum: [
++      'PENDING_EMAIL_VERIFICATION',
++      'PENDING_MOBILE_VERIFICATION',
+       'REGISTERED',
+       'PASSWORD_CHANGED',
+       'PROFILE_INCOMPLETE',
+@@ -39,7 +41,7 @@ const userSchema = new mongoose.Schema({
+       'SUSPENDED',
+       'REJECTED'
+     ],
+-    default: 'REGISTERED'
++    default: 'PENDING_EMAIL_VERIFICATION'
+   },
+   emailVerified: {
+     type: Boolean,
+@@ -61,10 +63,9 @@ const userSchema = new mongoose.Schema({
+     code: String,
+     expiresAt: Date
+   },
+-  tempPassword: {
+-    type: String,
+-    select: false
+-  },
++  emailVerificationToken: String,
++  emailVerificationExpires: Date,
++
+   passwordResetToken: String,
+   passwordResetExpires: Date,
+   lastLogin: Date,
+diff --git a/routes/authRoutes.js b/routes/authRoutes.js
+index f4515c2..b8d80bf 100644
+--- a/routes/authRoutes.js
++++ b/routes/authRoutes.js
+@@ -4,26 +4,28 @@ const router = express.Router();
+ const {
+   initStaffingPartnerRegistration,
+   initCompanyRegistration,
+-  verifyEmailOTP,
++  verifyEmailByToken,
+   verifyMobileOTP,
+-  completeRegistration,
+   login,
+   changePassword,
+   resendOTP,
++  resendEmailVerification,
+   getMe,
+   forgotPassword,
+   resetPassword,
+-  logout, // <-- added logout here
++  logout,
+ } = require('../controllers/authController');
+ const { protect } = require('../middleware/auth');
+ 
+ // Registration routes
+ router.post('/register/staffing-partner/init', initStaffingPartnerRegistration);
+ router.post('/register/company/init', initCompanyRegistration);
+-router.post('/verify/email', verifyEmailOTP);
++
++// Verification routes
++router.get('/verify-email', verifyEmailByToken);
+ router.post('/verify/mobile', verifyMobileOTP);
+-router.post('/register/complete', completeRegistration);
+ router.post('/resend-otp', resendOTP);
++router.post('/resend-email-verification', resendEmailVerification);
+ 
+ // Login & Password
+ router.post('/login', login);
+@@ -35,6 +37,6 @@ router.post('/reset-password', resetPassword);
+ router.get('/me', protect, getMe);
+ 
+ // Logout route
+-router.post('/logout', protect, logout); // <-- added logout endpoint
++router.post('/logout', protect, logout);
+ 
+-module.exports = router;
++module.exports = router;
+\ No newline at end of file
+diff --git a/routes/companyRoutes.js b/routes/companyRoutes.js
+index f53107a..e86413f 100644
+--- a/routes/companyRoutes.js
++++ b/routes/companyRoutes.js
+@@ -20,6 +20,7 @@ const {
+   // Job Management
+   createJob,
+   getJobs,
++  getRejectedJobs,  // ✅ NEW: Added getRejectedJobs
+   getJob,
+   updateJob,
+   deleteJob,
+@@ -134,6 +135,10 @@ router.post(
+ router.post('/profile/submit', submitProfile);
+ 
+ // ==================== JOB ROUTES ====================
++
++// ✅ NEW: Must come BEFORE /jobs/:id routes to avoid route conflict
++router.get('/jobs/rejected', checkStatus('VERIFIED', 'ACTIVE'), getRejectedJobs);
++
+ router.route('/jobs')
+   .get(getJobs)
+   .post(checkStatus('VERIFIED', 'ACTIVE'), createJob);
+diff --git a/server.js b/server.js
+index 9f0168d..e7f6a23 100644
+--- a/server.js
++++ b/server.js
+@@ -1,4 +1,3 @@
+-// backend/server.js
+ 
+ const cookieParser = require('cookie-parser');
+ const express = require('express');
+@@ -72,21 +71,22 @@ app.use(express.json({ limit: '10mb' }));
+ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+ 
+ /* =========================================================
+-   COOKIE PARSER
++   COOKIE PARSER (MUST BE BEFORE CORS)
+ ========================================================= */
+ 
+ app.use(cookieParser());
+ 
+ /* =========================================================
+-   CORS CONFIGURATION
++   CORS CONFIGURATION - ✅ FIXED
+ ========================================================= */
+ 
++// ✅ IMPORTANT: CORS must come AFTER cookieParser but BEFORE routes
+ app.use(cors({
+   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+-  credentials: true,
++  credentials: true, // ✅ Essential for cookies
+   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+   allowedHeaders: ['Content-Type', 'Authorization'],
+-  exposedHeaders: ['Set-Cookie'], // ✅ Add this
++  exposedHeaders: ['Set-Cookie'],
+ }));
+ 
+ // Respond quickly to preflight
+diff --git a/services/candidateLifecycleService.js b/services/candidateLifecycleService.js
+index e44c29a..cf6f0c9 100644
+--- a/services/candidateLifecycleService.js
++++ b/services/candidateLifecycleService.js
+@@ -3,7 +3,6 @@ const Job = require('../models/Job');
+ const Company = require('../models/Company');
+ const StaffingPartner = require('../models/StaffingPartner');
+ const StatusMachine = require('../utils/statusMachine');
+-const notificationEngine = require('./notificationEngine');
+ 
+ class CandidateLifecycleService {
+ 
+@@ -78,18 +77,23 @@ class CandidateLifecycleService {
+     // ✅ Step 3: Update job metrics atomically
+     await this._updateJobMetrics(candidate.job._id, previousStatus, newStatus);
+ 
+-    // ✅ Step 4: Notify the OTHER party
++    // ✅ Step 4: Notify the OTHER party (fire-and-forget to avoid blocking)
++    // ✅ FIX #12: Don't await notifications - they run in background
+     if (userRole === 'company' || userRole === 'admin') {
+-      // Company changed status → notify partner
+-      await this._notifyPartner(candidate, previousStatus, newStatus, notes);
++      // Company changed status → notify partner (non-blocking)
++      this._notifyPartner(candidate, previousStatus, newStatus, notes)
++        .catch(err => console.error('[NOTIFY] Partner notification failed:', err.message));
+     } else if (userRole === 'staffing_partner') {
+-      // Partner withdrew → notify company
+-      await this._notifyCompany(candidate, previousStatus, newStatus, notes);
++      // Partner withdrew → notify company (non-blocking)
++      this._notifyCompany(candidate, previousStatus, newStatus, notes)
++        .catch(err => console.error('[NOTIFY] Company notification failed:', err.message));
+     }
+ 
+-    // ✅ Step 5: Handle special status actions
++    // ✅ Step 5: Handle special status actions (fire-and-forget)
++    // ✅ FIX #12: Don't await joining handler either - it's non-critical
+     if (newStatus === 'JOINED') {
+-      await this._handleJoining(candidate);
++      this._handleJoining(candidate)
++        .catch(err => console.error('[LIFECYCLE] Joining handler failed:', err.message));
+     }
+ 
+     return candidate;
+@@ -97,6 +101,7 @@ class CandidateLifecycleService {
+ 
+   /**
+    * Update job metrics using atomic $inc to avoid race conditions
++   * ✅ FIX #3: Already has error handling - metrics are non-critical
+    */
+   async _updateJobMetrics(jobId, previousStatus, newStatus) {
+     const metricsMap = {
+@@ -108,7 +113,13 @@ class CandidateLifecycleService {
+ 
+     const field = metricsMap[newStatus];
+     if (field) {
+-      await Job.findByIdAndUpdate(jobId, { $inc: { [field]: 1 } });
++      try {
++        await Job.findByIdAndUpdate(jobId, { $inc: { [field]: 1 } });
++        console.log(`[METRICS] ✅ Incremented ${field} for job ${jobId}`);
++      } catch (error) {
++        console.error(`[METRICS] ❌ Failed to update ${field}:`, error.message);
++        // Don't throw - metrics are non-critical
++      }
+     }
+   }
+ 
+@@ -117,123 +128,125 @@ class CandidateLifecycleService {
+    * This is the PRIMARY feedback loop of the platform
+    */
+   async _notifyPartner(candidate, previousStatus, newStatus, notes) {
+-    // ✅ FIX: Handle both populated and unpopulated user references
+-    let partnerUserId;
+-
+-    if (candidate.submittedBy?.user?._id) {
+-      // Fully populated: submittedBy.user is a User document
+-      partnerUserId = candidate.submittedBy.user._id;
+-    } else if (candidate.submittedBy?.user) {
+-      // Partially populated: submittedBy.user is just an ObjectId
+-      partnerUserId = candidate.submittedBy.user;
+-    } else {
+-      // Not populated at all — fetch manually
+-      console.warn(`[NOTIFY] submittedBy.user not populated for candidate ${candidate._id}`);
+-      const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
++    try {
++      // ✅ FIX #2: Lazy load to avoid circular dependency
++      const notificationEngine = require('./notificationEngine');
+       
+-      if (!partnerId) {
+-        console.error(`[NOTIFY] Cannot determine partner for candidate ${candidate._id}`);
+-        return;
+-      }
++      // ✅ FIX: Handle both populated and unpopulated user references
++      let partnerUserId;
++
++      if (candidate.submittedBy?.user?._id) {
++        // Fully populated: submittedBy.user is a User document
++        partnerUserId = candidate.submittedBy.user._id;
++      } else if (candidate.submittedBy?.user) {
++        // Partially populated: submittedBy.user is just an ObjectId
++        partnerUserId = candidate.submittedBy.user;
++      } else {
++        // Not populated at all — fetch manually
++        console.warn(`[NOTIFY] submittedBy.user not populated for candidate ${candidate._id}`);
++        const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
++        
++        if (!partnerId) {
++          console.error(`[NOTIFY] ❌ Cannot determine partner for candidate ${candidate._id}`);
++          return;
++        }
+ 
+-      const partner = await StaffingPartner.findById(partnerId).select('user');
+-      
+-      if (!partner?.user) {
+-        console.error(`[NOTIFY] Cannot find partner user for candidate ${candidate._id}`);
+-        return;
++        const partner = await StaffingPartner.findById(partnerId).select('user');
++        
++        if (!partner?.user) {
++          console.error(`[NOTIFY] ❌ Cannot find partner user for candidate ${candidate._id}`);
++          return;
++        }
++        
++        partnerUserId = partner.user;
+       }
+-      
+-      partnerUserId = partner.user;
+-    }
+ 
+-    // ✅ Safely extract values even if not populated
+-    const candidateName = `${candidate.firstName} ${candidate.lastName}`;
+-    const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
+-    const companyName = typeof candidate.company === 'object' 
+-      ? candidate.company.companyName 
+-      : 'the company';
+-
+-    const notifications = {
+-      'UNDER_REVIEW': {
+-        type: 'CANDIDATE_UNDER_REVIEW',
+-        title: '📋 Resume under review',
+-        message: `${companyName} is reviewing ${candidateName}'s profile for "${jobTitle}".`,
+-        priority: 'low',
+-        sendEmail: false
+-      },
+-      'SHORTLISTED': {
+-        type: 'CANDIDATE_SHORTLISTED',
+-        title: '🎯 Candidate shortlisted!',
+-        message: `Great news! ${candidateName} has been shortlisted for "${jobTitle}" at ${companyName}.`,
+-        priority: 'high',
+-        sendEmail: true
+-      },
+-      'INTERVIEW_SCHEDULED': {
+-        type: 'CANDIDATE_INTERVIEW_SCHEDULED',
+-        title: '📅 Interview scheduled',
+-        message: `An interview has been scheduled for ${candidateName} for "${jobTitle}" at ${companyName}.`,
+-        priority: 'high',
+-        sendEmail: true
+-      },
+-      'INTERVIEWED': {
+-        type: 'CANDIDATE_INTERVIEWED',
+-        title: '✅ Interview completed',
+-        message: `${candidateName}'s interview for "${jobTitle}" at ${companyName} has been completed.`,
+-        priority: 'medium',
+-        sendEmail: false
+-      },
+-      'OFFERED': {
+-        type: 'CANDIDATE_OFFERED',
+-        title: '🎉 Offer extended!',
+-        message: `${companyName} has made an offer to ${candidateName} for "${jobTitle}"!${notes ? ` Details: ${notes}` : ''}`,
+-        priority: 'urgent',
+-        sendEmail: true
+-      },
+-      'OFFER_ACCEPTED': {
+-        type: 'CANDIDATE_OFFER_ACCEPTED',
+-        title: '✨ Offer accepted!',
+-        message: `${candidateName} has accepted the offer for "${jobTitle}" at ${companyName}!`,
+-        priority: 'urgent',
+-        sendEmail: true
+-      },
+-      'OFFER_DECLINED': {
+-        type: 'CANDIDATE_OFFER_DECLINED',
+-        title: '😔 Offer declined',
+-        message: `${candidateName} has declined the offer for "${jobTitle}".${notes ? ` Reason: ${notes}` : ''}`,
+-        priority: 'high',
+-        sendEmail: true
+-      },
+-      'JOINED': {
+-        type: 'CANDIDATE_JOINED',
+-        title: '🚀 Candidate has joined!',
+-        // ✅ UPDATED: Removed commission reference
+-        message: `${candidateName} has officially joined ${companyName} for "${jobTitle}". Congratulations on the successful placement!`,
+-        priority: 'urgent',
+-        sendEmail: true
+-      },
+-      'REJECTED': {
+-        type: 'CANDIDATE_REJECTED',
+-        title: '❌ Candidate not selected',
+-        message: `${candidateName} was not selected for "${jobTitle}" at ${companyName}.${notes ? ` Feedback: ${notes}` : ''}`,
+-        priority: 'medium',
+-        sendEmail: true
+-      },
+-      'ON_HOLD': {
+-        type: 'CANDIDATE_ON_HOLD',
+-        title: '⏸️ Application on hold',
+-        message: `${candidateName}'s application for "${jobTitle}" has been put on hold.${notes ? ` Note: ${notes}` : ''}`,
+-        priority: 'low',
+-        sendEmail: false
+-      }
+-    };
++      // ✅ Safely extract values even if not populated
++      const candidateName = `${candidate.firstName} ${candidate.lastName}`;
++      const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
++      const companyName = typeof candidate.company === 'object' 
++        ? candidate.company.companyName 
++        : 'the company';
++
++      const notifications = {
++        'UNDER_REVIEW': {
++          type: 'CANDIDATE_UNDER_REVIEW',
++          title: '📋 Resume under review',
++          message: `${companyName} is reviewing ${candidateName}'s profile for "${jobTitle}".`,
++          priority: 'low',
++          sendEmail: false
++        },
++        'SHORTLISTED': {
++          type: 'CANDIDATE_SHORTLISTED',
++          title: '🎯 Candidate shortlisted!',
++          message: `Great news! ${candidateName} has been shortlisted for "${jobTitle}" at ${companyName}.`,
++          priority: 'high',
++          sendEmail: true
++        },
++        'INTERVIEW_SCHEDULED': {
++          type: 'CANDIDATE_INTERVIEW_SCHEDULED',
++          title: '📅 Interview scheduled',
++          message: `An interview has been scheduled for ${candidateName} for "${jobTitle}" at ${companyName}.`,
++          priority: 'high',
++          sendEmail: true
++        },
++        'INTERVIEWED': {
++          type: 'CANDIDATE_INTERVIEWED',
++          title: '✅ Interview completed',
++          message: `${candidateName}'s interview for "${jobTitle}" at ${companyName} has been completed.`,
++          priority: 'medium',
++          sendEmail: false
++        },
++        'OFFERED': {
++          type: 'CANDIDATE_OFFERED',
++          title: '🎉 Offer extended!',
++          message: `${companyName} has made an offer to ${candidateName} for "${jobTitle}"!${notes ? ` Details: ${notes}` : ''}`,
++          priority: 'urgent',
++          sendEmail: true
++        },
++        'OFFER_ACCEPTED': {
++          type: 'CANDIDATE_OFFER_ACCEPTED',
++          title: '✨ Offer accepted!',
++          message: `${candidateName} has accepted the offer for "${jobTitle}" at ${companyName}!`,
++          priority: 'urgent',
++          sendEmail: true
++        },
++        'OFFER_DECLINED': {
++          type: 'CANDIDATE_OFFER_DECLINED',
++          title: '😔 Offer declined',
++          message: `${candidateName} has declined the offer for "${jobTitle}".${notes ? ` Reason: ${notes}` : ''}`,
++          priority: 'high',
++          sendEmail: true
++        },
++        'JOINED': {
++          type: 'CANDIDATE_JOINED',
++          title: '🚀 Candidate has joined!',
++          message: `${candidateName} has officially joined ${companyName} for "${jobTitle}". Congratulations on the successful placement!`,
++          priority: 'urgent',
++          sendEmail: true
++        },
++        'REJECTED': {
++          type: 'CANDIDATE_REJECTED',
++          title: '❌ Candidate not selected',
++          message: `${candidateName} was not selected for "${jobTitle}" at ${companyName}.${notes ? ` Feedback: ${notes}` : ''}`,
++          priority: 'medium',
++          sendEmail: true
++        },
++        'ON_HOLD': {
++          type: 'CANDIDATE_ON_HOLD',
++          title: '⏸️ Application on hold',
++          message: `${candidateName}'s application for "${jobTitle}" has been put on hold.${notes ? ` Note: ${notes}` : ''}`,
++          priority: 'low',
++          sendEmail: false
++        }
++      };
+ 
+-    const notif = notifications[newStatus];
+-    if (!notif) {
+-      console.warn(`[NOTIFY] No notification template for status: ${newStatus}`);
+-      return;
+-    }
++      const notif = notifications[newStatus];
++      if (!notif) {
++        console.warn(`[NOTIFY] ⚠️ No notification template for status: ${newStatus}`);
++        return;
++      }
+ 
+-    try {
+       await notificationEngine.send({
+         recipientId: partnerUserId,
+         type: notif.type,
+@@ -264,6 +277,7 @@ class CandidateLifecycleService {
+     } catch (error) {
+       // ✅ Never let notification failure break the main flow
+       console.error(`[NOTIFY] ❌ Failed to notify partner: ${error.message}`);
++      // Don't rethrow - notifications are non-critical
+     }
+   }
+ 
+@@ -271,56 +285,66 @@ class CandidateLifecycleService {
+    * Notify company when partner withdraws a candidate
+    */
+   async _notifyCompany(candidate, previousStatus, newStatus, notes) {
+-    // ✅ FIX: Handle both populated and unpopulated company.user
+-    let companyUserId;
+-
+-    if (candidate.company?.user?._id) {
+-      companyUserId = candidate.company.user._id;
+-    } else if (candidate.company?.user) {
+-      companyUserId = candidate.company.user;
+-    } else {
+-      console.warn(`[NOTIFY] company.user not populated for candidate ${candidate._id}`);
+-      const companyId = candidate.company?._id || candidate.company;
++    try {
++      // ✅ FIX #2: Lazy load to avoid circular dependency
++      const notificationEngine = require('./notificationEngine');
+       
+-      if (!companyId) {
+-        console.error(`[NOTIFY] Cannot determine company for candidate ${candidate._id}`);
+-        return;
+-      }
++      // ✅ FIX: Handle both populated and unpopulated company.user
++      let companyUserId;
+ 
+-      const company = await Company.findById(companyId).select('user');
+-      
+-      if (!company?.user) {
+-        console.error(`[NOTIFY] Cannot find company user for candidate ${candidate._id}`);
+-        return;
++      if (candidate.company?.user?._id) {
++        companyUserId = candidate.company.user._id;
++      } else if (candidate.company?.user) {
++        companyUserId = candidate.company.user;
++      } else {
++        console.warn(`[NOTIFY] company.user not populated for candidate ${candidate._id}`);
++        const companyId = candidate.company?._id || candidate.company;
++        
++        if (!companyId) {
++          console.error(`[NOTIFY] ❌ Cannot determine company for candidate ${candidate._id}`);
++          return;
++        }
++
++        const company = await Company.findById(companyId).select('user');
++        
++        if (!company?.user) {
++          console.error(`[NOTIFY] ❌ Cannot find company user for candidate ${candidate._id}`);
++          return;
++        }
++        
++        companyUserId = company.user;
+       }
+-      
+-      companyUserId = company.user;
+-    }
+ 
+-    if (newStatus === 'WITHDRAWN') {
+-      const partnerName = candidate.submittedBy?.firmName || 'A staffing partner';
+-      const candidateName = `${candidate.firstName} ${candidate.lastName}`;
+-      const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
++      if (newStatus === 'WITHDRAWN') {
++        const partnerName = candidate.submittedBy?.firmName || 'A staffing partner';
++        const candidateName = `${candidate.firstName} ${candidate.lastName}`;
++        const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
+ 
+-      try {
+         await notificationEngine.send({
+           recipientId: companyUserId,
+-          type: 'NEW_CANDIDATE_SUBMITTED',
+-          title: 'Candidate withdrawn',
++          type: 'CANDIDATE_WITHDRAWN',
++          title: '⚠️ Candidate withdrawn',
+           message: `${partnerName} has withdrawn ${candidateName} from "${jobTitle}".${notes ? ` Reason: ${notes}` : ''}`,
+           data: {
+             entityType: 'Candidate',
+             entityId: candidate._id,
+-            actionUrl: `/company/candidates/${candidate._id}`
++            actionUrl: `/company/candidates/${candidate._id}`,
++            metadata: {
++              candidateName,
++              jobTitle,
++              partnerName,
++              notes: notes || null
++            }
+           },
+           channels: { inApp: true, email: true },
+           priority: 'medium'
+         });
+ 
+         console.log(`[NOTIFY] ✅ Notified company about withdrawal of candidate ${candidate._id}`);
+-      } catch (error) {
+-        console.error(`[NOTIFY] ❌ Failed to notify company: ${error.message}`);
+       }
++    } catch (error) {
++      console.error(`[NOTIFY] ❌ Failed to notify company: ${error.message}`);
++      // Don't rethrow - notifications are non-critical
+     }
+   }
+ 
+@@ -407,7 +431,7 @@ class CandidateLifecycleService {
+         job.filledPositions = (job.filledPositions || 0) + 1;
+         if (job.filledPositions >= job.vacancies) {
+           job.status = 'FILLED';
+-          console.log(`[LIFECYCLE] Job "${job.title}" is now FILLED`);
++          console.log(`[LIFECYCLE] ✅ Job "${job.title}" is now FILLED (${job.filledPositions}/${job.vacancies})`);
+         }
+         await job.save();
+       }
+@@ -428,7 +452,8 @@ class CandidateLifecycleService {
+       const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
+       const companyId = candidate.company?._id || candidate.company;
+ 
+-      await Promise.all([
++      // ✅ Use Promise.allSettled instead of Promise.all to handle partial failures
++      const results = await Promise.allSettled([
+         StaffingPartner.findByIdAndUpdate(partnerId, {
+           $inc: { 'metrics.totalPlacements': 1 }
+         }),
+@@ -437,9 +462,19 @@ class CandidateLifecycleService {
+         })
+       ]);
+ 
+-      console.log(`[LIFECYCLE] ✅ Updated metrics for partner ${partnerId} and company ${companyId}`);
++      // Log individual results
++      results.forEach((result, index) => {
++        const entity = index === 0 ? 'partner' : 'company';
++        if (result.status === 'fulfilled') {
++          console.log(`[LIFECYCLE] ✅ Updated metrics for ${entity}`);
++        } else {
++          console.error(`[LIFECYCLE] ❌ Failed to update ${entity} metrics:`, result.reason.message);
++        }
++      });
++
+     } catch (error) {
+-      console.error(`[LIFECYCLE] ⚠️ Metrics update error: ${error.message}`);
++      console.error(`[LIFECYCLE] ❌ Metrics update error: ${error.message}`);
++      // Don't throw - metrics are non-critical
+     }
+   }
+ 
+diff --git a/services/duplicateDetectionService.js b/services/duplicateDetectionService.js
+index 1995c14..febd010 100644
+--- a/services/duplicateDetectionService.js
++++ b/services/duplicateDetectionService.js
+@@ -21,6 +21,14 @@ const DUPLICATE_CONFIG = {
+ 
+ class DuplicateDetectionService {
+ 
++  /**
++   * ✅ FIX #5: Normalize mobile number - last 10 digits only
++   */
++  _normalizeMobile(mobile) {
++    if (!mobile) return '';
++    return mobile.replace(/\D/g, '').slice(-10); // Remove non-digits, take last 10
++  }
++
+   /**
+    * Check if a candidate can be submitted to a job
+    * Called by staffing partner BEFORE submission
+@@ -50,14 +58,19 @@ class DuplicateDetectionService {
+     };
+ 
+     const normalizedEmail = email.toLowerCase().trim();
++    // ✅ FIX #5: Normalize mobile before queries
++    const normalizedMobile = this._normalizeMobile(mobile);
+ 
+     // ═══════════════════════════════════════════════════════════════
+     // Rule 1: Same person + same job = ALWAYS HARD BLOCK
+     // ═══════════════════════════════════════════════════════════════
+     const sameJobMatch = await Candidate.findOne({
+       job: jobId,
+-      $or: [{ email: normalizedEmail }, { mobile }]
+-    }).populate('submittedBy', 'firstName lastName firmName');
++      $or: [
++        { email: normalizedEmail },
++        { mobile: new RegExp(normalizedMobile + '$') } // ✅ FIX #5: Match last 10 digits
++      ]
++    });
+ 
+     if (sameJobMatch) {
+       const isSamePartner = sameJobMatch.submittedBy?._id.toString() === partnerId.toString();
+@@ -87,7 +100,10 @@ class DuplicateDetectionService {
+     const sameCompanyMatch = await Candidate.findOne({
+       company: job.company,
+       job: { $ne: jobId },
+-      $or: [{ email: normalizedEmail }, { mobile }],
++      $or: [
++        { email: normalizedEmail },
++        { mobile: new RegExp(normalizedMobile + '$') } // ✅ FIX #5: Match last 10 digits
++      ],
+       status: { $nin: DUPLICATE_CONFIG.completedStatuses }
+     })
+       .populate('job', 'title')
+@@ -129,7 +145,10 @@ class DuplicateDetectionService {
+ 
+     const otherPartnerMatch = await Candidate.findOne({
+       submittedBy: { $ne: partnerId },
+-      $or: [{ email: normalizedEmail }, { mobile }],
++      $or: [
++        { email: normalizedEmail },
++        { mobile: new RegExp(normalizedMobile + '$') } // ✅ FIX #5: Match last 10 digits
++      ],
+       createdAt: { $gte: cooldownDate },
+       status: { $nin: DUPLICATE_CONFIG.completedStatuses }
+     })
+@@ -189,7 +208,10 @@ class DuplicateDetectionService {
+       submittedBy: partnerId,
+       job: { $ne: jobId },
+       company: { $ne: job.company },
+-      $or: [{ email: normalizedEmail }, { mobile }],
++      $or: [
++        { email: normalizedEmail },
++        { mobile: new RegExp(normalizedMobile + '$') } // ✅ FIX #5: Match last 10 digits
++      ],
+       createdAt: { $gte: selfCooldownDate },
+       status: { $nin: DUPLICATE_CONFIG.completedStatuses }
+     })
+diff --git a/services/emailService.js b/services/emailService.js
+index 2cb4c86..905857d 100644
+--- a/services/emailService.js
++++ b/services/emailService.js
+@@ -19,7 +19,6 @@ class EmailService {
+   }
+ 
+   async sendEmail(options) {
+-    // Log email in development
+     console.log('=================================================');
+     console.log('📧 Email Notification');
+     console.log(`   To: ${options.to}`);
+@@ -44,7 +43,6 @@ class EmailService {
+       return { success: true, messageId: info.messageId };
+     } catch (error) {
+       console.error('   Email error:', error.message);
+-      // Don't fail registration if email fails in development
+       if (process.env.NODE_ENV === 'development') {
+         return { success: true, error: error.message, fallback: true };
+       }
+@@ -52,12 +50,68 @@ class EmailService {
+     }
+   }
+ 
++  async sendVerificationLink(email, verifyUrl) {
++    console.log('=================================================');
++    console.log('🔗 Email Verification Link');
++    console.log(`   Email: ${email}`);
++    console.log(`   Link: ${verifyUrl}`);
++    console.log('=================================================');
++
++    const html = `
++      <!DOCTYPE html>
++      <html>
++      <head>
++        <style>
++          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
++          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
++          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
++          .header h1 { margin: 0; font-size: 24px; }
++          .content { padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb; }
++          .button { display: inline-block; padding: 14px 28px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin: 20px 0; }
++          .link-box { background: #e5e7eb; padding: 10px; border-radius: 4px; word-break: break-all; font-size: 12px; margin-top: 20px; }
++          .warning { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin: 20px 0; font-size: 14px; }
++          .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; background: #f3f4f6; border-radius: 0 0 10px 10px; }
++        </style>
++      </head>
++      <body>
++        <div class="container">
++          <div class="header">
++            <h1>🚀 Syncro1</h1>
++          </div>
++          <div class="content">
++            <h2>Verify Your Email Address</h2>
++            <p>Thank you for registering! Please click the button below to verify your email address:</p>
++            <div style="text-align: center;">
++              <a href="${verifyUrl}" class="button">Verify Email Address</a>
++            </div>
++            <div class="warning">
++              ⏰ This link is valid for <strong>30 minutes</strong> only.
++            </div>
++            <p>If the button doesn't work, copy and paste this link in your browser:</p>
++            <div class="link-box">${verifyUrl}</div>
++            <p style="margin-top: 20px;">If you didn't create an account, please ignore this email.</p>
++          </div>
++          <div class="footer">
++            <p>© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
++            <p>This is an automated message, please do not reply.</p>
++          </div>
++        </div>
++      </body>
++      </html>
++    `;
++
++    return this.sendEmail({
++      to: email,
++      subject: '🔗 Verify Your Email - Syncro1',
++      html
++    });
++  }
++
+   async sendOTP(email, otp, type = 'verification') {
+     const subject = type === 'verification' 
+       ? 'Email Verification OTP' 
+       : 'Password Reset OTP';
+ 
+-    // Always log OTP in console for development
+     console.log('=================================================');
+     console.log('🔐 OTP Generated');
+     console.log(`   Email: ${email}`);
+@@ -111,7 +165,6 @@ class EmailService {
+   }
+ 
+   async sendTempPassword(email, tempPassword, name) {
+-    // Always log temp password in console for development
+     console.log('=================================================');
+     console.log('🔑 Temporary Password Generated');
+     console.log(`   Email: ${email}`);
+@@ -294,8 +347,6 @@ class EmailService {
+     });
+   }
+ 
+-  // ==================== JOB APPROVAL EMAILS ====================
+-
+   async sendJobApproved(email, companyName, jobTitle, jobId, adminNotes) {
+     const html = `
+       <!DOCTYPE html>
+@@ -354,14 +405,9 @@ class EmailService {
+                 View Job Dashboard →
+               </a>
+             </p>
+-
+-            <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+-              💡 <strong>Tip:</strong> If you need to make changes to this job, you can request an edit from your dashboard. All edits require admin approval to maintain quality standards.
+-            </p>
+           </div>
+           <div class="footer">
+             <p>© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
+-            <p>This is an automated notification. Please do not reply to this email.</p>
+           </div>
+         </div>
+       </body>
+@@ -428,10 +474,6 @@ class EmailService {
+                 Edit Job Posting →
+               </a>
+             </p>
+-
+-            <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+-              💡 <strong>Need help?</strong> If you have questions about the feedback, please contact our support team.
+-            </p>
+           </div>
+           <div class="footer">
+             <p>© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
+@@ -565,12 +607,10 @@ class EmailService {
+             ${isWarning ? `
+               <div class="warning-box">
+                 <strong>⚠️ Warning:</strong> This job now has <strong>${rejectedCount} rejected edit request${rejectedCount > 1 ? 's' : ''}</strong>.
+-                ${rejectedCount >= 5 ? '<br><br>🚨 <strong>CRITICAL:</strong> This job may be discontinued due to excessive edit requests. We recommend creating a new job posting with finalized requirements.' : '<br><br>Multiple rejected edits may result in job discontinuation. Please ensure all requirements are finalized before requesting changes.'}
++                ${rejectedCount >= 5 ? '<br><br>🚨 <strong>CRITICAL:</strong> This job may be discontinued due to excessive edit requests.' : ''}
+               </div>
+             ` : ''}
+ 
+-            <p>The job remains active with its current details. If you need to make changes, please review the feedback and create a new edit request with the correct information.</p>
+-
+             <p style="text-align: center;">
+               <a href="${process.env.FRONTEND_URL}/company/jobs/${jobId}" class="button">
+                 View Job Details →
+@@ -605,7 +645,6 @@ class EmailService {
+           .critical-box { background: #fee2e2; border-left: 4px solid #ef4444; padding: 20px; margin: 20px 0; border-radius: 4px; color: #991b1b; }
+           .stats { background: white; border-radius: 8px; padding: 20px; margin: 20px 0; }
+           .stats-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #e5e7eb; }
+-          .next-steps { background: #dbeafe; border-left: 4px solid #3b82f6; padding: 15px; margin: 20px 0; border-radius: 4px; }
+           .button { display: inline-block; padding: 14px 28px; background: #10b981; color: white; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 20px; }
+           .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; background: #f3f4f6; border-radius: 0 0 10px 10px; }
+         </style>
+@@ -638,36 +677,16 @@ class EmailService {
+                 <span>Rejected edits:</span>
+                 <strong style="color: #ef4444;">${editStats.rejected}</strong>
+               </div>
+-              <div class="stats-row">
+-                <span>Rejection rate:</span>
+-                <strong>${editStats.rejectionRate}%</strong>
+-              </div>
+             </div>
+ 
+-            <div class="next-steps">
+-              <h3 style="margin-top: 0;">📝 Next Steps:</h3>
+-              <ol style="margin-bottom: 0;">
+-                <li>Review your job requirements and finalize all details</li>
+-                <li>Create a new job posting with clear, accurate information</li>
+-                <li>Ensure all requirements are complete before submitting</li>
+-              </ol>
+-            </div>
+-
+-            <p><strong>Important:</strong> The discontinued job is no longer visible to talent partners. Any active candidates for this job have been notified.</p>
+-
+             <p style="text-align: center;">
+               <a href="${process.env.FRONTEND_URL}/company/jobs/create" class="button">
+                 Create New Job Posting →
+               </a>
+             </p>
+-
+-            <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+-              💡 <strong>Tip:</strong> To avoid discontinuation in the future, please ensure all job details are finalized and accurate before submission. Multiple edit requests may indicate unclear requirements.
+-            </p>
+           </div>
+           <div class="footer">
+             <p>© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
+-            <p>If you have questions, please contact our support team.</p>
+           </div>
+         </div>
+       </body>
+@@ -681,7 +700,6 @@ class EmailService {
+     });
+   }
+ 
+-  // Helper method to format values in change tables
+   _formatValue(value) {
+     if (value === null || value === undefined) return '<em>Not set</em>';
+     if (typeof value === 'object') return JSON.stringify(value);
+diff --git a/services/jobAccessService.js b/services/jobAccessService.js
+index 558fd13..62c1a18 100644
+--- a/services/jobAccessService.js
++++ b/services/jobAccessService.js
+@@ -1,7 +1,8 @@
+-// backend/services/jobAccessService.js — NEW FILE
++// backend/services/jobAccessService.js — FIXED
+ 
+ const Job = require('../models/Job');
+ const Candidate = require('../models/Candidate');
++const mongoose = require('mongoose');
+ 
+ // Plan hierarchy — higher plans see everything from lower plans too
+ const PLAN_HIERARCHY = {
+@@ -28,24 +29,15 @@ class JobAccessService {
+     };
+ 
+     // Apply filters
+-    if (filters.category) {
+-      query.category = filters.category;
+-    }
+-
+-    if (filters.experienceLevel) {
+-      query.experienceLevel = filters.experienceLevel;
+-    }
+-
+-    if (filters.employmentType) {
+-      query.employmentType = filters.employmentType;
+-    }
+-
+-    if (filters.isUrgent === 'true' || filters.isUrgent === true) {
+-      query.isUrgent = true;
+-    }
++    if (filters.category) query.category = filters.category;
++    if (filters.experienceLevel) query.experienceLevel = filters.experienceLevel;
++    if (filters.employmentType) query.employmentType = filters.employmentType;
++    if (filters.isUrgent === 'true' || filters.isUrgent === true) query.isUrgent = true;
+ 
+     if (filters.location) {
+-      const escaped = filters.location.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++      // ✅ FIX #9: Limit search length to prevent DoS
++      const searchTerm = filters.location.slice(0, 100);
++      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+       query.$or = [
+         { 'location.city': new RegExp(escaped, 'i') },
+         { 'location.isRemote': true }
+@@ -53,8 +45,9 @@ class JobAccessService {
+     }
+ 
+     if (filters.search) {
+-      const escaped = filters.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+-      // Don't override $or if location already set it
++      // ✅ FIX #9: Limit search length to prevent DoS
++      const searchTerm = filters.search.slice(0, 100);
++      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+       const searchOr = [
+         { title: new RegExp(escaped, 'i') },
+         { category: new RegExp(escaped, 'i') },
+@@ -63,23 +56,15 @@ class JobAccessService {
+       ];
+ 
+       if (query.$or) {
+-        // Combine location + search with $and
+-        query.$and = [
+-          { $or: query.$or },
+-          { $or: searchOr }
+-        ];
++        query.$and = [{ $or: query.$or }, { $or: searchOr }];
+         delete query.$or;
+       } else {
+         query.$or = searchOr;
+       }
+     }
+ 
+-    if (filters.salaryMin) {
+-      query['salary.max'] = { $gte: Number(filters.salaryMin) };
+-    }
+-    if (filters.salaryMax) {
+-      query['salary.min'] = { $lte: Number(filters.salaryMax) };
+-    }
++    if (filters.salaryMin) query['salary.max'] = { $gte: Number(filters.salaryMin) };
++    if (filters.salaryMax) query['salary.min'] = { $lte: Number(filters.salaryMax) };
+ 
+     // Sorting
+     let sort = { isFeatured: -1, isUrgent: -1, createdAt: -1 }; // Default
+@@ -92,54 +77,50 @@ class JobAccessService {
+       case 'urgent': sort = { isUrgent: -1, createdAt: -1 }; break;
+     }
+ 
+-    // Pagination
+-    const page = Math.max(1, parseInt(filters.page) || 1);
+-    const limit = Math.min(50, Math.max(1, parseInt(filters.limit) || 10));
++    // ✅ FIX #10: Sanitize pagination to prevent bypass
++    const page = Math.max(1, Math.min(1000, parseInt(filters.page) || 1));
++    const limit = Math.max(1, Math.min(100, parseInt(filters.limit) || 10));
+     const skip = (page - 1) * limit;
+ 
+-    // Fetch jobs + count in parallel
+-    const [jobs, total] = await Promise.all([
+-      Job.find(query)
+-        .populate('company', 'companyName kyc.logo kyc.industry kyc.employeeCount')
+-        .sort(sort)
+-        .skip(skip)
+-        .limit(limit)
+-        .lean(),
+-      Job.countDocuments(query)
+-    ]);
++    // ✅ FIX #7: Single aggregation with $lookup (optimized N+1)
++    // Convert partnerId to ObjectId for $lookup matching
++    const partnerObjectId = mongoose.Types.ObjectId(partnerId);
+ 
+-    // Get partner's existing submissions for these jobs
+-    const jobIds = jobs.map(j => j._id);
+-    const mySubmissions = await Candidate.aggregate([
++    const jobs = await Job.aggregate([
++      { $match: query },
++      { $sort: sort },
++      { $skip: skip },
++      { $limit: limit },
+       {
+-        $match: {
+-          submittedBy: partnerId,
+-          job: { $in: jobIds }
++        $lookup: {
++          from: 'candidates',
++          let: { jobId: '$_id' },
++          pipeline: [
++            {
++              $match: {
++                $expr: {
++                  $and: [
++                    { $eq: ['$job', '$$jobId'] },
++                    { $eq: ['$submittedBy', partnerObjectId] }
++                  ]
++                }
++              }
++            },
++            { $group: { _id: null, count: { $sum: 1 }, latestStatus: { $last: '$status' } } }
++          ],
++          as: 'mySubmissions'
+         }
+       },
+       {
+-        $group: {
+-          _id: '$job',
+-          count: { $sum: 1 },
+-          latestStatus: { $last: '$status' }
++        $addFields: {
++          '_meta.mySubmissions': { $ifNull: [{ $arrayElemAt: ['$mySubmissions.count', 0] }, 0] },
++          '_meta.myLatestStatus': { $arrayElemAt: ['$mySubmissions.latestStatus', 0] }
+         }
+       }
+     ]);
+ 
+-    const submissionMap = {};
+-    mySubmissions.forEach(s => {
+-      submissionMap[s._id.toString()] = {
+-        count: s.count,
+-        latestStatus: s.latestStatus
+-      };
+-    });
+-
+-    // Enrich jobs with metadata
++    // Enrich jobs with commission and plan metadata
+     const enrichedJobs = jobs.map(job => {
+-      const jobIdStr = job._id.toString();
+-      const subs = submissionMap[jobIdStr];
+-
+-      // Commission estimate
+       let commissionEstimate = null;
+       if (job.commission && job.salary?.max) {
+         if (job.commission.type === 'percentage') {
+@@ -157,22 +138,23 @@ class JobAccessService {
+         }
+       }
+ 
+-      // Check if this is a plan-exclusive job
+       const lowestPlan = this._getLowestPlan(job.eligiblePlans || []);
+ 
+       return {
+         ...job,
+         _meta: {
+-          mySubmissions: subs ? subs.count : 0,
+-          myLatestStatus: subs ? subs.latestStatus : null,
++          ...job._meta,
+           commissionEstimate,
+           isPlanExclusive: lowestPlan !== 'FREE',
+           lowestRequiredPlan: lowestPlan,
+-          canSubmit: !subs || subs.count < (job.vacancies || 1) // Simple check
++          canSubmit: !job._meta.mySubmissions || job._meta.mySubmissions < (job.vacancies || 1)
+         }
+       };
+     });
+ 
++    // Total jobs count for pagination (still a separate query)
++    const total = await Job.countDocuments(query);
++
+     return {
+       jobs: enrichedJobs,
+       pagination: {
+@@ -192,9 +174,7 @@ class JobAccessService {
+ 
+   _getLowestPlan(plans) {
+     const order = ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM'];
+-    for (const p of order) {
+-      if (plans.includes(p)) return p;
+-    }
++    for (const p of order) if (plans.includes(p)) return p;
+     return 'PREMIUM';
+   }
+ }
+diff --git a/services/notificationEngine.js b/services/notificationEngine.js
+index 360e6cf..0448af3 100644
+--- a/services/notificationEngine.js
++++ b/services/notificationEngine.js
+@@ -2,7 +2,7 @@ const Notification = require('../models/Notification');
+ const User = require('../models/User');
+ const emailService = require('./emailService');
+ const whatsappService = require('./whatsappService');
+-
++const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+ class NotificationEngine {
+ 
+   /**
+@@ -44,8 +44,8 @@ class NotificationEngine {
+       if (!user) return notification;
+ 
+       // Send email
+-      if (channels.email && user.email) {
+-        await emailService.sendEmail({
++if (channels.email && user.email && isValidEmail(user.email)) {
++          await emailService.sendEmail({
+           to: user.email,
+           subject: title.replace(/[🎯📋📅✅🎉✨😔🚀❌⏸️⚠️💰]/g, '').trim(),
+           html: this._buildEmailTemplate(title, message, data.actionUrl)
+diff --git a/utils/sendTokenResponse.js b/utils/sendTokenResponse.js
+index 5194137..bfee7f6 100644
+--- a/utils/sendTokenResponse.js
++++ b/utils/sendTokenResponse.js
+@@ -1,19 +1,23 @@
+-// backend/utils/sendTokenResponse.js
+ module.exports = function sendTokenResponse(res, token, user, extra = {}) {
+   const isProd = process.env.NODE_ENV === 'production';
+-  const isSecure = process.env.COOKIE_SECURE === 'true'; // Add this env var
++  const isSecure = process.env.COOKIE_SECURE === 'true';
+ 
+   res.cookie('token', token, {
+     httpOnly: true,
+-    secure: isSecure,  // Explicitly control via env
++    secure: isSecure,
+     sameSite: isSecure ? 'none' : 'lax',
+     maxAge: 7 * 24 * 60 * 60 * 1000,
+-    path: '/' // Ensure cookie is sent for all routes
++    path: '/'
+   });
+ 
++  // ✅ FIXED: Token now properly nested inside data object
+   return res.json({
+     success: true,
+-    token, 
+-    data: { user, ...extra }
++    data: {
++      token,      
++      user,
++      ...extra
++    }
+   });
+ };
++

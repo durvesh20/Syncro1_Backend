@@ -1,7 +1,8 @@
-// backend/services/jobAccessService.js — NEW FILE
+// backend/services/jobAccessService.js — FIXED
 
 const Job = require('../models/Job');
 const Candidate = require('../models/Candidate');
+const mongoose = require('mongoose');
 
 // Plan hierarchy — higher plans see everything from lower plans too
 const PLAN_HIERARCHY = {
@@ -28,24 +29,15 @@ class JobAccessService {
     };
 
     // Apply filters
-    if (filters.category) {
-      query.category = filters.category;
-    }
-
-    if (filters.experienceLevel) {
-      query.experienceLevel = filters.experienceLevel;
-    }
-
-    if (filters.employmentType) {
-      query.employmentType = filters.employmentType;
-    }
-
-    if (filters.isUrgent === 'true' || filters.isUrgent === true) {
-      query.isUrgent = true;
-    }
+    if (filters.category) query.category = filters.category;
+    if (filters.experienceLevel) query.experienceLevel = filters.experienceLevel;
+    if (filters.employmentType) query.employmentType = filters.employmentType;
+    if (filters.isUrgent === 'true' || filters.isUrgent === true) query.isUrgent = true;
 
     if (filters.location) {
-      const escaped = filters.location.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // ✅ FIX #9: Limit search length to prevent DoS
+      const searchTerm = filters.location.slice(0, 100);
+      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
         { 'location.city': new RegExp(escaped, 'i') },
         { 'location.isRemote': true }
@@ -53,8 +45,9 @@ class JobAccessService {
     }
 
     if (filters.search) {
-      const escaped = filters.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      // Don't override $or if location already set it
+      // ✅ FIX #9: Limit search length to prevent DoS
+      const searchTerm = filters.search.slice(0, 100);
+      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const searchOr = [
         { title: new RegExp(escaped, 'i') },
         { category: new RegExp(escaped, 'i') },
@@ -63,23 +56,15 @@ class JobAccessService {
       ];
 
       if (query.$or) {
-        // Combine location + search with $and
-        query.$and = [
-          { $or: query.$or },
-          { $or: searchOr }
-        ];
+        query.$and = [{ $or: query.$or }, { $or: searchOr }];
         delete query.$or;
       } else {
         query.$or = searchOr;
       }
     }
 
-    if (filters.salaryMin) {
-      query['salary.max'] = { $gte: Number(filters.salaryMin) };
-    }
-    if (filters.salaryMax) {
-      query['salary.min'] = { $lte: Number(filters.salaryMax) };
-    }
+    if (filters.salaryMin) query['salary.max'] = { $gte: Number(filters.salaryMin) };
+    if (filters.salaryMax) query['salary.min'] = { $lte: Number(filters.salaryMax) };
 
     // Sorting
     let sort = { isFeatured: -1, isUrgent: -1, createdAt: -1 }; // Default
@@ -92,54 +77,50 @@ class JobAccessService {
       case 'urgent': sort = { isUrgent: -1, createdAt: -1 }; break;
     }
 
-    // Pagination
-    const page = Math.max(1, parseInt(filters.page) || 1);
-    const limit = Math.min(50, Math.max(1, parseInt(filters.limit) || 10));
+    // ✅ FIX #10: Sanitize pagination to prevent bypass
+    const page = Math.max(1, Math.min(1000, parseInt(filters.page) || 1));
+    const limit = Math.max(1, Math.min(100, parseInt(filters.limit) || 10));
     const skip = (page - 1) * limit;
 
-    // Fetch jobs + count in parallel
-    const [jobs, total] = await Promise.all([
-      Job.find(query)
-        .populate('company', 'companyName kyc.logo kyc.industry kyc.employeeCount')
-        .sort(sort)
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      Job.countDocuments(query)
-    ]);
+    // ✅ FIX #7: Single aggregation with $lookup (optimized N+1)
+    // Convert partnerId to ObjectId for $lookup matching
+    const partnerObjectId = mongoose.Types.ObjectId(partnerId);
 
-    // Get partner's existing submissions for these jobs
-    const jobIds = jobs.map(j => j._id);
-    const mySubmissions = await Candidate.aggregate([
+    const jobs = await Job.aggregate([
+      { $match: query },
+      { $sort: sort },
+      { $skip: skip },
+      { $limit: limit },
       {
-        $match: {
-          submittedBy: partnerId,
-          job: { $in: jobIds }
+        $lookup: {
+          from: 'candidates',
+          let: { jobId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $eq: ['$job', '$$jobId'] },
+                    { $eq: ['$submittedBy', partnerObjectId] }
+                  ]
+                }
+              }
+            },
+            { $group: { _id: null, count: { $sum: 1 }, latestStatus: { $last: '$status' } } }
+          ],
+          as: 'mySubmissions'
         }
       },
       {
-        $group: {
-          _id: '$job',
-          count: { $sum: 1 },
-          latestStatus: { $last: '$status' }
+        $addFields: {
+          '_meta.mySubmissions': { $ifNull: [{ $arrayElemAt: ['$mySubmissions.count', 0] }, 0] },
+          '_meta.myLatestStatus': { $arrayElemAt: ['$mySubmissions.latestStatus', 0] }
         }
       }
     ]);
 
-    const submissionMap = {};
-    mySubmissions.forEach(s => {
-      submissionMap[s._id.toString()] = {
-        count: s.count,
-        latestStatus: s.latestStatus
-      };
-    });
-
-    // Enrich jobs with metadata
+    // Enrich jobs with commission and plan metadata
     const enrichedJobs = jobs.map(job => {
-      const jobIdStr = job._id.toString();
-      const subs = submissionMap[jobIdStr];
-
-      // Commission estimate
       let commissionEstimate = null;
       if (job.commission && job.salary?.max) {
         if (job.commission.type === 'percentage') {
@@ -157,21 +138,22 @@ class JobAccessService {
         }
       }
 
-      // Check if this is a plan-exclusive job
       const lowestPlan = this._getLowestPlan(job.eligiblePlans || []);
 
       return {
         ...job,
         _meta: {
-          mySubmissions: subs ? subs.count : 0,
-          myLatestStatus: subs ? subs.latestStatus : null,
+          ...job._meta,
           commissionEstimate,
           isPlanExclusive: lowestPlan !== 'FREE',
           lowestRequiredPlan: lowestPlan,
-          canSubmit: !subs || subs.count < (job.vacancies || 1) // Simple check
+          canSubmit: !job._meta.mySubmissions || job._meta.mySubmissions < (job.vacancies || 1)
         }
       };
     });
+
+    // Total jobs count for pagination (still a separate query)
+    const total = await Job.countDocuments(query);
 
     return {
       jobs: enrichedJobs,
@@ -192,9 +174,7 @@ class JobAccessService {
 
   _getLowestPlan(plans) {
     const order = ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM'];
-    for (const p of order) {
-      if (plans.includes(p)) return p;
-    }
+    for (const p of order) if (plans.includes(p)) return p;
     return 'PREMIUM';
   }
 }

@@ -2,7 +2,7 @@ const Notification = require('../models/Notification');
 const User = require('../models/User');
 const emailService = require('./emailService');
 const whatsappService = require('./whatsappService');
-
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 class NotificationEngine {
 
   /**
@@ -44,8 +44,8 @@ class NotificationEngine {
       if (!user) return notification;
 
       // Send email
-      if (channels.email && user.email) {
-        await emailService.sendEmail({
+if (channels.email && user.email && isValidEmail(user.email)) {
+          await emailService.sendEmail({
           to: user.email,
           subject: title.replace(/[🎯📋📅✅🎉✨😔🚀❌⏸️⚠️💰]/g, '').trim(),
           html: this._buildEmailTemplate(title, message, data.actionUrl)

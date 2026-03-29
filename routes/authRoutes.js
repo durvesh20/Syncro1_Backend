@@ -4,26 +4,28 @@ const router = express.Router();
 const {
   initStaffingPartnerRegistration,
   initCompanyRegistration,
-  verifyEmailOTP,
+  verifyEmailByToken,
   verifyMobileOTP,
-  completeRegistration,
   login,
   changePassword,
   resendOTP,
+  resendEmailVerification,
   getMe,
   forgotPassword,
   resetPassword,
-  logout, // <-- added logout here
+  logout,
 } = require('../controllers/authController');
 const { protect } = require('../middleware/auth');
 
 // Registration routes
 router.post('/register/staffing-partner/init', initStaffingPartnerRegistration);
 router.post('/register/company/init', initCompanyRegistration);
-router.post('/verify/email', verifyEmailOTP);
+
+// Verification routes
+router.get('/verify-email', verifyEmailByToken);
 router.post('/verify/mobile', verifyMobileOTP);
-router.post('/register/complete', completeRegistration);
 router.post('/resend-otp', resendOTP);
+router.post('/resend-email-verification', resendEmailVerification);
 
 // Login & Password
 router.post('/login', login);
@@ -35,6 +37,6 @@ router.post('/reset-password', resetPassword);
 router.get('/me', protect, getMe);
 
 // Logout route
-router.post('/logout', protect, logout); // <-- added logout endpoint
+router.post('/logout', protect, logout);
 
 module.exports = router;

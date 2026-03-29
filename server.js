@@ -1,4 +1,3 @@
-// backend/server.js
 
 const cookieParser = require('cookie-parser');
 const express = require('express');
@@ -72,21 +71,22 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 /* =========================================================
-   COOKIE PARSER
+   COOKIE PARSER (MUST BE BEFORE CORS)
 ========================================================= */
 
 app.use(cookieParser());
 
 /* =========================================================
-   CORS CONFIGURATION
+   CORS CONFIGURATION - ✅ FIXED
 ========================================================= */
 
+// ✅ IMPORTANT: CORS must come AFTER cookieParser but BEFORE routes
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true,
+  credentials: true, // ✅ Essential for cookies
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: ['Set-Cookie'], // ✅ Add this
+  exposedHeaders: ['Set-Cookie'],
 }));
 
 // Respond quickly to preflight

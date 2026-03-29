@@ -20,6 +20,7 @@ const {
   // Job Management
   createJob,
   getJobs,
+  getRejectedJobs,  // ✅ NEW: Added getRejectedJobs
   getJob,
   updateJob,
   deleteJob,
@@ -134,6 +135,10 @@ router.post(
 router.post('/profile/submit', submitProfile);
 
 // ==================== JOB ROUTES ====================
+
+// ✅ NEW: Must come BEFORE /jobs/:id routes to avoid route conflict
+router.get('/jobs/rejected', checkStatus('VERIFIED', 'ACTIVE'), getRejectedJobs);
+
 router.route('/jobs')
   .get(getJobs)
   .post(checkStatus('VERIFIED', 'ACTIVE'), createJob);

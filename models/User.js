@@ -29,6 +29,8 @@ const userSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: [
+      'PENDING_EMAIL_VERIFICATION',
+      'PENDING_MOBILE_VERIFICATION',
       'REGISTERED',
       'PASSWORD_CHANGED',
       'PROFILE_INCOMPLETE',
@@ -39,7 +41,7 @@ const userSchema = new mongoose.Schema({
       'SUSPENDED',
       'REJECTED'
     ],
-    default: 'REGISTERED'
+    default: 'PENDING_EMAIL_VERIFICATION'
   },
   emailVerified: {
     type: Boolean,
@@ -61,10 +63,9 @@ const userSchema = new mongoose.Schema({
     code: String,
     expiresAt: Date
   },
-  tempPassword: {
-    type: String,
-    select: false
-  },
+  emailVerificationToken: String,
+  emailVerificationExpires: Date,
+
   passwordResetToken: String,
   passwordResetExpires: Date,
   lastLogin: Date,

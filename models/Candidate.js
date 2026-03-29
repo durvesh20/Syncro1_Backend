@@ -1,4 +1,4 @@
-// backend/models/Candidate.js
+// backend/models/Candidate.js - FIXED
 const mongoose = require('mongoose');
 
 const candidateSchema = new mongoose.Schema({
@@ -223,9 +223,11 @@ const candidateSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for faster queries
+// ✅ FIX #8: Added missing indexes for high-traffic queries
 candidateSchema.index({ job: 1, submittedBy: 1 });
 candidateSchema.index({ email: 1, job: 1 });
 candidateSchema.index({ status: 1 });
+candidateSchema.index({ company: 1, status: 1, createdAt: -1 }); // Company dashboard queries
+candidateSchema.index({ submittedBy: 1, createdAt: -1 }); // Partner submissions sorted by date
 
 module.exports = mongoose.model('Candidate', candidateSchema);

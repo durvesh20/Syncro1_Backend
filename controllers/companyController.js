@@ -6,6 +6,21 @@ const Candidate = require("../models/Candidate");
 const candidateLifecycleService = require("../services/candidateLifecycleService");
 const StatusMachine = require("../utils/statusMachine");
 
+// ==================== HELPER FUNCTIONS ====================
+
+/**
+ * ✅ FIX #4: Validate email format
+ */
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+/**
+ * ✅ FIX #10: Sanitize pagination to prevent abuse
+ */
+const sanitizePagination = (page, limit) => ({
+  page: Math.max(1, Math.min(1000, parseInt(page) || 1)),
+  limit: Math.max(1, Math.min(100, parseInt(limit) || 20))
+});
+
 // ==================== 1. PRIMARY ACCOUNT (Decision Maker) ====================
 
 // @desc    Update Primary Account / Basic Info
@@ -74,6 +89,7 @@ exports.updateBasicInfo = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error('[COMPANY] Update basic info error:', error);
     res.status(500).json({
       success: false,
       message: "Update failed",
@@ -150,6 +166,7 @@ exports.updateKYC = async (req, res) => {
       data: company.kyc,
     });
   } catch (error) {
+    console.error('[COMPANY] Update KYC error:', error);
     res.status(500).json({
       success: false,
       message: "Update failed",
@@ -205,6 +222,7 @@ exports.updateHiringPreferences = async (req, res) => {
       data: company.hiringPreferences,
     });
   } catch (error) {
+    console.error('[COMPANY] Update hiring preferences error:', error);
     res.status(500).json({
       success: false,
       message: "Update failed",
@@ -260,6 +278,7 @@ exports.updateBilling = async (req, res) => {
       data: company.billing,
     });
   } catch (error) {
+    console.error('[COMPANY] Update billing error:', error);
     res.status(500).json({
       success: false,
       message: "Update failed",
@@ -303,6 +322,7 @@ exports.updateTeamAccess = async (req, res) => {
       data: company.teamAccess,
     });
   } catch (error) {
+    console.error('[COMPANY] Update team access error:', error);
     res.status(500).json({
       success: false,
       message: "Update failed",
@@ -340,6 +360,14 @@ exports.addTeamMember = async (req, res) => {
       });
     }
 
+    // ✅ FIX #4: Validate email format
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid email format",
+      });
+    }
+
     const existingMember = company.teamAccess.teamMembers.find(
       (m) => m.email === email,
     );
@@ -369,6 +397,7 @@ exports.addTeamMember = async (req, res) => {
       data: company.teamAccess,
     });
   } catch (error) {
+    console.error('[COMPANY] Add team member error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to add team member",
@@ -404,6 +433,7 @@ exports.removeTeamMember = async (req, res) => {
       data: company.teamAccess,
     });
   } catch (error) {
+    console.error('[COMPANY] Remove team member error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to remove team member",
@@ -498,6 +528,7 @@ exports.updateLegalConsents = async (req, res) => {
       data: company.legalConsents,
     });
   } catch (error) {
+    console.error('[COMPANY] Update legal consents error:', error);
     res.status(500).json({
       success: false,
       message: "Update failed",
@@ -544,6 +575,7 @@ exports.uploadDocuments = async (req, res) => {
       data: company.documents,
     });
   } catch (error) {
+    console.error('[COMPANY] Upload documents error:', error);
     res.status(500).json({
       success: false,
       message: "Upload failed",
@@ -582,6 +614,7 @@ exports.getProfile = async (req, res) => {
       data: responseData,
     });
   } catch (error) {
+    console.error('[COMPANY] Get profile error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch profile",
@@ -624,6 +657,7 @@ exports.getProfileCompletion = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error('[COMPANY] Get profile completion error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch completion status",
@@ -678,6 +712,7 @@ exports.submitProfile = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error('[COMPANY] Submit profile error:', error);
     res.status(500).json({
       success: false,
       message: "Submission failed",
@@ -703,6 +738,30 @@ exports.getDashboard = async (req, res) => {
       { $match: { company: company._id } },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
+
+    // ✅ NEW: Approval status breakdown
+    const approvalStats = await Job.aggregate([
+      { $match: { company: company._id } },
+      { $group: { _id: "$approvalStatus", count: { $sum: 1 } } }
+    ]);
+
+    // ✅ NEW: Get rejected jobs for alerts
+    const rejectedJobs = await Job.find({
+      company: company._id,
+      approvalStatus: 'REJECTED'
+    })
+      .select('title rejectionReason rejectedAt')
+      .sort({ rejectedAt: -1 })
+      .limit(5); // Show top 5 most recent
+
+    // ✅ NEW: Get pending approval jobs
+    const pendingApprovalJobs = await Job.find({
+      company: company._id,
+      approvalStatus: 'PENDING_APPROVAL'
+    })
+      .select('title createdAt')
+      .sort({ createdAt: -1 })
+      .limit(5);
 
     const recentCandidates = await Candidate.find({ company: company._id })
       .populate("job", "title")
@@ -741,12 +800,43 @@ exports.getDashboard = async (req, res) => {
         },
         metrics: company.metrics,
         jobStats,
+        
+        // ✅ NEW: Approval stats
+        approvalStats: approvalStats.reduce((acc, curr) => {
+          acc[curr._id] = curr.count;
+          return acc;
+        }, {}),
+        
+        // ✅ NEW: Alerts section
+        alerts: {
+          rejectedJobs: {
+            count: rejectedJobs.length,
+            jobs: rejectedJobs.map(job => ({
+              id: job._id,
+              title: job.title,
+              reason: job.rejectionReason,
+              rejectedAt: job.rejectedAt,
+              daysAgo: Math.floor((Date.now() - new Date(job.rejectedAt)) / (1000 * 60 * 60 * 24))
+            }))
+          },
+          pendingApproval: {
+            count: pendingApprovalJobs.length,
+            jobs: pendingApprovalJobs.map(job => ({
+              id: job._id,
+              title: job.title,
+              submittedAt: job.createdAt,
+              daysAgo: Math.floor((Date.now() - new Date(job.createdAt)) / (1000 * 60 * 60 * 24))
+            }))
+          }
+        },
+        
         recentCandidates,
         hiringFunnel,
         activeJobs,
       },
     });
   } catch (error) {
+    console.error('[COMPANY] Get dashboard error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch dashboard",
@@ -778,16 +868,14 @@ exports.createJob = async (req, res) => {
       ...req.body,
       company: company._id,
       postedBy: req.user._id,
-      status: "DRAFT",              // ✅ Fixed
-      approvalStatus: "DRAFT",      // ✅ Fixed
+      status: "DRAFT",
+      approvalStatus: "DRAFT",
       eligiblePlans,
     };
 
     const job = await Job.create(jobData);
 
     company.metrics.totalJobsPosted += 1;
-    // ❌ DON'T increment activeJobs here - only after approval
-    // company.metrics.activeJobs += 1;  // Remove this line
     await company.save();
 
     console.log(
@@ -800,6 +888,7 @@ exports.createJob = async (req, res) => {
       data: job,
     });
   } catch (error) {
+    console.error('[COMPANY] Create job error:', error);
     res.status(500).json({
       success: false,
       message: "Job creation failed",
@@ -821,15 +910,20 @@ exports.getJobs = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status } = req.query;
+    // ✅ FIX #10: Sanitize pagination
+    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
+    const { status, approvalStatus } = req.query; // ✅ Added approvalStatus
 
     const query = { company: company._id };
     if (status) query.status = status;
+    if (approvalStatus) query.approvalStatus = approvalStatus; // ✅ NEW LINE
+
+    const skip = (page - 1) * limit;
 
     const jobs = await Job.find(query)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .skip(skip)
+      .limit(limit);
 
     const total = await Job.countDocuments(query);
 
@@ -838,17 +932,89 @@ exports.getJobs = async (req, res) => {
       data: {
         jobs,
         pagination: {
-          current: parseInt(page),
+          current: page,
           pages: Math.ceil(total / limit),
           total,
+          limit
         },
       },
     });
   } catch (error) {
+    console.error('[COMPANY] Get jobs error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch jobs",
       error: error.message,
+    });
+  }
+};
+
+// @desc    Get Rejected Job Posts
+// @route   GET /api/companies/jobs/rejected
+exports.getRejectedJobs = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
+
+    const query = {
+      company: company._id,
+      approvalStatus: 'REJECTED'
+    };
+
+    const skip = (page - 1) * limit;
+
+    const jobs = await Job.find(query)
+      .select('title category employmentType experienceLevel location vacancies salary rejectionReason rejectedAt createdAt')
+      .sort({ rejectedAt: -1 }) // Most recently rejected first
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Job.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        jobs: jobs.map(job => ({
+          _id: job._id,
+          title: job.title,
+          category: job.category,
+          employmentType: job.employmentType,
+          experienceLevel: job.experienceLevel,
+          location: job.location,
+          vacancies: job.vacancies,
+          salary: job.salary,
+          rejectionReason: job.rejectionReason,
+          rejectedAt: job.rejectedAt,
+          submittedAt: job.createdAt,
+          canEdit: true,
+          canResubmit: true,
+          daysAgo: Math.floor((Date.now() - new Date(job.rejectedAt)) / (1000 * 60 * 60 * 24))
+        })),
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          limit
+        },
+        message: total === 0 
+          ? '✅ No rejected jobs! All your submissions are either approved or pending review.' 
+          : `You have ${total} rejected job post${total > 1 ? 's' : ''} that need${total === 1 ? 's' : ''} revision.`
+      }
+    });
+  } catch (error) {
+    console.error('[COMPANY] Get rejected jobs error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch rejected jobs',
+      error: error.message
     });
   }
 };
@@ -871,6 +1037,7 @@ exports.getJob = async (req, res) => {
       data: job,
     });
   } catch (error) {
+    console.error('[COMPANY] Get job error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch job",
@@ -901,6 +1068,7 @@ exports.updateJob = async (req, res) => {
       data: job,
     });
   } catch (error) {
+    console.error('[COMPANY] Update job error:', error);
     res.status(500).json({
       success: false,
       message: "Update failed",
@@ -936,6 +1104,7 @@ exports.deleteJob = async (req, res) => {
       message: "Job closed successfully",
     });
   } catch (error) {
+    console.error('[COMPANY] Delete job error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to close job",
@@ -948,16 +1117,20 @@ exports.deleteJob = async (req, res) => {
 // @route   GET /api/companies/jobs/:jobId/candidates
 exports.getJobCandidates = async (req, res) => {
   try {
-    const { page = 1, limit = 10, status } = req.query;
+    // ✅ FIX #10: Sanitize pagination
+    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
+    const { status } = req.query;
 
     const query = { job: req.params.jobId };
     if (status) query.status = status;
 
+    const skip = (page - 1) * limit;
+
     const candidates = await Candidate.find(query)
       .populate("submittedBy", "firstName lastName firmName")
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .skip(skip)
+      .limit(limit);
 
     const total = await Candidate.countDocuments(query);
 
@@ -966,13 +1139,15 @@ exports.getJobCandidates = async (req, res) => {
       data: {
         candidates,
         pagination: {
-          current: parseInt(page),
+          current: page,
           pages: Math.ceil(total / limit),
           total,
+          limit
         },
       },
     });
   } catch (error) {
+    console.error('[COMPANY] Get job candidates error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch candidates",
@@ -994,17 +1169,21 @@ exports.getAllCandidates = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status } = req.query;
+    // ✅ FIX #10: Sanitize pagination
+    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
+    const { status } = req.query;
 
     const query = { company: company._id };
     if (status) query.status = status;
+
+    const skip = (page - 1) * limit;
 
     const candidates = await Candidate.find(query)
       .populate("submittedBy", "firstName lastName firmName")
       .populate("job", "title")
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .skip(skip)
+      .limit(limit);
 
     const total = await Candidate.countDocuments(query);
 
@@ -1013,13 +1192,15 @@ exports.getAllCandidates = async (req, res) => {
       data: {
         candidates,
         pagination: {
-          current: parseInt(page),
+          current: page,
           pages: Math.ceil(total / limit),
           total,
+          limit
         },
       },
     });
   } catch (error) {
+    console.error('[COMPANY] Get all candidates error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch candidates",
@@ -1077,6 +1258,7 @@ exports.getCandidate = async (req, res) => {
       data: responseData,
     });
   } catch (error) {
+    console.error('[COMPANY] Get candidate error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch candidate",
@@ -1087,7 +1269,6 @@ exports.getCandidate = async (req, res) => {
 
 // @desc    Update Candidate Status
 // @route   PUT /api/companies/candidates/:id/status
-// ✅ COMPLETE: Uses lifecycle service, validates transitions, returns next actions
 exports.updateCandidateStatus = async (req, res) => {
   try {
     const { status, notes } = req.body;
@@ -1209,6 +1390,7 @@ exports.updateCandidateStatus = async (req, res) => {
       throw error;
     }
   } catch (error) {
+    console.error('[COMPANY] Update candidate status error:', error);
     res.status(500).json({
       success: false,
       message: "Status update failed",
@@ -1240,13 +1422,23 @@ exports.scheduleInterview = async (req, res) => {
       });
     }
 
+    const { type, scheduledAt, interviewerName, interviewerEmail, meetingLink } = req.body;
+
+    // ✅ FIX #4: Validate interviewer email if provided
+    if (interviewerEmail && !isValidEmail(interviewerEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid interviewer email format",
+      });
+    }
+
     const interview = {
       round: candidate.interviews.length + 1,
-      type: req.body.type,
-      scheduledAt: req.body.scheduledAt,
-      interviewerName: req.body.interviewerName,
-      interviewerEmail: req.body.interviewerEmail,
-      meetingLink: req.body.meetingLink,
+      type,
+      scheduledAt,
+      interviewerName,
+      interviewerEmail,
+      meetingLink,
       result: "PENDING",
     };
 
@@ -1266,6 +1458,7 @@ exports.scheduleInterview = async (req, res) => {
       data: candidate,
     });
   } catch (error) {
+    console.error('[COMPANY] Schedule interview error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to schedule interview",
@@ -1326,6 +1519,7 @@ exports.updateInterviewFeedback = async (req, res) => {
       data: candidate,
     });
   } catch (error) {
+    console.error('[COMPANY] Update interview feedback error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to update feedback",
@@ -1379,6 +1573,7 @@ exports.makeOffer = async (req, res) => {
       data: candidate,
     });
   } catch (error) {
+    console.error('[COMPANY] Make offer error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to make offer",
@@ -1434,6 +1629,7 @@ exports.updateOfferResponse = async (req, res) => {
       data: candidate,
     });
   } catch (error) {
+    console.error('[COMPANY] Update offer response error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to update offer response",
@@ -1441,90 +1637,6 @@ exports.updateOfferResponse = async (req, res) => {
     });
   }
 };
-
-/* ========== CONFIRM JOINING - DISABLED (Commission system inactive) ==========
-// @desc    Confirm Joining
-// @route   POST /api/companies/candidates/:id/joining
-exports.confirmJoining = async (req, res) => {
-  try {
-    const candidate = await Candidate.findById(req.params.id).populate({
-      path: "company",
-      select: "user",
-    });
-
-    if (!candidate) {
-      return res.status(404).json({
-        success: false,
-        message: "Candidate not found",
-      });
-    }
-
-    if (candidate.company.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Not authorized",
-      });
-    }
-
-    const job = await Job.findById(candidate.job);
-    const company = await Company.findById(candidate.company._id);
-
-    candidate.joining = {
-      actualJoiningDate: req.body.joiningDate,
-      confirmed: true,
-      confirmedAt: new Date(),
-      documentsSubmitted: req.body.documentsSubmitted || false,
-    };
-    candidate.status = "JOINED";
-    candidate.statusHistory.push({
-      status: "JOINED",
-      changedBy: req.user._id,
-      notes: `Joined on ${new Date(req.body.joiningDate).toDateString()}`,
-    });
-
-    // ========== COMMISSION CALCULATION - DISABLED ==========
-    if (job && candidate.offer) {
-      const commissionAmount =
-        job.commission.type === "percentage"
-          ? (candidate.offer.salary * job.commission.value) / 100
-          : job.commission.value;
-
-      candidate.payout = {
-        commissionAmount,
-        status: "PENDING",
-      };
-    }
-    // ========== END COMMISSION ==========
-
-    if (job) {
-      job.filledPositions += 1;
-      if (job.filledPositions >= job.vacancies) {
-        job.status = "FILLED";
-      }
-      await job.save();
-    }
-
-    if (company) {
-      company.metrics.totalHires += 1;
-      await company.save();
-    }
-
-    await candidate.save();
-
-    res.json({
-      success: true,
-      message: "Joining confirmed successfully",
-      data: candidate,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to confirm joining",
-      error: error.message,
-    });
-  }
-};
-========== END CONFIRM JOINING ========== */
 
 // @desc    Add Note to Candidate
 // @route   POST /api/companies/candidates/:id/notes
@@ -1563,6 +1675,7 @@ exports.addNote = async (req, res) => {
       data: candidate.notes,
     });
   } catch (error) {
+    console.error('[COMPANY] Add note error:', error);
     res.status(500).json({
       success: false,
       message: "Failed to add note",
@@ -1570,7 +1683,6 @@ exports.addNote = async (req, res) => {
     });
   }
 };
-
 
 // ==================== JOB APPROVAL WORKFLOW ====================
 
@@ -1632,32 +1744,41 @@ exports.submitJobForApproval = async (req, res) => {
     job.addToHistory('SUBMITTED', req.user._id, {}, 'Job submitted for approval');
     await job.save();
 
-    // Notify all admins
-    const notificationEngine = require('../services/notificationEngine');
-    const adminUsers = await User.find({ role: 'admin' });
+    // ✅ FIX #12: Fire and forget for notifications (non-blocking)
+    const notifyAdmins = async () => {
+      try {
+        // ✅ FIX #2: Lazy load to avoid circular dependencies
+        const notificationEngine = require('../services/notificationEngine');
+        const adminUsers = await User.find({ role: 'admin' });
 
-    for (const admin of adminUsers) {
-      await notificationEngine.send({
-        recipientId: admin._id,
-        type: 'JOB_SUBMITTED_FOR_APPROVAL',
-        title: `New job requires approval: "${job.title}"`,
-        message: `${company.companyName} has submitted a new job posting "${job.title}" for approval.`,
-        data: {
-          entityType: 'Job',
-          entityId: job._id,
-          actionUrl: `/admin/jobs/pending/${job._id}`,
-          metadata: {
-            jobTitle: job.title,
-            companyName: company.companyName,
-            category: job.category,
-            location: `${job.location.city}, ${job.location.state}`,
-            vacancies: job.vacancies
-          }
-        },
-        channels: { inApp: true, email: true },
-        priority: 'high'
-      });
-    }
+        for (const admin of adminUsers) {
+          await notificationEngine.send({
+            recipientId: admin._id,
+            type: 'JOB_SUBMITTED_FOR_APPROVAL',
+            title: `New job requires approval: "${job.title}"`,
+            message: `${company.companyName} has submitted a new job posting "${job.title}" for approval.`,
+            data: {
+              entityType: 'Job',
+              entityId: job._id,
+              actionUrl: `/admin/jobs/pending/${job._id}`,
+              metadata: {
+                jobTitle: job.title,
+                companyName: company.companyName,
+                category: job.category,
+                location: `${job.location.city}, ${job.location.state}`,
+                vacancies: job.vacancies
+              }
+            },
+            channels: { inApp: true, email: true },
+            priority: 'high'
+          });
+        }
+      } catch (notifError) {
+        console.error('[NOTIFICATION] Failed to notify admins:', notifError.message);
+      }
+    };
+
+    notifyAdmins(); // Don't await - fire and forget
 
     res.json({
       success: true,
@@ -1670,7 +1791,7 @@ exports.submitJobForApproval = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Submit job error:', error);
+    console.error('[COMPANY] Submit job error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to submit job for approval',
@@ -1813,35 +1934,43 @@ exports.requestJobEdit = async (req, res) => {
     job.addToHistory('EDIT_REQUESTED', req.user._id, validatedChanges, changeDescription);
     await job.save();
 
-    // Notify admins
-    const notificationEngine = require('../services/notificationEngine');
-    const adminUsers = await User.find({ role: 'admin' });
+    // ✅ FIX #12: Fire and forget for notifications (non-blocking)
+    const notifyAdmins = async () => {
+      try {
+        // ✅ FIX #2: Lazy load
+        const notificationEngine = require('../services/notificationEngine');
+        const adminUsers = await User.find({ role: 'admin' });
+        const priorityLabel = { LOW: '🔵', MEDIUM: '🟡', HIGH: '🟠', URGENT: '🔴' }[priority || 'MEDIUM'];
 
-    const priorityLabel = { LOW: '🔵', MEDIUM: '🟡', HIGH: '🟠', URGENT: '🔴' }[priority || 'MEDIUM'];
+        for (const admin of adminUsers) {
+          await notificationEngine.send({
+            recipientId: admin._id,
+            type: 'JOB_EDIT_REQUESTED',
+            title: `${priorityLabel} Edit request for "${job.title}"`,
+            message: `${company.companyName} requested to edit "${job.title}". Priority: ${priority || 'MEDIUM'}. Changes: ${Object.keys(validatedChanges).join(', ')}`,
+            data: {
+              entityType: 'JobEditRequest',
+              entityId: editRequest._id,
+              actionUrl: `/admin/edit-requests/${editRequest._id}`,
+              metadata: {
+                jobId: job._id,
+                jobTitle: job.title,
+                companyName: company.companyName,
+                priority: priority || 'MEDIUM',
+                changedFields: Object.keys(validatedChanges),
+                changeCount: Object.keys(validatedChanges).length
+              }
+            },
+            channels: { inApp: true, email: priority === 'URGENT' },
+            priority: priority === 'URGENT' ? 'urgent' : 'high'
+          });
+        }
+      } catch (notifError) {
+        console.error('[NOTIFICATION] Failed to notify admins:', notifError.message);
+      }
+    };
 
-    for (const admin of adminUsers) {
-      await notificationEngine.send({
-        recipientId: admin._id,
-        type: 'JOB_EDIT_REQUESTED',
-        title: `${priorityLabel} Edit request for "${job.title}"`,
-        message: `${company.companyName} requested to edit "${job.title}". Priority: ${priority || 'MEDIUM'}. Changes: ${Object.keys(validatedChanges).join(', ')}`,
-        data: {
-          entityType: 'JobEditRequest',
-          entityId: editRequest._id,
-          actionUrl: `/admin/edit-requests/${editRequest._id}`,
-          metadata: {
-            jobId: job._id,
-            jobTitle: job.title,
-            companyName: company.companyName,
-            priority: priority || 'MEDIUM',
-            changedFields: Object.keys(validatedChanges),
-            changeCount: Object.keys(validatedChanges).length
-          }
-        },
-        channels: { inApp: true, email: priority === 'URGENT' },
-        priority: priority === 'URGENT' ? 'urgent' : 'high'
-      });
-    }
+    notifyAdmins(); // Don't await - fire and forget
 
     res.status(201).json({
       success: true,
@@ -1855,7 +1984,7 @@ exports.requestJobEdit = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Request edit error:', error);
+    console.error('[COMPANY] Request edit error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to create edit request',
@@ -1905,6 +2034,7 @@ exports.getJobEditRequests = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('[COMPANY] Get job edit requests error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch edit requests',
@@ -1974,6 +2104,7 @@ exports.cancelEditRequest = async (req, res) => {
       }
     });
   } catch (error) {
+    console.error('[COMPANY] Cancel edit request error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to cancel edit request',

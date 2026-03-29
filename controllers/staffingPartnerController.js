@@ -1126,28 +1126,31 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status } = req.query;
+    const { limit = 10, status, cursor } = req.query;
 
     const query = { submittedBy: partner._id };
     if (status) query.status = status;
+    if (cursor) query._id = { $lt: cursor };
 
     const submissions = await Candidate.find(query)
       .populate("job", "title company commission")
       .populate("company", "companyName")
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .sort({ _id: -1 })
+      .limit(parseInt(limit) + 1);
 
-    const total = await Candidate.countDocuments(query);
+    const hasMore = submissions.length > limit;
+    const results = hasMore ? submissions.slice(0, limit) : submissions;
+    const nextCursor =
+      results.length > 0 ? results[results.length - 1]._id : null;
 
     res.json({
       success: true,
       data: {
-        submissions,
+        submissions: results,
         pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(total / limit),
-          total,
+          nextCursor,
+          hasMore,
+          limit: parseInt(limit),
         },
       },
     });

@@ -1,4 +1,4 @@
-// backend/controllers/adminController.js
+// backend/controllers/adminController.js - FIXED
 const User = require('../models/User');
 const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
@@ -276,11 +276,15 @@ exports.getUsers = async (req, res) => {
       ];
     }
 
+    // ✅ FIX #10: Sanitize pagination
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+
     const users = await User.find(query)
       .select('-password')
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .skip((sanitizedPage - 1) * sanitizedLimit)
+      .limit(sanitizedLimit);
 
     const total = await User.countDocuments(query);
 
@@ -289,8 +293,8 @@ exports.getUsers = async (req, res) => {
       data: {
         users,
         pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(total / limit),
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
           total
         }
       }
@@ -426,12 +430,16 @@ exports.getPendingJobs = async (req, res) => {
 
     const query = { approvalStatus: 'PENDING_APPROVAL' };
 
+    // ✅ FIX #10: Sanitize pagination
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+
     const jobs = await Job.find(query)
       .populate('company', 'companyName kyc.industry kyc.employeeCount')
       .populate('postedBy', 'email')
       .sort({ createdAt: sortBy === 'oldest' ? 1 : -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .skip((sanitizedPage - 1) * sanitizedLimit)
+      .limit(sanitizedLimit);
 
     const total = await Job.countDocuments(query);
 
@@ -447,8 +455,8 @@ exports.getPendingJobs = async (req, res) => {
       data: {
         jobs: jobsWithAge,
         pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(total / limit),
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
           total
         },
         stats: {
@@ -657,6 +665,10 @@ exports.getPendingEditRequests = async (req, res) => {
     const query = { status: 'PENDING' };
     if (priority) query.priority = priority;
 
+    // ✅ FIX #10: Sanitize pagination
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+
     let sort = {};
     if (sortBy === 'priority') {
       // URGENT > HIGH > MEDIUM > LOW, then oldest first
@@ -673,8 +685,8 @@ exports.getPendingEditRequests = async (req, res) => {
       .populate('company', 'companyName')
       .populate('requestedBy', 'email')
       .sort(sort)
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .skip((sanitizedPage - 1) * sanitizedLimit)
+      .limit(sanitizedLimit);
 
     const total = await JobEditRequest.countDocuments(query);
 
@@ -706,8 +718,8 @@ exports.getPendingEditRequests = async (req, res) => {
       data: {
         editRequests: sortedRequests,
         pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(total / limit),
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
           total
         },
         stats: {
@@ -831,8 +843,8 @@ exports.approveEditRequest = async (req, res) => {
       }
     }
 
-    // Mark job as modified for validation
-job.markModified(fieldName);
+    // ✅ FIX #1: Use Job model method for proper markModified
+    job.applyEditChanges(appliedChanges);
 
     // Update job
     job.approvalStatus = 'ACTIVE';
@@ -1229,5 +1241,3 @@ exports._buildTimeline = (job, editRequests, changeHistory) => {
   // Sort by timestamp descending
   return events.sort((a, b) => b.timestamp - a.timestamp);
 };
-
-

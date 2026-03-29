@@ -3,7 +3,6 @@ const Job = require('../models/Job');
 const Company = require('../models/Company');
 const StaffingPartner = require('../models/StaffingPartner');
 const StatusMachine = require('../utils/statusMachine');
-const notificationEngine = require('./notificationEngine');
 
 class CandidateLifecycleService {
 
@@ -78,18 +77,23 @@ class CandidateLifecycleService {
     // ✅ Step 3: Update job metrics atomically
     await this._updateJobMetrics(candidate.job._id, previousStatus, newStatus);
 
-    // ✅ Step 4: Notify the OTHER party
+    // ✅ Step 4: Notify the OTHER party (fire-and-forget to avoid blocking)
+    // ✅ FIX #12: Don't await notifications - they run in background
     if (userRole === 'company' || userRole === 'admin') {
-      // Company changed status → notify partner
-      await this._notifyPartner(candidate, previousStatus, newStatus, notes);
+      // Company changed status → notify partner (non-blocking)
+      this._notifyPartner(candidate, previousStatus, newStatus, notes)
+        .catch(err => console.error('[NOTIFY] Partner notification failed:', err.message));
     } else if (userRole === 'staffing_partner') {
-      // Partner withdrew → notify company
-      await this._notifyCompany(candidate, previousStatus, newStatus, notes);
+      // Partner withdrew → notify company (non-blocking)
+      this._notifyCompany(candidate, previousStatus, newStatus, notes)
+        .catch(err => console.error('[NOTIFY] Company notification failed:', err.message));
     }
 
-    // ✅ Step 5: Handle special status actions
+    // ✅ Step 5: Handle special status actions (fire-and-forget)
+    // ✅ FIX #12: Don't await joining handler either - it's non-critical
     if (newStatus === 'JOINED') {
-      await this._handleJoining(candidate);
+      this._handleJoining(candidate)
+        .catch(err => console.error('[LIFECYCLE] Joining handler failed:', err.message));
     }
 
     return candidate;
@@ -97,6 +101,7 @@ class CandidateLifecycleService {
 
   /**
    * Update job metrics using atomic $inc to avoid race conditions
+   * ✅ FIX #3: Already has error handling - metrics are non-critical
    */
   async _updateJobMetrics(jobId, previousStatus, newStatus) {
     const metricsMap = {
@@ -108,7 +113,13 @@ class CandidateLifecycleService {
 
     const field = metricsMap[newStatus];
     if (field) {
-      await Job.findByIdAndUpdate(jobId, { $inc: { [field]: 1 } });
+      try {
+        await Job.findByIdAndUpdate(jobId, { $inc: { [field]: 1 } });
+        console.log(`[METRICS] ✅ Incremented ${field} for job ${jobId}`);
+      } catch (error) {
+        console.error(`[METRICS] ❌ Failed to update ${field}:`, error.message);
+        // Don't throw - metrics are non-critical
+      }
     }
   }
 
@@ -117,123 +128,125 @@ class CandidateLifecycleService {
    * This is the PRIMARY feedback loop of the platform
    */
   async _notifyPartner(candidate, previousStatus, newStatus, notes) {
-    // ✅ FIX: Handle both populated and unpopulated user references
-    let partnerUserId;
-
-    if (candidate.submittedBy?.user?._id) {
-      // Fully populated: submittedBy.user is a User document
-      partnerUserId = candidate.submittedBy.user._id;
-    } else if (candidate.submittedBy?.user) {
-      // Partially populated: submittedBy.user is just an ObjectId
-      partnerUserId = candidate.submittedBy.user;
-    } else {
-      // Not populated at all — fetch manually
-      console.warn(`[NOTIFY] submittedBy.user not populated for candidate ${candidate._id}`);
-      const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
-      
-      if (!partnerId) {
-        console.error(`[NOTIFY] Cannot determine partner for candidate ${candidate._id}`);
-        return;
-      }
-
-      const partner = await StaffingPartner.findById(partnerId).select('user');
-      
-      if (!partner?.user) {
-        console.error(`[NOTIFY] Cannot find partner user for candidate ${candidate._id}`);
-        return;
-      }
-      
-      partnerUserId = partner.user;
-    }
-
-    // ✅ Safely extract values even if not populated
-    const candidateName = `${candidate.firstName} ${candidate.lastName}`;
-    const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
-    const companyName = typeof candidate.company === 'object' 
-      ? candidate.company.companyName 
-      : 'the company';
-
-    const notifications = {
-      'UNDER_REVIEW': {
-        type: 'CANDIDATE_UNDER_REVIEW',
-        title: '📋 Resume under review',
-        message: `${companyName} is reviewing ${candidateName}'s profile for "${jobTitle}".`,
-        priority: 'low',
-        sendEmail: false
-      },
-      'SHORTLISTED': {
-        type: 'CANDIDATE_SHORTLISTED',
-        title: '🎯 Candidate shortlisted!',
-        message: `Great news! ${candidateName} has been shortlisted for "${jobTitle}" at ${companyName}.`,
-        priority: 'high',
-        sendEmail: true
-      },
-      'INTERVIEW_SCHEDULED': {
-        type: 'CANDIDATE_INTERVIEW_SCHEDULED',
-        title: '📅 Interview scheduled',
-        message: `An interview has been scheduled for ${candidateName} for "${jobTitle}" at ${companyName}.`,
-        priority: 'high',
-        sendEmail: true
-      },
-      'INTERVIEWED': {
-        type: 'CANDIDATE_INTERVIEWED',
-        title: '✅ Interview completed',
-        message: `${candidateName}'s interview for "${jobTitle}" at ${companyName} has been completed.`,
-        priority: 'medium',
-        sendEmail: false
-      },
-      'OFFERED': {
-        type: 'CANDIDATE_OFFERED',
-        title: '🎉 Offer extended!',
-        message: `${companyName} has made an offer to ${candidateName} for "${jobTitle}"!${notes ? ` Details: ${notes}` : ''}`,
-        priority: 'urgent',
-        sendEmail: true
-      },
-      'OFFER_ACCEPTED': {
-        type: 'CANDIDATE_OFFER_ACCEPTED',
-        title: '✨ Offer accepted!',
-        message: `${candidateName} has accepted the offer for "${jobTitle}" at ${companyName}!`,
-        priority: 'urgent',
-        sendEmail: true
-      },
-      'OFFER_DECLINED': {
-        type: 'CANDIDATE_OFFER_DECLINED',
-        title: '😔 Offer declined',
-        message: `${candidateName} has declined the offer for "${jobTitle}".${notes ? ` Reason: ${notes}` : ''}`,
-        priority: 'high',
-        sendEmail: true
-      },
-      'JOINED': {
-        type: 'CANDIDATE_JOINED',
-        title: '🚀 Candidate has joined!',
-        // ✅ UPDATED: Removed commission reference
-        message: `${candidateName} has officially joined ${companyName} for "${jobTitle}". Congratulations on the successful placement!`,
-        priority: 'urgent',
-        sendEmail: true
-      },
-      'REJECTED': {
-        type: 'CANDIDATE_REJECTED',
-        title: '❌ Candidate not selected',
-        message: `${candidateName} was not selected for "${jobTitle}" at ${companyName}.${notes ? ` Feedback: ${notes}` : ''}`,
-        priority: 'medium',
-        sendEmail: true
-      },
-      'ON_HOLD': {
-        type: 'CANDIDATE_ON_HOLD',
-        title: '⏸️ Application on hold',
-        message: `${candidateName}'s application for "${jobTitle}" has been put on hold.${notes ? ` Note: ${notes}` : ''}`,
-        priority: 'low',
-        sendEmail: false
-      }
-    };
-
-    const notif = notifications[newStatus];
-    if (!notif) {
-      console.warn(`[NOTIFY] No notification template for status: ${newStatus}`);
-      return;
-    }
-
     try {
+      // ✅ FIX #2: Lazy load to avoid circular dependency
+      const notificationEngine = require('./notificationEngine');
+      
+      // ✅ FIX: Handle both populated and unpopulated user references
+      let partnerUserId;
+
+      if (candidate.submittedBy?.user?._id) {
+        // Fully populated: submittedBy.user is a User document
+        partnerUserId = candidate.submittedBy.user._id;
+      } else if (candidate.submittedBy?.user) {
+        // Partially populated: submittedBy.user is just an ObjectId
+        partnerUserId = candidate.submittedBy.user;
+      } else {
+        // Not populated at all — fetch manually
+        console.warn(`[NOTIFY] submittedBy.user not populated for candidate ${candidate._id}`);
+        const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
+        
+        if (!partnerId) {
+          console.error(`[NOTIFY] ❌ Cannot determine partner for candidate ${candidate._id}`);
+          return;
+        }
+
+        const partner = await StaffingPartner.findById(partnerId).select('user');
+        
+        if (!partner?.user) {
+          console.error(`[NOTIFY] ❌ Cannot find partner user for candidate ${candidate._id}`);
+          return;
+        }
+        
+        partnerUserId = partner.user;
+      }
+
+      // ✅ Safely extract values even if not populated
+      const candidateName = `${candidate.firstName} ${candidate.lastName}`;
+      const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
+      const companyName = typeof candidate.company === 'object' 
+        ? candidate.company.companyName 
+        : 'the company';
+
+      const notifications = {
+        'UNDER_REVIEW': {
+          type: 'CANDIDATE_UNDER_REVIEW',
+          title: '📋 Resume under review',
+          message: `${companyName} is reviewing ${candidateName}'s profile for "${jobTitle}".`,
+          priority: 'low',
+          sendEmail: false
+        },
+        'SHORTLISTED': {
+          type: 'CANDIDATE_SHORTLISTED',
+          title: '🎯 Candidate shortlisted!',
+          message: `Great news! ${candidateName} has been shortlisted for "${jobTitle}" at ${companyName}.`,
+          priority: 'high',
+          sendEmail: true
+        },
+        'INTERVIEW_SCHEDULED': {
+          type: 'CANDIDATE_INTERVIEW_SCHEDULED',
+          title: '📅 Interview scheduled',
+          message: `An interview has been scheduled for ${candidateName} for "${jobTitle}" at ${companyName}.`,
+          priority: 'high',
+          sendEmail: true
+        },
+        'INTERVIEWED': {
+          type: 'CANDIDATE_INTERVIEWED',
+          title: '✅ Interview completed',
+          message: `${candidateName}'s interview for "${jobTitle}" at ${companyName} has been completed.`,
+          priority: 'medium',
+          sendEmail: false
+        },
+        'OFFERED': {
+          type: 'CANDIDATE_OFFERED',
+          title: '🎉 Offer extended!',
+          message: `${companyName} has made an offer to ${candidateName} for "${jobTitle}"!${notes ? ` Details: ${notes}` : ''}`,
+          priority: 'urgent',
+          sendEmail: true
+        },
+        'OFFER_ACCEPTED': {
+          type: 'CANDIDATE_OFFER_ACCEPTED',
+          title: '✨ Offer accepted!',
+          message: `${candidateName} has accepted the offer for "${jobTitle}" at ${companyName}!`,
+          priority: 'urgent',
+          sendEmail: true
+        },
+        'OFFER_DECLINED': {
+          type: 'CANDIDATE_OFFER_DECLINED',
+          title: '😔 Offer declined',
+          message: `${candidateName} has declined the offer for "${jobTitle}".${notes ? ` Reason: ${notes}` : ''}`,
+          priority: 'high',
+          sendEmail: true
+        },
+        'JOINED': {
+          type: 'CANDIDATE_JOINED',
+          title: '🚀 Candidate has joined!',
+          message: `${candidateName} has officially joined ${companyName} for "${jobTitle}". Congratulations on the successful placement!`,
+          priority: 'urgent',
+          sendEmail: true
+        },
+        'REJECTED': {
+          type: 'CANDIDATE_REJECTED',
+          title: '❌ Candidate not selected',
+          message: `${candidateName} was not selected for "${jobTitle}" at ${companyName}.${notes ? ` Feedback: ${notes}` : ''}`,
+          priority: 'medium',
+          sendEmail: true
+        },
+        'ON_HOLD': {
+          type: 'CANDIDATE_ON_HOLD',
+          title: '⏸️ Application on hold',
+          message: `${candidateName}'s application for "${jobTitle}" has been put on hold.${notes ? ` Note: ${notes}` : ''}`,
+          priority: 'low',
+          sendEmail: false
+        }
+      };
+
+      const notif = notifications[newStatus];
+      if (!notif) {
+        console.warn(`[NOTIFY] ⚠️ No notification template for status: ${newStatus}`);
+        return;
+      }
+
       await notificationEngine.send({
         recipientId: partnerUserId,
         type: notif.type,
@@ -264,6 +277,7 @@ class CandidateLifecycleService {
     } catch (error) {
       // ✅ Never let notification failure break the main flow
       console.error(`[NOTIFY] ❌ Failed to notify partner: ${error.message}`);
+      // Don't rethrow - notifications are non-critical
     }
   }
 
@@ -271,56 +285,66 @@ class CandidateLifecycleService {
    * Notify company when partner withdraws a candidate
    */
   async _notifyCompany(candidate, previousStatus, newStatus, notes) {
-    // ✅ FIX: Handle both populated and unpopulated company.user
-    let companyUserId;
-
-    if (candidate.company?.user?._id) {
-      companyUserId = candidate.company.user._id;
-    } else if (candidate.company?.user) {
-      companyUserId = candidate.company.user;
-    } else {
-      console.warn(`[NOTIFY] company.user not populated for candidate ${candidate._id}`);
-      const companyId = candidate.company?._id || candidate.company;
+    try {
+      // ✅ FIX #2: Lazy load to avoid circular dependency
+      const notificationEngine = require('./notificationEngine');
       
-      if (!companyId) {
-        console.error(`[NOTIFY] Cannot determine company for candidate ${candidate._id}`);
-        return;
+      // ✅ FIX: Handle both populated and unpopulated company.user
+      let companyUserId;
+
+      if (candidate.company?.user?._id) {
+        companyUserId = candidate.company.user._id;
+      } else if (candidate.company?.user) {
+        companyUserId = candidate.company.user;
+      } else {
+        console.warn(`[NOTIFY] company.user not populated for candidate ${candidate._id}`);
+        const companyId = candidate.company?._id || candidate.company;
+        
+        if (!companyId) {
+          console.error(`[NOTIFY] ❌ Cannot determine company for candidate ${candidate._id}`);
+          return;
+        }
+
+        const company = await Company.findById(companyId).select('user');
+        
+        if (!company?.user) {
+          console.error(`[NOTIFY] ❌ Cannot find company user for candidate ${candidate._id}`);
+          return;
+        }
+        
+        companyUserId = company.user;
       }
 
-      const company = await Company.findById(companyId).select('user');
-      
-      if (!company?.user) {
-        console.error(`[NOTIFY] Cannot find company user for candidate ${candidate._id}`);
-        return;
-      }
-      
-      companyUserId = company.user;
-    }
+      if (newStatus === 'WITHDRAWN') {
+        const partnerName = candidate.submittedBy?.firmName || 'A staffing partner';
+        const candidateName = `${candidate.firstName} ${candidate.lastName}`;
+        const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
 
-    if (newStatus === 'WITHDRAWN') {
-      const partnerName = candidate.submittedBy?.firmName || 'A staffing partner';
-      const candidateName = `${candidate.firstName} ${candidate.lastName}`;
-      const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
-
-      try {
         await notificationEngine.send({
           recipientId: companyUserId,
-          type: 'NEW_CANDIDATE_SUBMITTED',
-          title: 'Candidate withdrawn',
+          type: 'CANDIDATE_WITHDRAWN',
+          title: '⚠️ Candidate withdrawn',
           message: `${partnerName} has withdrawn ${candidateName} from "${jobTitle}".${notes ? ` Reason: ${notes}` : ''}`,
           data: {
             entityType: 'Candidate',
             entityId: candidate._id,
-            actionUrl: `/company/candidates/${candidate._id}`
+            actionUrl: `/company/candidates/${candidate._id}`,
+            metadata: {
+              candidateName,
+              jobTitle,
+              partnerName,
+              notes: notes || null
+            }
           },
           channels: { inApp: true, email: true },
           priority: 'medium'
         });
 
         console.log(`[NOTIFY] ✅ Notified company about withdrawal of candidate ${candidate._id}`);
-      } catch (error) {
-        console.error(`[NOTIFY] ❌ Failed to notify company: ${error.message}`);
       }
+    } catch (error) {
+      console.error(`[NOTIFY] ❌ Failed to notify company: ${error.message}`);
+      // Don't rethrow - notifications are non-critical
     }
   }
 
@@ -407,7 +431,7 @@ class CandidateLifecycleService {
         job.filledPositions = (job.filledPositions || 0) + 1;
         if (job.filledPositions >= job.vacancies) {
           job.status = 'FILLED';
-          console.log(`[LIFECYCLE] Job "${job.title}" is now FILLED`);
+          console.log(`[LIFECYCLE] ✅ Job "${job.title}" is now FILLED (${job.filledPositions}/${job.vacancies})`);
         }
         await job.save();
       }
@@ -428,7 +452,8 @@ class CandidateLifecycleService {
       const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
       const companyId = candidate.company?._id || candidate.company;
 
-      await Promise.all([
+      // ✅ Use Promise.allSettled instead of Promise.all to handle partial failures
+      const results = await Promise.allSettled([
         StaffingPartner.findByIdAndUpdate(partnerId, {
           $inc: { 'metrics.totalPlacements': 1 }
         }),
@@ -437,9 +462,19 @@ class CandidateLifecycleService {
         })
       ]);
 
-      console.log(`[LIFECYCLE] ✅ Updated metrics for partner ${partnerId} and company ${companyId}`);
+      // Log individual results
+      results.forEach((result, index) => {
+        const entity = index === 0 ? 'partner' : 'company';
+        if (result.status === 'fulfilled') {
+          console.log(`[LIFECYCLE] ✅ Updated metrics for ${entity}`);
+        } else {
+          console.error(`[LIFECYCLE] ❌ Failed to update ${entity} metrics:`, result.reason.message);
+        }
+      });
+
     } catch (error) {
-      console.error(`[LIFECYCLE] ⚠️ Metrics update error: ${error.message}`);
+      console.error(`[LIFECYCLE] ❌ Metrics update error: ${error.message}`);
+      // Don't throw - metrics are non-critical
     }
   }
 

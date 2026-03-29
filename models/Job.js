@@ -1,4 +1,4 @@
-// backend/models/Job.js - UPDATED VERSION
+// backend/models/Job.js - FIXED VERSION
 const mongoose = require('mongoose');
 
 const jobSchema = new mongoose.Schema({
@@ -130,18 +130,17 @@ const jobSchema = new mongoose.Schema({
   approvalStatus: {
     type: String,
     enum: [
-      'DRAFT',              // Company is still editing
-      'PENDING_APPROVAL',   // Submitted to admin for review
-      'APPROVED',           // Admin approved (same as ACTIVE)
-      'REJECTED',           // Admin rejected
-      'ACTIVE',             // Approved and published
-      'EDIT_REQUESTED',     // Company requested edit on active job
-      'DISCONTINUED'        // Admin discontinued due to excessive edits
+      'DRAFT',
+      'PENDING_APPROVAL',
+      'APPROVED',
+      'REJECTED',
+      'ACTIVE',
+      'EDIT_REQUESTED',
+      'DISCONTINUED'
     ],
     default: 'DRAFT'
   },
 
-  // Admin approval tracking
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -201,7 +200,7 @@ const jobSchema = new mongoose.Schema({
         'CLOSED'
       ]
     },
-    changes: mongoose.Schema.Types.Mixed, // Detailed diff
+    changes: mongoose.Schema.Types.Mixed,
     notes: String
   }],
 
@@ -248,6 +247,8 @@ jobSchema.index({ status: 1, eligiblePlans: 1 });
 jobSchema.index({ slug: 1 });
 jobSchema.index({ category: 1, status: 1 });
 jobSchema.index({ 'location.city': 1, status: 1 });
+// ✅ FIX #8: Added missing index
+jobSchema.index({ company: 1, status: 1, createdAt: -1 });
 
 // ==================== VIRTUAL FIELDS ====================
 jobSchema.virtual('isPendingReview').get(function() {
@@ -264,7 +265,6 @@ jobSchema.virtual('requiresApproval').get(function() {
 
 // ==================== MIDDLEWARE ====================
 
-// Generate slug before saving
 jobSchema.pre('save', function(next) {
   if (this.isModified('title') && !this.slug) {
     this.slug = this.title
@@ -275,7 +275,6 @@ jobSchema.pre('save', function(next) {
   next();
 });
 
-// Generate shareable link
 jobSchema.pre('save', function(next) {
   if (!this.shareableLink && this.slug) {
     this.shareableLink = `${process.env.FRONTEND_URL}/jobs/${this.slug}`;
@@ -283,7 +282,6 @@ jobSchema.pre('save', function(next) {
   next();
 });
 
-// Validate experience range
 jobSchema.pre('save', function(next) {
   if (this.experienceRange && this.experienceRange.min > this.experienceRange.max) {
     next(new Error('Experience range min cannot be greater than max'));
@@ -291,7 +289,6 @@ jobSchema.pre('save', function(next) {
   next();
 });
 
-// Validate salary range
 jobSchema.pre('save', function(next) {
   if (this.salary && this.salary.min && this.salary.max && this.salary.min > this.salary.max) {
     next(new Error('Salary min cannot be greater than max'));
@@ -301,7 +298,6 @@ jobSchema.pre('save', function(next) {
 
 // ==================== METHODS ====================
 
-// Add to change history
 jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, notes = '') {
   this.changeHistory.push({
     changedAt: new Date(),
@@ -312,12 +308,23 @@ jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, n
   });
 };
 
-// Check if job can accept new edit request
+// ✅ FIX #1: Proper markModified with actual field names
+jobSchema.methods.applyEditChanges = function(appliedChanges) {
+  Object.keys(appliedChanges).forEach(field => {
+    const keys = field.split('.');
+    let obj = this;
+    for (let i = 0; i < keys.length - 1; i++) {
+      obj = obj[keys[i]];
+    }
+    obj[keys[keys.length - 1]] = appliedChanges[field];
+    this.markModified(field);
+  });
+};
+
 jobSchema.methods.canAcceptEditRequest = function() {
   if (this.approvalStatus !== 'ACTIVE') return false;
-  if (this.rejectedEditCount >= 5) return false; // Hard limit
+  if (this.rejectedEditCount >= 5) return false;
   
-  // Check for pending request
   const JobEditRequest = mongoose.model('JobEditRequest');
   return JobEditRequest.countDocuments({
     job: this._id,
@@ -325,7 +332,6 @@ jobSchema.methods.canAcceptEditRequest = function() {
   }).then(count => count === 0);
 };
 
-// Get edit request stats
 jobSchema.methods.getEditStats = function() {
   return {
     total: this.editRequestCount,
