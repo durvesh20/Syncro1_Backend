@@ -185,7 +185,7 @@ const staffingPartnerSchema = new mongoose.Schema({
       default: 'Unregistered'
     },
     tdsApplicable: { type: Boolean, default: true },
-    
+
     // Bank Details
     bankAccountHolderName: String,
     bankName: String,
@@ -238,14 +238,19 @@ const staffingPartnerSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true },
     autoRenew: { type: Boolean, default: false }
   },
-
   // ==================== PERFORMANCE METRICS ====================
   metrics: {
     totalSubmissions: { type: Number, default: 0 },
     totalPlacements: { type: Number, default: 0 },
-    totalEarnings: { type: Number, default: 0 },
-    pendingPayouts: { type: Number, default: 0 },
-    rating: { type: Number, default: 0, min: 0, max: 5 }
+    // Commission tracking
+    totalEarnings: { type: Number, default: 0 },      // Lifetime earnings (sum of all paid commissions)
+    pendingPayouts: { type: Number, default: 0 },     // Commissions waiting for 90-day period
+    eligiblePayouts: { type: Number, default: 0 },    // Ready for withdrawal
+    paidOut: { type: Number, default: 0 },            // Already paid to bank
+    forfeitedAmount: { type: Number, default: 0 },    // Lost due to early exits
+    // Rating
+    rating: { type: Number, default: 0, min: 0, max: 5 },
+    totalRatings: { type: Number, default: 0 }
   },
 
   // ==================== VERIFICATION ====================
@@ -275,11 +280,11 @@ const staffingPartnerSchema = new mongoose.Schema({
   timestamps: true
 });
 
-staffingPartnerSchema.virtual('fullName').get(function() {
+staffingPartnerSchema.virtual('fullName').get(function () {
   return `${this.firstName} ${this.lastName}`;
 });
 
-staffingPartnerSchema.methods.getProfileCompletionPercentage = function() {
+staffingPartnerSchema.methods.getProfileCompletionPercentage = function () {
   const fields = Object.values(this.profileCompletion);
   const completed = fields.filter(Boolean).length;
   return Math.round((completed / fields.length) * 100);

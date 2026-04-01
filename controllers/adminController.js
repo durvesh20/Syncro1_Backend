@@ -100,9 +100,9 @@ exports.verifyPartner = async (req, res) => {
       partner.verifiedBy = req.user._id;
       partner.verifiedAt = new Date();
       partner.verificationNotes = notes;
-      
+
       user.status = 'VERIFIED';
-      
+
       // Send approval email
       await emailService.sendVerificationApproved(user.email, partner.fullName, 'staffing_partner');
     } else if (action === 'reject') {
@@ -141,12 +141,12 @@ exports.verifyCompany = async (req, res) => {
       company.verifiedBy = req.user._id;
       company.verifiedAt = new Date();
       company.verificationNotes = notes;
-      
+
       user.status = 'VERIFIED';
-      
+
       // ✅ Use decisionMakerName directly
       await emailService.sendVerificationApproved(
-        user.email, 
+        user.email,
         company.decisionMakerName,  // ✅ Full name
         'company'
       );
@@ -173,8 +173,452 @@ exports.verifyCompany = async (req, res) => {
   }
 };
 
-/* ========== PAYOUT ROUTES - DISABLED ==========
-// @desc    Manage Payouts
+
+// ==================== PAYOUT MANAGEMENT ====================
+
+// @desc    Get all payouts
+// @route   GET /api/admin/payouts
+exports.getPayouts = async (req, res) => {
+  try {
+    const Payout = require('../models/Payout');
+    const { status, page = 1, limit = 20, partnerId, search } = req.query;
+
+    const query = {};
+    if (status) query.status = status;
+    if (partnerId) query.staffingPartner = partnerId;
+
+    // Sanitize pagination
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    const [payouts, total] = await Promise.all([
+      Payout.find(query)
+        .populate('staffingPartner', 'firstName lastName firmName commercialDetails user')
+        .populate('candidate', 'firstName lastName')
+        .populate('job', 'title')
+        .populate('company', 'companyName')
+        .populate('approvedBy', 'email')
+        .populate('partnerInvoice', 'invoiceNumber')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(sanitizedLimit),
+      Payout.countDocuments(query)
+    ]);
+
+    // Add computed fields
+    const enrichedPayouts = payouts.map(p => ({
+      ...p.toObject(),
+      daysRemaining: p.getDaysRemaining(),
+      isEligible: p.checkEligibility()
+    }));
+
+    // Summary by status
+    const summary = await Payout.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$amount.netPayable' }
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        payouts: enrichedPayouts,
+        summary: summary.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, amount: item.totalAmount };
+          return acc;
+        }, {}),
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[ADMIN] Get payouts error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch payouts',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single payout details
+// @route   GET /api/admin/payouts/:id
+exports.getPayout = async (req, res) => {
+  try {
+    const Payout = require('../models/Payout');
+
+    const payout = await Payout.findById(req.params.id)
+      .populate('staffingPartner', 'firstName lastName firmName commercialDetails user')
+      .populate('candidate', 'firstName lastName email offer joining commission')
+      .populate('job', 'title company')
+      .populate('company', 'companyName')
+      .populate('approvedBy', 'email')
+      .populate('partnerInvoice');
+
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payout not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        payout: {
+          ...payout.toObject(),
+          daysRemaining: payout.getDaysRemaining(),
+          isEligible: payout.checkEligibility()
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch payout',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Approve payout
+// @route   PUT /api/admin/payouts/:id/approve
+exports.approvePayout = async (req, res) => {
+  try {
+    const Payout = require('../models/Payout');
+    const { notes } = req.body;
+
+    const payout = await Payout.findById(req.params.id)
+      .populate('staffingPartner', 'firstName lastName firmName user')
+      .populate('candidate', 'firstName lastName');
+
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payout not found'
+      });
+    }
+
+    // Validate status
+    if (payout.status !== 'ELIGIBLE') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot approve payout with status: ${payout.status}`,
+        hint: payout.status === 'PENDING'
+          ? `Wait until ${payout.replacementGuarantee.endDate.toDateString()} (${payout.getDaysRemaining()} days remaining)`
+          : null
+      });
+    }
+
+    // Approve
+    payout.approve(req.user._id, notes);
+    await payout.save();
+
+    // Notify partner
+    const notificationEngine = require('../services/notificationEngine');
+    if (payout.staffingPartner.user) {
+      await notificationEngine.send({
+        recipientId: payout.staffingPartner.user._id || payout.staffingPartner.user,
+        type: 'PAYOUT_APPROVED',
+        title: '✅ Payout Approved!',
+        message: `Your payout of ₹${payout.amount.netPayable.toLocaleString('en-IN')} for ${payout.candidate.firstName} ${payout.candidate.lastName} has been approved and will be processed soon.`,
+        data: {
+          entityType: 'Payout',
+          entityId: payout._id,
+          actionUrl: '/partner/earnings'
+        },
+        channels: { inApp: true, email: true },
+        priority: 'high'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Payout approved successfully',
+      data: payout
+    });
+  } catch (error) {
+    console.error('[ADMIN] Approve payout error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to approve payout'
+    });
+  }
+};
+
+// @desc    Process payout (mark as paid)
+// @route   PUT /api/admin/payouts/:id/process
+exports.processPayout = async (req, res) => {
+  try {
+    const Payout = require('../models/Payout');
+    const Candidate = require('../models/Candidate');
+    const commissionService = require('../services/commissionService');
+
+    const { transactionId, utrNumber, paymentMethod, notes } = req.body;
+
+    if (!transactionId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transaction ID is required'
+      });
+    }
+
+    const payout = await Payout.findById(req.params.id)
+      .populate('staffingPartner', 'firstName lastName firmName user commercialDetails')
+      .populate('candidate', 'firstName lastName');
+
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payout not found'
+      });
+    }
+
+    if (payout.status !== 'APPROVED') {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot process payout with status: ${payout.status}. Must be APPROVED first.`
+      });
+    }
+
+    // Mark as paid
+    payout.markPaid({
+      method: paymentMethod || 'BANK_TRANSFER',
+      transactionId,
+      utrNumber,
+      bankDetails: payout.staffingPartner.commercialDetails
+    }, req.user._id);
+
+    if (notes) payout.notes = notes;
+    await payout.save();
+
+    // Update candidate payout status
+    await Candidate.findByIdAndUpdate(payout.candidate._id, {
+      'payout.status': 'PAID',
+      'payout.paidAt': new Date(),
+      'payout.transactionId': transactionId,
+      'payout.utrNumber': utrNumber,
+      'payout.paymentMethod': paymentMethod || 'BANK_TRANSFER'
+    });
+
+    // Update partner metrics
+    await commissionService._updatePartnerMetrics(
+      payout.staffingPartner._id,
+      payout.amount.netPayable,
+      'mark_paid'
+    );
+
+    // Notify partner
+    const notificationEngine = require('../services/notificationEngine');
+    if (payout.staffingPartner.user) {
+      await notificationEngine.send({
+        recipientId: payout.staffingPartner.user._id || payout.staffingPartner.user,
+        type: 'PAYOUT_PAID',
+        title: '💰 Payment Credited!',
+        message: `₹${payout.amount.netPayable.toLocaleString('en-IN')} has been transferred to your bank account.\n\nTransaction ID: ${transactionId}\n${utrNumber ? `UTR: ${utrNumber}` : ''}`,
+        data: {
+          entityType: 'Payout',
+          entityId: payout._id,
+          actionUrl: '/partner/earnings',
+          metadata: {
+            amount: payout.amount.netPayable,
+            transactionId,
+            utrNumber
+          }
+        },
+        channels: { inApp: true, email: true, whatsapp: true },
+        priority: 'urgent'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Payout processed successfully',
+      data: payout
+    });
+  } catch (error) {
+    console.error('[ADMIN] Process payout error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to process payout'
+    });
+  }
+};
+
+// @desc    Put payout on hold
+// @route   PUT /api/admin/payouts/:id/hold
+exports.holdPayout = async (req, res) => {
+  try {
+    const Payout = require('../models/Payout');
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({
+        success: false,
+        message: 'Hold reason is required'
+      });
+    }
+
+    const payout = await Payout.findById(req.params.id);
+
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payout not found'
+      });
+    }
+
+    if (!['PENDING', 'ELIGIBLE', 'APPROVED'].includes(payout.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot hold payout with status: ${payout.status}`
+      });
+    }
+
+    payout.status = 'ON_HOLD';
+    payout.heldBy = req.user._id;
+    payout.heldAt = new Date();
+    payout.holdReason = reason;
+    payout.addHistory('HELD', req.user._id, reason);
+    await payout.save();
+
+    res.json({
+      success: true,
+      message: 'Payout put on hold',
+      data: payout
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to hold payout',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Release payout from hold
+// @route   PUT /api/admin/payouts/:id/release
+exports.releasePayout = async (req, res) => {
+  try {
+    const Payout = require('../models/Payout');
+    const { notes } = req.body;
+
+    const payout = await Payout.findById(req.params.id);
+
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payout not found'
+      });
+    }
+
+    if (payout.status !== 'ON_HOLD') {
+      return res.status(400).json({
+        success: false,
+        message: 'Payout is not on hold'
+      });
+    }
+
+    // Determine new status based on eligibility
+    const newStatus = payout.checkEligibility() ? 'ELIGIBLE' : 'PENDING';
+
+    payout.status = newStatus;
+    payout.releasedBy = req.user._id;
+    payout.releasedAt = new Date();
+    payout.addHistory('RELEASED', req.user._id, notes || 'Released from hold');
+    await payout.save();
+
+    res.json({
+      success: true,
+      message: `Payout released, status: ${newStatus}`,
+      data: payout
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to release payout',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Mark candidate as left early (forfeit payout)
+// @route   POST /api/admin/payouts/:id/forfeit
+exports.forfeitPayout = async (req, res) => {
+  try {
+    const commissionService = require('../services/commissionService');
+    const Payout = require('../models/Payout');
+    const { leftDate, reason } = req.body;
+
+    if (!leftDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Left date is required'
+      });
+    }
+
+    const payout = await Payout.findById(req.params.id);
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payout not found'
+      });
+    }
+
+    if (payout.status === 'PAID') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot forfeit already paid payout'
+      });
+    }
+
+    const result = await commissionService.handleCandidateLeftEarly(
+      payout.candidate,
+      leftDate,
+      req.user._id
+    );
+
+    res.json({
+      success: true,
+      message: 'Payout forfeited due to candidate early exit',
+      data: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to forfeit payout'
+    });
+  }
+};
+
+// @desc    Run eligibility check (manual trigger - also runs via cron)
+// @route   POST /api/admin/payouts/check-eligibility
+exports.checkPayoutEligibility = async (req, res) => {
+  try {
+    const commissionService = require('../services/commissionService');
+    const result = await commissionService.checkEligiblePayouts();
+
+    res.json({
+      success: true,
+      message: `Processed ${result.processed} payouts`,
+      data: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check eligibility',
+      error: error.message
+    });
+  }
+};// @desc    Manage Payouts
 // @route   GET /api/admin/payouts
 exports.getPayouts = async (req, res) => {
   try {
@@ -258,7 +702,6 @@ exports.processPayout = async (req, res) => {
     });
   }
 };
-========== END PAYOUT ROUTES ========== */
 
 // @desc    Get All Users
 // @route   GET /api/admin/users
@@ -342,7 +785,7 @@ exports.getAnalytics = async (req, res) => {
     // Calculate date range
     const endDate = new Date();
     let startDate = new Date();
-    
+
     switch (period) {
       case '7d':
         startDate.setDate(startDate.getDate() - 7);
@@ -374,8 +817,8 @@ exports.getAnalytics = async (req, res) => {
 
     // Placement trends
     const placementTrends = await Candidate.aggregate([
-      { 
-        $match: { 
+      {
+        $match: {
           status: 'JOINED',
           'joining.confirmedAt': { $gte: startDate, $lte: endDate }
         }
@@ -822,21 +1265,21 @@ exports.approveEditRequest = async (req, res) => {
       try {
         const keys = field.split('.');
         let target = job;
-        
+
         // Navigate to the nested field
         for (let i = 0; i < keys.length - 1; i++) {
           if (!target[keys[i]]) target[keys[i]] = {};
           target = target[keys[i]];
         }
-        
+
         const lastKey = keys[keys.length - 1];
         const oldValue = target[lastKey];
-        
+
         appliedChanges[field] = {
           old: oldValue,
           new: change.new
         };
-        
+
         target[lastKey] = change.new;
       } catch (err) {
         console.error(`Failed to apply change for field ${field}:`, err);
@@ -1022,7 +1465,7 @@ exports.rejectEditRequest = async (req, res) => {
         jobStats,
         warning: shouldWarn ? {
           level: shouldDiscontinue ? 'CRITICAL' : 'WARNING',
-          message: shouldDiscontinue 
+          message: shouldDiscontinue
             ? '5+ rejected edits. Consider discontinuing this job.'
             : '3+ rejected edits. Monitor for excessive edit requests.',
           rejectedEditCount: job.rejectedEditCount
@@ -1149,7 +1592,7 @@ exports.discontinueJob = async (req, res) => {
 exports.getJobEditHistory = async (req, res) => {
   try {
     const JobEditRequest = require('../models/JobEditRequest');
-    
+
     const job = await Job.findById(req.params.id)
       .populate('company', 'companyName')
       .populate('approvedBy', 'email')

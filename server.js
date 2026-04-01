@@ -125,8 +125,7 @@ app.use('/api/payments', require('./routes/paymentRoutes'));
 
 // ✅ Newly added routes
 app.use('/api/notifications', require('./routes/notificationRoutes'));
-// app.use('/api/invoices', require('./routes/invoiceRoutes')); // DISABLED - Payout system inactive
-
+app.use('/api/invoices', require('./routes/invoiceRoutes'));
 /* =========================================================
    ERROR HANDLER
 ========================================================= */
@@ -204,15 +203,15 @@ const server = app.listen(PORT, () => {
   console.log('   ───────────────────────────────────────────────────');
   console.log(
     '   WhatsApp:   ' +
-      (process.env.WHATSAPP_ENABLED === 'true'
-        ? '✅ Enabled'
-        : '⏸️  Disabled (Mock)')
+    (process.env.WHATSAPP_ENABLED === 'true'
+      ? '✅ Enabled'
+      : '⏸️  Disabled (Mock)')
   );
   console.log(
     '   Payments:   ' +
-      (process.env.PAYMENT_ENABLED === 'true'
-        ? '✅ Enabled'
-        : '⏸️  Disabled (Mock)')
+    (process.env.PAYMENT_ENABLED === 'true'
+      ? '✅ Enabled'
+      : '⏸️  Disabled (Mock)')
   );
   console.log('═══════════════════════════════════════════════════════');
   console.log('');

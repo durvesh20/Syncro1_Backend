@@ -1,31 +1,27 @@
-// backend/routes/invoiceRoutes.js — DISABLED (Payout/Invoice system inactive)
+// backend/routes/invoiceRoutes.js - COMPLETE REWRITE
 
 const express = require('express');
 const router = express.Router();
 const {
   getInvoices,
   getInvoice,
+  generateCompanyInvoice,
   sendInvoice,
-  recordPayment
+  recordPayment,
+  cancelInvoice
 } = require('../controllers/invoiceController');
 const { protect, authorize } = require('../middleware/auth');
 
 router.use(protect);
 
-// ========== INVOICE ROUTES - ALL DISABLED ==========
-// These routes are kept for backward compatibility but return
-// "Invoice system is currently disabled" messages from controller stubs
-
-// All roles can view their invoices (returns empty array)
+// All authenticated users can view their invoices
 router.get('/', getInvoices);
 router.get('/:id', getInvoice);
 
-// Admin only (returns disabled message)
+// Admin only routes
+router.post('/company', authorize('admin'), generateCompanyInvoice);
 router.put('/:id/send', authorize('admin'), sendInvoice);
-
-// Admin or Company can record payment (returns disabled message)
 router.put('/:id/payment', authorize('admin', 'company'), recordPayment);
-
-// ========== END INVOICE ROUTES ==========
+router.put('/:id/cancel', authorize('admin'), cancelInvoice);
 
 module.exports = router;

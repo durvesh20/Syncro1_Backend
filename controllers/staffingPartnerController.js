@@ -1205,41 +1205,69 @@ exports.getDashboard = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
     // Get recent submissions
     const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
-      .populate("job", "title")
-      .populate("company", "companyName")
+      .populate('job', 'title')
+      .populate('company', 'companyName')
       .sort({ createdAt: -1 })
       .limit(5);
 
     // Get status breakdown
     const statusBreakdown = await Candidate.aggregate([
       { $match: { submittedBy: partner._id } },
-      { $group: { _id: "$status", count: { $sum: 1 } } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
     // Get available jobs count
     const availableJobsCount = await Job.countDocuments({
-      status: "ACTIVE",
-      eligiblePlans: partner.subscription?.plan || "FREE",
+      status: 'ACTIVE',
+      eligiblePlans: partner.subscription?.plan || 'FREE'
     });
 
     // Calculate profile completion
     const profileCompletion = partner.profileCompletion;
-    const completedSections =
-      Object.values(profileCompletion).filter(Boolean).length;
+    const completedSections = Object.values(profileCompletion).filter(Boolean).length;
     const totalSections = Object.keys(profileCompletion).length;
-    const completionPercentage = Math.round(
-      (completedSections / totalSections) * 100,
-    );
+    const completionPercentage = Math.round((completedSections / totalSections) * 100);
 
-    // ✅ UPDATED: Payout system disabled
-    // const payoutReady = partner.profileCompletion.commercialDetails;
-    const payoutReady = false; // Payout system disabled
+    // ✅ NEW: Earnings summary
+    const Payout = require('../models/Payout');
+    const earningsSummary = {
+      totalEarnings: partner.metrics.totalEarnings || 0,
+      pendingPayouts: partner.metrics.pendingPayouts || 0,
+      eligiblePayouts: partner.metrics.eligiblePayouts || 0,
+      paidOut: partner.metrics.paidOut || 0,
+      totalPlacements: partner.metrics.totalPlacements || 0
+    };
+
+    // ✅ NEW: Upcoming payouts (becoming eligible soon)
+    const upcomingDate = new Date();
+    upcomingDate.setDate(upcomingDate.getDate() + 30);
+
+    const upcomingPayouts = await Payout.find({
+      staffingPartner: partner._id,
+      status: 'PENDING',
+      'replacementGuarantee.endDate': {
+        $gte: new Date(),
+        $lte: upcomingDate
+      }
+    })
+      .populate('candidate', 'firstName lastName')
+      .sort({ 'replacementGuarantee.endDate': 1 })
+      .limit(5);
+
+    // ✅ NEW: Recent payouts
+    const recentPayouts = await Payout.find({
+      staffingPartner: partner._id,
+      status: { $in: ['PAID', 'ELIGIBLE', 'APPROVED'] }
+    })
+      .populate('candidate', 'firstName lastName')
+      .sort({ updatedAt: -1 })
+      .limit(5);
 
     res.json({
       success: true,
@@ -1247,31 +1275,311 @@ exports.getDashboard = async (req, res) => {
         partner: {
           name: `${partner.firstName} ${partner.lastName}`,
           firmName: partner.firmName,
-          verificationStatus: partner.verificationStatus,
+          verificationStatus: partner.verificationStatus
         },
         metrics: partner.metrics,
         subscription: partner.subscription,
         profileCompletion: {
           ...profileCompletion,
-          percentage: completionPercentage,
+          percentage: completionPercentage
         },
-        payoutReady,
+
+        // ✅ NEW: Earnings data
+        earnings: {
+          summary: earningsSummary,
+          upcomingPayouts: upcomingPayouts.map(p => ({
+            _id: p._id,
+            candidate: `${p.candidate.firstName} ${p.candidate.lastName}`,
+            amount: p.amount.netPayable,
+            eligibleDate: p.replacementGuarantee.endDate,
+            daysRemaining: p.getDaysRemaining()
+          })),
+          recentPayouts: recentPayouts.map(p => ({
+            _id: p._id,
+            candidate: `${p.candidate.firstName} ${p.candidate.lastName}`,
+            amount: p.amount.netPayable,
+            status: p.status,
+            paidAt: p.payment?.paidAt
+          }))
+        },
+
         recentSubmissions,
         statusBreakdown,
-        availableJobsCount,
-      },
+        availableJobsCount
+      }
     });
   } catch (error) {
+    console.error('[PARTNER] Dashboard error:', error);
     res.status(500).json({
       success: false,
-      message: "Failed to fetch dashboard",
-      error: error.message,
+      message: 'Failed to fetch dashboard',
+      error: error.message
     });
   }
 };
 
-/* ========== GET EARNINGS - DISABLED (Payout system inactive) ==========
 // @desc    Get Earnings/Payouts
+// @route   GET /api/staffing-partners/earnings
+exports.getEarnings = async (req, res) => {
+  try {
+    const Payout = require('../models/Payout');
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Profile not found'
+      });
+    }
+
+    const { page = 1, limit = 20, status } = req.query;
+    const sanitizedPage = Math.max(1, parseInt(page));
+    const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    const query = { staffingPartner: partner._id };
+    if (status) query.status = status;
+
+    const [payouts, total] = await Promise.all([
+      Payout.find(query)
+        .populate('candidate', 'firstName lastName')
+        .populate('job', 'title')
+        .populate('company', 'companyName')
+        .populate('partnerInvoice', 'invoiceNumber status')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(sanitizedLimit),
+      Payout.countDocuments(query)
+    ]);
+
+    // Enrich with computed fields
+    const enrichedPayouts = payouts.map(p => ({
+      ...p.toObject(),
+      daysRemaining: p.getDaysRemaining(),
+      isEligible: p.checkEligibility(),
+      candidateName: `${p.candidate.firstName} ${p.candidate.lastName}`
+    }));
+
+    // Summary from partner metrics
+    const summary = {
+      totalEarnings: partner.metrics.totalEarnings || 0,
+      pendingPayouts: partner.metrics.pendingPayouts || 0,
+      eligiblePayouts: partner.metrics.eligiblePayouts || 0,
+      paidOut: partner.metrics.paidOut || 0,
+      forfeitedAmount: partner.metrics.forfeitedAmount || 0,
+      totalPlacements: partner.metrics.totalPlacements || 0
+    };
+
+    // Status breakdown
+    const statusBreakdown = await Payout.aggregate([
+      { $match: { staffingPartner: partner._id } },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          amount: { $sum: '$amount.netPayable' }
+        }
+      }
+    ]);
+
+    // Upcoming eligible (becoming eligible in next 30 days)
+    const upcomingDate = new Date();
+    upcomingDate.setDate(upcomingDate.getDate() + 30);
+
+    const upcomingEligible = await Payout.find({
+      staffingPartner: partner._id,
+      status: 'PENDING',
+      'replacementGuarantee.endDate': {
+        $gte: new Date(),
+        $lte: upcomingDate
+      }
+    })
+      .populate('candidate', 'firstName lastName')
+      .populate('job', 'title')
+      .sort({ 'replacementGuarantee.endDate': 1 })
+      .limit(10);
+
+    res.json({
+      success: true,
+      data: {
+        summary,
+        statusBreakdown: statusBreakdown.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, amount: item.amount };
+          return acc;
+        }, {}),
+        payouts: enrichedPayouts,
+        upcomingEligible: upcomingEligible.map(p => ({
+          _id: p._id,
+          candidate: `${p.candidate.firstName} ${p.candidate.lastName}`,
+          job: p.job.title,
+          amount: p.amount.netPayable,
+          eligibleDate: p.replacementGuarantee.endDate,
+          daysRemaining: p.getDaysRemaining()
+        })),
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[PARTNER] Get earnings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch earnings',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single payout details
+// @route   GET /api/staffing-partners/earnings/:id
+exports.getPayoutDetails = async (req, res) => {
+  try {
+    const Payout = require('../models/Payout');
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Profile not found'
+      });
+    }
+
+    const payout = await Payout.findOne({
+      _id: req.params.id,
+      staffingPartner: partner._id
+    })
+      .populate('candidate', 'firstName lastName email offer joining')
+      .populate('job', 'title company')
+      .populate('company', 'companyName')
+      .populate('partnerInvoice');
+
+    if (!payout) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payout not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        payout: {
+          ...payout.toObject(),
+          daysRemaining: payout.getDaysRemaining(),
+          isEligible: payout.checkEligibility()
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch payout details',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get partner invoices
+// @route   GET /api/staffing-partners/invoices
+exports.getInvoices = async (req, res) => {
+  try {
+    const Invoice = require('../models/Invoice');
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Profile not found'
+      });
+    }
+
+    const { page = 1, limit = 20, status } = req.query;
+    const sanitizedPage = Math.max(1, parseInt(page));
+    const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    const query = {
+      staffingPartner: partner._id,
+      invoiceType: 'PARTNER_TO_SYNCRO1'
+    };
+    if (status) query.status = status;
+
+    const [invoices, total] = await Promise.all([
+      Invoice.find(query)
+        .populate('candidate', 'firstName lastName')
+        .populate('job', 'title')
+        .populate('company', 'companyName')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(sanitizedLimit),
+      Invoice.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        invoices,
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch invoices',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single invoice
+// @route   GET /api/staffing-partners/invoices/:id
+exports.getInvoice = async (req, res) => {
+  try {
+    const Invoice = require('../models/Invoice');
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Profile not found'
+      });
+    }
+
+    const invoice = await Invoice.findOne({
+      _id: req.params.id,
+      staffingPartner: partner._id
+    })
+      .populate('candidate', 'firstName lastName email offer joining commission')
+      .populate('job', 'title')
+      .populate('company', 'companyName')
+      .populate('linkedPayout');
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invoice not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: invoice
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch invoice',
+      error: error.message
+    });
+  }
+};// @desc    Get Earnings/Payouts
 // @route   GET /api/staffing-partners/earnings
 exports.getEarnings = async (req, res) => {
   try {
@@ -1323,7 +1631,6 @@ exports.getEarnings = async (req, res) => {
     });
   }
 };
-========== END GET EARNINGS ========== */
 
 // @desc    Get Earnings/Payouts
 // @route   GET /api/staffing-partners/earnings

@@ -26,7 +26,10 @@ const {
   getMySubmissions,
   getSubmission,
   getDashboard,
-  getEarnings
+  getEarnings,
+  getPayoutDetails,
+  getInvoices,
+  getInvoice
 } = require('../controllers/staffingPartnerController');
 
 const { protect, authorize, checkStatus } = require('../middleware/auth');
@@ -244,8 +247,12 @@ router.get('/submissions/:id', getSubmission);
 // Withdraw candidate
 router.put('/submissions/:id/withdraw', withdrawCandidate);
 
-// ==================== EARNINGS ====================
+// ==================== EARNINGS & INVOICES (UPDATED) ====================
 router.get('/earnings', getEarnings);
+router.get('/earnings/:id', getPayoutDetails);  // NEW
+router.get('/invoices', getInvoices);           // NEW
+router.get('/invoices/:id', getInvoice);        // NEW
+
 
 // ==================== CANDIDATE ROUTES ====================
 router.post(

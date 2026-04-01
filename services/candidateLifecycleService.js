@@ -131,7 +131,7 @@ class CandidateLifecycleService {
     try {
       // ✅ FIX #2: Lazy load to avoid circular dependency
       const notificationEngine = require('./notificationEngine');
-      
+
       // ✅ FIX: Handle both populated and unpopulated user references
       let partnerUserId;
 
@@ -145,27 +145,27 @@ class CandidateLifecycleService {
         // Not populated at all — fetch manually
         console.warn(`[NOTIFY] submittedBy.user not populated for candidate ${candidate._id}`);
         const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
-        
+
         if (!partnerId) {
           console.error(`[NOTIFY] ❌ Cannot determine partner for candidate ${candidate._id}`);
           return;
         }
 
         const partner = await StaffingPartner.findById(partnerId).select('user');
-        
+
         if (!partner?.user) {
           console.error(`[NOTIFY] ❌ Cannot find partner user for candidate ${candidate._id}`);
           return;
         }
-        
+
         partnerUserId = partner.user;
       }
 
       // ✅ Safely extract values even if not populated
       const candidateName = `${candidate.firstName} ${candidate.lastName}`;
       const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
-      const companyName = typeof candidate.company === 'object' 
-        ? candidate.company.companyName 
+      const companyName = typeof candidate.company === 'object'
+        ? candidate.company.companyName
         : 'the company';
 
       const notifications = {
@@ -288,7 +288,7 @@ class CandidateLifecycleService {
     try {
       // ✅ FIX #2: Lazy load to avoid circular dependency
       const notificationEngine = require('./notificationEngine');
-      
+
       // ✅ FIX: Handle both populated and unpopulated company.user
       let companyUserId;
 
@@ -299,19 +299,19 @@ class CandidateLifecycleService {
       } else {
         console.warn(`[NOTIFY] company.user not populated for candidate ${candidate._id}`);
         const companyId = candidate.company?._id || candidate.company;
-        
+
         if (!companyId) {
           console.error(`[NOTIFY] ❌ Cannot determine company for candidate ${candidate._id}`);
           return;
         }
 
         const company = await Company.findById(companyId).select('user');
-        
+
         if (!company?.user) {
           console.error(`[NOTIFY] ❌ Cannot find company user for candidate ${candidate._id}`);
           return;
         }
-        
+
         companyUserId = company.user;
       }
 
@@ -356,93 +356,47 @@ class CandidateLifecycleService {
     console.log(`[LIFECYCLE] ── Handling JOINED for: ${candidate.firstName} ${candidate.lastName} ──`);
 
     try {
-      /* ========== COMMISSION/PAYOUT CALCULATION - DISABLED ==========
-      // ✅ Step 1: Validate that offer exists with salary
-      if (!candidate.offer || !candidate.offer.salary) {
-        console.warn(
-          `[LIFECYCLE] ⚠️ No offer/salary found for candidate ${candidate._id}. ` +
-          `Invoice and commission cannot be calculated. ` +
-          `Company must set offer before marking as JOINED.`
-        );
-        
-        // Still update metrics even without offer
-        await this._updateJoiningMetrics(candidate);
-        return;
-      }
+      // ✅ Use commission service for all commission logic
+      const commissionService = require('./commissionService');
 
-      // ✅ Step 2: Get job with commission details
-      const job = typeof candidate.job === 'object' 
-        ? candidate.job 
-        : await Job.findById(candidate.job);
+      const result = await commissionService.processJoining(candidate._id);
 
-      if (!job?.commission) {
-        console.warn(`[LIFECYCLE] ⚠️ No commission info on job ${candidate.job}`);
-        await this._updateJoiningMetrics(candidate);
-        return;
-      }
-
-      // ✅ Step 3: Calculate commission
-      let commissionAmount;
-      if (job.commission.type === 'percentage') {
-        commissionAmount = Math.round(candidate.offer.salary * job.commission.value / 100);
+      if (result.success) {
+        console.log(`[LIFECYCLE] ✅ Commission processed successfully`);
+        console.log(`[LIFECYCLE]    Net payout: ₹${result.commission.netPayable.toLocaleString('en-IN')}`);
+        console.log(`[LIFECYCLE]    Eligible on: ${result.eligibleDate.toDateString()}`);
+        console.log(`[LIFECYCLE]    Invoice: ${result.partnerInvoice}`);
       } else {
-        commissionAmount = job.commission.value;
+        console.warn(`[LIFECYCLE] ⚠️ Commission not processed: ${result.reason}`);
       }
-
-      console.log(
-        `[LIFECYCLE] Commission: ₹${commissionAmount.toLocaleString('en-IN')} ` +
-        `(${job.commission.type}: ${job.commission.value}${job.commission.type === 'percentage' ? '%' : ''} ` +
-        `on salary ₹${candidate.offer.salary.toLocaleString('en-IN')})`
-      );
-
-      // ✅ Step 4: Update candidate payout
-      candidate.payout = {
-        commissionAmount,
-        status: 'PENDING'
-      };
-      await candidate.save();
-
-      // Update partner pending payouts
-      const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
-      await StaffingPartner.findByIdAndUpdate(partnerId, {
-        $inc: { 'metrics.pendingPayouts': commissionAmount }
-      });
-
-      // ✅ Step 6: Generate invoice (non-fatal if fails)
-      try {
-        const invoiceController = require('../controllers/invoiceController');
-        const invoice = await invoiceController.generateInvoice(candidate._id);
-        console.log(`[LIFECYCLE] ✅ Invoice generated: ${invoice.invoiceNumber}`);
-      } catch (invoiceError) {
-        console.error(`[LIFECYCLE] ⚠️ Invoice generation failed (non-fatal): ${invoiceError.message}`);
-        // Don't throw — invoice can be generated later manually
-      }
-      ========== END COMMISSION/PAYOUT ========== */
-
-      // ✅ Only update metrics (no commission)
-      await this._updateJoiningMetrics(candidate);
 
       // ✅ Update job fill status
-      const job = typeof candidate.job === 'object' 
-        ? candidate.job 
+      const Job = require('../models/Job');
+      const job = typeof candidate.job === 'object'
+        ? candidate.job
         : await Job.findById(candidate.job);
-        
+
       if (job) {
         job.filledPositions = (job.filledPositions || 0) + 1;
         if (job.filledPositions >= job.vacancies) {
           job.status = 'FILLED';
-          console.log(`[LIFECYCLE] ✅ Job "${job.title}" is now FILLED (${job.filledPositions}/${job.vacancies})`);
+          console.log(`[LIFECYCLE] ✅ Job "${job.title}" is now FILLED`);
         }
         await job.save();
       }
 
-      console.log(`[LIFECYCLE] ── JOINED handling complete (commission disabled) ──`);
+      // ✅ Update metrics (placement count - commission handled by commissionService)
+      await this._updateJoiningMetrics(candidate);
+
+      console.log(`[LIFECYCLE] ── JOINED handling complete ──`);
+
     } catch (error) {
       console.error(`[LIFECYCLE] ❌ Joining handler error: ${error.message}`);
       console.error(error.stack);
-      // ✅ Never throw — the status change should still succeed
+      // Never throw — the status change should still succeed
     }
   }
+
 
   /**
    * ✅ Update metrics that should happen regardless of commission

@@ -22,7 +22,18 @@ const {
   approveEditRequest,
   rejectEditRequest,
   discontinueJob,
-  getJobEditHistory
+  getJobEditHistory,
+  // ✅ NEW: Payout management
+  getPayouts,
+  getPayout,
+  approvePayout,
+  processPayout,
+  holdPayout,
+  releasePayout,
+  forfeitPayout,
+  checkPayoutEligibility
+
+
 } = require('../controllers/adminController');
 
 const { protect, authorize } = require('../middleware/auth');
@@ -40,10 +51,15 @@ router.get('/verifications', getPendingVerifications);
 router.put('/verify/partner/:id', verifyPartner);
 router.put('/verify/company/:id', verifyCompany);
 
-// ==================== PAYOUT ROUTES - DISABLED ====================
-// router.get('/payouts', getPayouts);
-// router.put('/payouts/:id', processPayout);
-// ========== Payout system is currently inactive ==========
+// ==================== PAYOUT MANAGEMENT  ====================
+router.get('/payouts', getPayouts);
+router.get('/payouts/:id', getPayout);
+router.put('/payouts/:id/approve', approvePayout);
+router.put('/payouts/:id/process', processPayout);
+router.put('/payouts/:id/hold', holdPayout);
+router.put('/payouts/:id/release', releasePayout);
+router.post('/payouts/:id/forfeit', forfeitPayout);
+router.post('/payouts/check-eligibility', checkPayoutEligibility);
 
 // ==================== USER MANAGEMENT ====================
 router.get('/users', getUsers);

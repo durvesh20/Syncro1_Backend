@@ -38,13 +38,17 @@ const notificationSchema = new mongoose.Schema({
       'SUBSCRIPTION_EXPIRING',
       'SUBSCRIPTION_EXPIRED',
 
-      // Payout — sent to PARTNER
-      'PAYOUT_APPROVED',
-      'PAYOUT_PROCESSED',
-      'PAYOUT_PAID',
+      // ✅ NEW: Payout notifications
+      'PAYOUT_ELIGIBLE',      // 90 days completed
+      'PAYOUT_APPROVED',      // Admin approved payout
+      'PAYOUT_PAID',          // Money transferred
+      'PAYOUT_FORFEITED',     // Candidate left early
+      'PAYOUT_ON_HOLD',       // Payout held for review
 
-      // Invoice — sent to COMPANY
+      // ✅ NEW: Invoice notifications
       'INVOICE_GENERATED',
+      'INVOICE_SENT',
+      'INVOICE_PAID',
       'INVOICE_OVERDUE',
 
       // System
