@@ -6,10 +6,10 @@ const mongoose = require('mongoose');
 
 // Plan hierarchy — higher plans see everything from lower plans too
 const PLAN_HIERARCHY = {
-  'FREE':         ['FREE'],
-  'GROWTH':       ['FREE', 'GROWTH'],
+  'FREE': ['FREE'],
+  'GROWTH': ['FREE', 'GROWTH'],
   'PROFESSIONAL': ['FREE', 'GROWTH', 'PROFESSIONAL'],
-  'PREMIUM':      ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM']
+  'PREMIUM': ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM']
 };
 
 class JobAccessService {

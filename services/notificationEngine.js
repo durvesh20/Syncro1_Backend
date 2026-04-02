@@ -44,8 +44,8 @@ class NotificationEngine {
       if (!user) return notification;
 
       // Send email
-if (channels.email && user.email && isValidEmail(user.email)) {
-          await emailService.sendEmail({
+      if (channels.email && user.email && isValidEmail(user.email)) {
+        await emailService.sendEmail({
           to: user.email,
           subject: title.replace(/[🎯📋📅✅🎉✨😔🚀❌⏸️⚠️💰]/g, '').trim(),
           html: this._buildEmailTemplate(title, message, data.actionUrl)

@@ -13,18 +13,18 @@ class WhatsAppService {
       console.log(`   Phone: ${phoneNumber}`);
       console.log(`   OTP: ${otp}`);
       console.log('=================================================');
-      
-      return { 
-        success: true, 
+
+      return {
+        success: true,
         messageId: 'mock_' + Date.now(),
-        mock: true 
+        mock: true
       };
     }
 
     // If enabled in future, add Twilio code here
     // const twilio = require('twilio');
     // ... actual implementation
-    
+
     return { success: true };
   }
 
@@ -35,7 +35,7 @@ class WhatsAppService {
       console.log(`   Phone: ${phoneNumber}`);
       console.log(`   Message: ${message}`);
       console.log('=================================================');
-      
+
       return { success: true, mock: true };
     }
 

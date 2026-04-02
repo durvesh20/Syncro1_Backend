@@ -97,10 +97,10 @@ class CandidateScoringService {
       message: result.overallScore >= 80
         ? 'Excellent match! Submit with confidence.'
         : result.overallScore >= 60
-        ? 'Good match. Candidate looks suitable for this role.'
-        : result.overallScore >= 40
-        ? 'Moderate match. Some gaps exist — proceed if candidate has other strengths not captured here.'
-        : 'Weak match. This candidate may not be suitable for this role. Consider other opportunities.'
+          ? 'Good match. Candidate looks suitable for this role.'
+          : result.overallScore >= 40
+            ? 'Moderate match. Some gaps exist — proceed if candidate has other strengths not captured here.'
+            : 'Weak match. This candidate may not be suitable for this role. Consider other opportunities.'
     };
   }
 

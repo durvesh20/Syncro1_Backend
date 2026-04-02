@@ -16,7 +16,7 @@ const {
   uploadDocuments,
   submitProfile,
   getDashboard,
-  
+
   // Job Management
   createJob,
   getJobs,
@@ -30,7 +30,7 @@ const {
   requestJobEdit,
   getJobEditRequests,
   cancelEditRequest,
-  
+
   // Candidate Management
   getJobCandidates,
   getAllCandidates,
