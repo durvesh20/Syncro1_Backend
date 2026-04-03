@@ -1,42 +1,60 @@
 // backend/routes/authRoutes.js
 const express = require('express');
 const router = express.Router();
+
 const {
   initStaffingPartnerRegistration,
   initCompanyRegistration,
-  verifyEmailByToken,
+  verifyEmailByToken,     // Legacy GET support
+  verifyEmail,            // Recommended POST
+  getVerificationStatus,
   verifyMobileOTP,
+  resendOTP,              // Legacy combined resend
+  resendEmailVerification,
+  resendMobileOTP,
   login,
   changePassword,
-  resendOTP,
-  resendEmailVerification,
   getMe,
   forgotPassword,
   resetPassword,
-  logout,
+  logout
 } = require('../controllers/authController');
+
 const { protect } = require('../middleware/auth');
 
-// Registration routes
+// ==================== REGISTRATION ====================
 router.post('/register/staffing-partner/init', initStaffingPartnerRegistration);
 router.post('/register/company/init', initCompanyRegistration);
 
-// Verification routes
-router.get('/verify-email', verifyEmailByToken);
-router.post('/verify/mobile', verifyMobileOTP);
-router.post('/resend-otp', resendOTP);
-router.post('/resend-email-verification', resendEmailVerification);
+// ==================== VERIFICATION ====================
 
-// Login & Password
+// Legacy GET route for email verification from link
+router.get('/verify-email', verifyEmailByToken);
+
+// Recommended POST route for frontend-driven verification
+router.post('/verify-email', verifyEmail);
+
+// Mobile OTP verify
+router.post('/verify/mobile', verifyMobileOTP);
+
+// Verification status
+router.get('/verification-status/:userId', getVerificationStatus);
+
+// Resend routes
+router.post('/resend-otp', resendOTP); // legacy
+router.post('/resend-email-verification', resendEmailVerification);
+router.post('/resend-mobile-otp', resendMobileOTP);
+
+// ==================== AUTH ====================
 router.post('/login', login);
+router.post('/logout', protect, logout);
+
+// ==================== PASSWORD ====================
 router.post('/change-password', protect, changePassword);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
 
-// User
+// ==================== USER ====================
 router.get('/me', protect, getMe);
-
-// Logout route
-router.post('/logout', protect, logout);
 
 module.exports = router;

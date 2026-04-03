@@ -21,6 +21,11 @@ const userSchema = new mongoose.Schema({
     minlength: 8,
     select: false
   },
+  otpAttempts: {
+    email: { type: Number, default: 0 },
+    mobile: { type: Number, default: 0 },
+    lastAttempt: Date
+  },
   role: {
     type: String,
     enum: ['staffing_partner', 'company', 'admin', 'candidate'],
@@ -82,7 +87,7 @@ const userSchema = new mongoose.Schema({
 });
 
 // Hash password before saving
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) {
     return next();
   }
@@ -92,40 +97,40 @@ userSchema.pre('save', async function(next) {
 });
 
 // Compare password method
-userSchema.methods.comparePassword = async function(enteredPassword) {
+userSchema.methods.comparePassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
 // Generate OTP
-userSchema.methods.generateOTP = function(type) {
+userSchema.methods.generateOTP = function (type) {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-  
+
   if (type === 'email') {
     this.emailOTP = { code: otp, expiresAt };
   } else if (type === 'mobile') {
     this.mobileOTP = { code: otp, expiresAt };
   }
-  
+
   return otp;
 };
 
 // Verify OTP
-userSchema.methods.verifyOTP = function(type, code) {
+userSchema.methods.verifyOTP = function (type, code) {
   const otpData = type === 'email' ? this.emailOTP : this.mobileOTP;
-  
+
   if (!otpData || !otpData.code) {
     return { valid: false, message: 'OTP not found' };
   }
-  
+
   if (new Date() > otpData.expiresAt) {
     return { valid: false, message: 'OTP expired' };
   }
-  
+
   if (otpData.code !== code) {
     return { valid: false, message: 'Invalid OTP' };
   }
-  
+
   return { valid: true };
 };
 

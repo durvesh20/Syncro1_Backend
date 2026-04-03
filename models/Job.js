@@ -31,7 +31,7 @@ const jobSchema = new mongoose.Schema({
   },
   requirements: [String],
   responsibilities: [String],
-  
+
   // ==================== JOB DETAILS ====================
   category: {
     type: String,
@@ -70,7 +70,7 @@ const jobSchema = new mongoose.Schema({
       default: false
     }
   },
-  
+
   commission: {
     type: {
       type: String,
@@ -251,21 +251,21 @@ jobSchema.index({ 'location.city': 1, status: 1 });
 jobSchema.index({ company: 1, status: 1, createdAt: -1 });
 
 // ==================== VIRTUAL FIELDS ====================
-jobSchema.virtual('isPendingReview').get(function() {
+jobSchema.virtual('isPendingReview').get(function () {
   return this.approvalStatus === 'PENDING_APPROVAL' || this.approvalStatus === 'EDIT_REQUESTED';
 });
 
-jobSchema.virtual('canBeEdited').get(function() {
+jobSchema.virtual('canBeEdited').get(function () {
   return ['DRAFT', 'REJECTED'].includes(this.approvalStatus);
 });
 
-jobSchema.virtual('requiresApproval').get(function() {
+jobSchema.virtual('requiresApproval').get(function () {
   return this.approvalStatus === 'EDIT_REQUESTED';
 });
 
 // ==================== MIDDLEWARE ====================
 
-jobSchema.pre('save', function(next) {
+jobSchema.pre('save', function (next) {
   if (this.isModified('title') && !this.slug) {
     this.slug = this.title
       .toLowerCase()
@@ -275,21 +275,21 @@ jobSchema.pre('save', function(next) {
   next();
 });
 
-jobSchema.pre('save', function(next) {
+jobSchema.pre('save', function (next) {
   if (!this.shareableLink && this.slug) {
     this.shareableLink = `${process.env.FRONTEND_URL}/jobs/${this.slug}`;
   }
   next();
 });
 
-jobSchema.pre('save', function(next) {
+jobSchema.pre('save', function (next) {
   if (this.experienceRange && this.experienceRange.min > this.experienceRange.max) {
     next(new Error('Experience range min cannot be greater than max'));
   }
   next();
 });
 
-jobSchema.pre('save', function(next) {
+jobSchema.pre('save', function (next) {
   if (this.salary && this.salary.min && this.salary.max && this.salary.min > this.salary.max) {
     next(new Error('Salary min cannot be greater than max'));
   }
@@ -298,7 +298,7 @@ jobSchema.pre('save', function(next) {
 
 // ==================== METHODS ====================
 
-jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, notes = '') {
+jobSchema.methods.addToHistory = function (changeType, changedBy, changes = {}, notes = '') {
   this.changeHistory.push({
     changedAt: new Date(),
     changedBy,
@@ -309,7 +309,7 @@ jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, n
 };
 
 // ✅ FIX #1: Proper markModified with actual field names
-jobSchema.methods.applyEditChanges = function(appliedChanges) {
+jobSchema.methods.applyEditChanges = function (appliedChanges) {
   Object.keys(appliedChanges).forEach(field => {
     const keys = field.split('.');
     let obj = this;
@@ -321,10 +321,10 @@ jobSchema.methods.applyEditChanges = function(appliedChanges) {
   });
 };
 
-jobSchema.methods.canAcceptEditRequest = function() {
+jobSchema.methods.canAcceptEditRequest = function () {
   if (this.approvalStatus !== 'ACTIVE') return false;
   if (this.rejectedEditCount >= 5) return false;
-  
+
   const JobEditRequest = mongoose.model('JobEditRequest');
   return JobEditRequest.countDocuments({
     job: this._id,
@@ -332,14 +332,14 @@ jobSchema.methods.canAcceptEditRequest = function() {
   }).then(count => count === 0);
 };
 
-jobSchema.methods.getEditStats = function() {
+jobSchema.methods.getEditStats = function () {
   return {
     total: this.editRequestCount,
     approved: this.approvedEditCount,
     rejected: this.rejectedEditCount,
     pending: this.editRequestCount - this.approvedEditCount - this.rejectedEditCount,
-    rejectionRate: this.editRequestCount > 0 
-      ? Math.round((this.rejectedEditCount / this.editRequestCount) * 100) 
+    rejectionRate: this.editRequestCount > 0
+      ? Math.round((this.rejectedEditCount / this.editRequestCount) * 100)
       : 0
   };
 };

@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
+const onboardingRoutes = require('./routes/onboardingRoutes');
 
 // Load env vars
 dotenv.config();
@@ -122,6 +123,8 @@ app.use('/api/jobs', require('./routes/jobRoutes'));
 app.use('/api/candidates', require('./routes/candidateRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
+// Register routes
+app.use('/api/onboarding', onboardingRoutes);
 
 // ✅ Newly added routes
 app.use('/api/notifications', require('./routes/notificationRoutes'));

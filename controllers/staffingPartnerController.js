@@ -710,57 +710,88 @@ exports.getProfileCompletion = async (req, res) => {
 exports.submitProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
-    const user = await User.findById(req.user._id);
 
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Partner profile not found'
       });
     }
 
-    // Check if required sections are complete
-    const {
-      basicInfo,
-      firmDetails,
-      Syncro1Competency,
-      geographicReach,
-      compliance,
-    } = partner.profileCompletion;
-
-    if (
-      !basicInfo ||
-      !firmDetails ||
-      !Syncro1Competency ||
-      !geographicReach ||
-      !compliance
-    ) {
+    // Check if already submitted
+    if (partner.verificationStatus === 'PENDING' || partner.verificationStatus === 'VERIFIED') {
       return res.status(400).json({
         success: false,
-        message: "Please complete all required sections before submitting",
-        data: partner.profileCompletion,
+        message: 'Profile already submitted for verification'
       });
     }
 
-    partner.verificationStatus = "UNDER_REVIEW";
-    user.status = "UNDER_VERIFICATION";
+    // ✅ Enforce ALL sections including commercial & documents
+    const required = [
+      'basicInfo',
+      'firmDetails',
+      'Syncro1Competency',
+      'geographicReach',
+      'compliance',
+      'commercialDetails',
+      'documents'
+    ];
 
+    const incomplete = required.filter(section => !partner.profileCompletion[section]);
+
+    if (incomplete.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please complete all required sections before submitting',
+        incompleteSections: incomplete,
+        hint: `Missing: ${incomplete.join(', ')}`
+      });
+    }
+
+    // ✅ Validate bank details exist
+    if (!partner.commercialDetails?.bankAccountNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bank account details are required for payouts'
+      });
+    }
+
+    // ✅ Validate at least PAN & GST docs uploaded
+    const requiredDocs = ['panCard', 'gstCertificate'];
+    const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
+
+    if (missingDocs.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Required documents missing',
+        missingDocuments: missingDocs,
+        hint: 'PAN card and GST certificate are mandatory'
+      });
+    }
+
+    // Update verification status
+    partner.verificationStatus = 'PENDING';
+    partner.submittedAt = new Date();
     await partner.save();
+
+    // Update user status
+    const user = await User.findById(req.user._id);
+    user.status = 'PENDING_VERIFICATION';
     await user.save();
 
     res.json({
       success: true,
-      message: "Profile submitted for verification",
+      message: 'Profile submitted for verification successfully',
       data: {
         verificationStatus: partner.verificationStatus,
-        userStatus: user.status,
-      },
+        submittedAt: partner.submittedAt
+      }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Submission failed",
-      error: error.message,
+      message: 'Failed to submit profile',
+      error: error.message
     });
   }
 };
