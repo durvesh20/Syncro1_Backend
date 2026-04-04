@@ -78,27 +78,49 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
 /* =========================================================
-   CORS CONFIGURATION - ✅ FIXED
+   CORS CONFIGURATION - UPDATED
 ========================================================= */
 
-// ✅ IMPORTANT: CORS must come AFTER cookieParser but BEFORE routes
-app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true, // ✅ Essential for cookies
+const allowedOrigins = [
+  'https://syncro1.com',
+  'https://www.syncro1.com',
+  'http://localhost:9696',
+  'http://localhost:3000'
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow Postman / server-to-server / requests without browser origin
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: ['Set-Cookie'],
-}));
+  exposedHeaders: ['Set-Cookie']
+};
+
+app.use(cors(corsOptions));
 
 // Respond quickly to preflight
-app.options('*', cors());
+app.options('*', cors(corsOptions));
 
 /* =========================================================
    STATIC UPLOADS
 ========================================================= */
 
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders: (res) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  }
+}));
 /* =========================================================
    HEALTH CHECK
 ========================================================= */

@@ -1,6 +1,7 @@
 // backend/routes/companyRoutes.js
 const express = require('express');
 const router = express.Router();
+
 const {
   // Profile Management
   getProfile,
@@ -20,7 +21,7 @@ const {
   // Job Management
   createJob,
   getJobs,
-  getRejectedJobs,  // ✅ NEW: Added getRejectedJobs
+  getRejectedJobs,
   getJob,
   updateJob,
   deleteJob,
@@ -40,13 +41,13 @@ const {
   updateInterviewFeedback,
   makeOffer,
   updateOfferResponse,
-  // confirmJoining,  // ❌ DISABLED - Commission system inactive
   addNote
 } = require('../controllers/companyController');
 
 const { protect, authorize, checkStatus } = require('../middleware/auth');
 const {
   uploadCompanyDocuments,
+  uploadLogo,
   handleUploadError
 } = require('../middleware/upload');
 
@@ -66,6 +67,54 @@ router.put('/profile/basic-info', updateBasicInfo);
 
 // Section 2: KYC (Company Information)
 router.put('/profile/kyc', updateKYC);
+
+// ==================== COMPANY LOGO UPLOAD ====================
+// Upload company logo separately
+router.post(
+  '/profile/logo-upload',
+  uploadLogo,
+  handleUploadError,
+  async (req, res) => {
+    try {
+      const Company = require('../models/Company');
+      const company = await Company.findOne({ user: req.user._id });
+
+      if (!company) {
+        return res.status(404).json({
+          success: false,
+          message: 'Company not found'
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No logo file uploaded'
+        });
+      }
+
+      // Save logo path in KYC
+      company.kyc = company.kyc || {};
+      company.kyc.logo = `/uploads/logos/${req.file.filename}`;
+      await company.save();
+
+      res.json({
+        success: true,
+        message: 'Company logo uploaded successfully',
+        data: {
+          logo: company.kyc.logo
+        }
+      });
+    } catch (error) {
+      console.error('[COMPANY] Logo upload error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Logo upload failed',
+        error: error.message
+      });
+    }
+  }
+);
 
 // Section 3: Hiring Preferences
 router.put('/profile/hiring-preferences', updateHiringPreferences);
@@ -101,7 +150,6 @@ router.post(
         });
       }
 
-      // ✅ Process uploaded files - SAME AS STAFFING PARTNER
       const documents = {};
 
       if (req.files) {
@@ -111,7 +159,6 @@ router.post(
         });
       }
 
-      // ✅ Merge with existing documents
       company.documents = { ...company.documents, ...documents };
       company.profileCompletion.documents = true;
       await company.save();
@@ -122,6 +169,7 @@ router.post(
         data: company.documents
       });
     } catch (error) {
+      console.error('[COMPANY] Documents upload error:', error);
       res.status(500).json({
         success: false,
         message: 'Upload failed',
@@ -136,7 +184,7 @@ router.post('/profile/submit', submitProfile);
 
 // ==================== JOB ROUTES ====================
 
-// ✅ NEW: Must come BEFORE /jobs/:id routes to avoid route conflict
+// Must come BEFORE /jobs/:id routes to avoid route conflict
 router.get('/jobs/rejected', checkStatus('VERIFIED', 'ACTIVE'), getRejectedJobs);
 
 router.route('/jobs')
@@ -152,28 +200,24 @@ router.get('/jobs/:jobId/candidates', checkStatus('VERIFIED', 'ACTIVE'), getJobC
 
 // ==================== JOB APPROVAL WORKFLOW ====================
 
-// Submit job for approval (must be verified company)
 router.post(
   '/jobs/:id/submit-for-approval',
   checkStatus('VERIFIED', 'ACTIVE'),
   submitJobForApproval
 );
 
-// Request edit on active job
 router.post(
   '/jobs/:id/request-edit',
   checkStatus('VERIFIED', 'ACTIVE'),
   requestJobEdit
 );
 
-// Get edit requests for a job
 router.get(
   '/jobs/:id/edit-requests',
   checkStatus('VERIFIED', 'ACTIVE'),
   getJobEditRequests
 );
 
-// Cancel pending edit request
 router.delete(
   '/jobs/:id/edit-requests/:editRequestId',
   checkStatus('VERIFIED', 'ACTIVE'),
@@ -188,7 +232,7 @@ router.post('/candidates/:id/interviews', checkStatus('VERIFIED', 'ACTIVE'), sch
 router.put('/candidates/:id/interviews/:interviewId', checkStatus('VERIFIED', 'ACTIVE'), updateInterviewFeedback);
 router.post('/candidates/:id/offer', checkStatus('VERIFIED', 'ACTIVE'), makeOffer);
 router.put('/candidates/:id/offer', checkStatus('VERIFIED', 'ACTIVE'), updateOfferResponse);
-// router.post('/candidates/:id/joining', checkStatus('VERIFIED', 'ACTIVE'), confirmJoining); // ❌ DISABLED - Commission system inactive
+// router.post('/candidates/:id/joining', checkStatus('VERIFIED', 'ACTIVE'), confirmJoining);
 router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), addNote);
 
 module.exports = router;
