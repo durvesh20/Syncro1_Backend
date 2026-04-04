@@ -1,30 +1,19 @@
-const dotenv = require("dotenv");
-dotenv.config();
-
-const bcrypt = require("bcryptjs"); // use bcryptjs since your project uses bcryptjs in User model
-const connectDB = require("./config/db");
+const bcrypt = require("bcryptjs");
+const mongoose = require("mongoose");
 const User = require("./models/User");
+require("dotenv").config();
 
 (async () => {
-  try {
-    await connectDB();
+  await mongoose.connect(process.env.MONGO_URI);
 
-    const adminEmail = "admin@syncro1.com";
-    const plainPassword = "Admin@123"; // <-- put the password you want to test
+  const newPassword = "Admin@123";
+  const hash = await bcrypt.hash(newPassword, 10);
 
-    const admin = await User.findOne({ email: adminEmail }).select("+password");
-    if (!admin) {
-      console.log("Admin not found");
-      process.exit(0);
-    }
+  await User.updateOne(
+    { email: "admin@syncro1.com" },
+    { password: hash }
+  );
 
-    console.log("Hash exists:", !!admin.password);
-    const match = await bcrypt.compare(plainPassword, admin.password);
-    console.log("Password match:", match);
-
-    process.exit(0);
-  } catch (err) {
-    console.error("Error:", err);
-    process.exit(1);
-  }
+  console.log("✅ Password reset successful");
+  process.exit(0);
 })();

@@ -176,7 +176,7 @@ const seedDatabase = async () => {
         designation: "Director",
         city: "Mumbai",
         state: "Maharashtra",
-        
+
         firmDetails: {
           registeredName: "Test Recruiters Private Limited",
           tradeName: "Test Recruiters",
@@ -203,7 +203,7 @@ const seedDatabase = async () => {
           cinNumber: "U74999MH2020PTC123456",
           employeeCount: "6-20",
         },
-        
+
         Syncro1Competency: {
           primaryHiringSectors: ["Technology", "BFSI", "Healthcare"],
           hiringLevels: ["Entry", "Mid", "Senior"],
@@ -211,14 +211,14 @@ const seedDatabase = async () => {
           averageMonthlyClosures: 8,
           yearsOfRecruitmentExperience: 6,
         },
-        
+
         geographicReach: {
           preferredHiringLocations: ["Mumbai", "Pune", "Bangalore", "Delhi", "Hyderabad"],
           panIndiaCapability: true,
           operatingCities: ["Mumbai", "Pune", "Bangalore"],
           operatingStates: ["Maharashtra", "Karnataka"],
         },
-        
+
         // ✅ FIXED: Proper Object structure matching the model
         compliance: {
           syncrotechAgreement: {
@@ -277,30 +277,30 @@ const seedDatabase = async () => {
           agreementSigned: true,
           agreementSignedAt: now
         },
-        
+
         financeDetails: {
           bankAccountHolderName: "Test Recruiters Pvt Ltd",
           bankName: "HDFC Bank",
           accountNumber: "1234567890",
           ifscCode: "HDFC0001234",
         },
-        
+
         payoutPreferences: {
           payoutEntityName: "Test Recruiters Private Limited",
           gstRegistration: "Regular",
           tdsApplicable: true,
         },
-        
+
         subscription: {
           plan: "PROFESSIONAL",
           startDate: now,
           endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
           isActive: true,
         },
-        
+
         verificationStatus: "APPROVED",
         verifiedAt: now,
-        
+
         profileCompletion: {
           basicInfo: true,
           firmDetails: true,
@@ -349,7 +349,7 @@ const seedDatabase = async () => {
         linkedinProfile: "https://linkedin.com/in/johndoe",
         city: "Bangalore",
         state: "Karnataka",
-        
+
         kyc: {
           registeredName: "TechCorp Solutions Private Limited",
           tradeName: "TechCorp",
@@ -378,7 +378,7 @@ const seedDatabase = async () => {
           gstNumber: "29AABCT5678A1Z5",
           panNumber: "AABCT5678A",
         },
-        
+
         hiringPreferences: {
           preferredIndustries: ["Technology"],
           hiringType: "Both",
@@ -389,7 +389,7 @@ const seedDatabase = async () => {
           preferredLocations: ["Bangalore", "Mumbai", "Hyderabad"],
           urgencyLevel: "Ongoing",
         },
-        
+
         billing: {
           billingEntityName: "TechCorp Solutions Private Limited",
           gstRegistrationType: "Regular",
@@ -399,7 +399,7 @@ const seedDatabase = async () => {
           tdsApplicable: true,
           paymentTerms: "Net 30",
         },
-        
+
         legalConsents: {
           termsAccepted: true,
           termsAcceptedAt: now,
@@ -424,10 +424,10 @@ const seedDatabase = async () => {
           communicationConsentAt: now,
           communicationConsentIp: ipAddress,
         },
-        
+
         verificationStatus: "APPROVED",
         verifiedAt: now,
-        
+
         profileCompletion: {
           basicInfo: true,
           kyc: true,
@@ -481,7 +481,7 @@ const seedDatabase = async () => {
           company: company._id,
           postedBy: companyUser._id,
           title: "Junior Frontend Developer",
-          description: "Great opportunity for freshers...",
+          description: "This is a great opportunity for freshers to start their career in frontend development using modern technologies like React, JavaScript, and responsive design principles.",
           requirements: ["0-2 years experience", "HTML", "CSS", "JavaScript"],
           category: "Technology",
           employmentType: "Full-time",

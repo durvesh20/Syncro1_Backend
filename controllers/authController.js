@@ -205,7 +205,8 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
         code: mobileOTP,
         expiresAt: otpService.getExpiryTime()
       },
-      mobileVerified: skipMobileOTP
+      mobileVerified: skipMobileOTP,
+      isPasswordChanged: true
     });
 
     await StaffingPartner.create({
@@ -354,9 +355,9 @@ exports.initCompanyRegistration = async (req, res) => {
         code: mobileOTP,
         expiresAt: otpService.getExpiryTime()
       },
-      mobileVerified: skipMobileOTP
+      mobileVerified: skipMobileOTP,
+      isPasswordChanged: true
     });
-
     await Company.create({
       user: user._id,
       companyName,
@@ -826,8 +827,7 @@ exports.login = async (req, res) => {
       profile,
       profileMeta,
       canLogin: true,
-      nextStep,
-      requirePasswordChange: !user.isPasswordChanged
+      nextStep
     });
   } catch (error) {
     console.error('Login error:', error);
