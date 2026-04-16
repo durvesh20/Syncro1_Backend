@@ -192,11 +192,16 @@ const companySchema = new mongoose.Schema({
 
   // ==================== 8. DOCUMENTS (Post-Signup) ====================
   documents: {
+    // Mandatory
     gstCertificate: String,
     panCard: String,
     incorporationCertificate: String,
     authorizedSignatoryProof: String,
-    addressProof: String
+    addressProof: String,
+    msme: String,
+    udyamCertificate: String,
+    cinNumber: String,
+    otherCompanyDocument: String
   },
 
   // ==================== VERIFICATION ====================

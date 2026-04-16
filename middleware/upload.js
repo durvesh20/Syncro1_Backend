@@ -124,12 +124,6 @@ const uploadDocument = multer({
   limits: { fileSize: 10 * 1024 * 1024 }
 }).single('document');
 
-// 👇 ADD THIS RIGHT BELOW
-const uploadAdditionalDocument = multer({
-  storage: documentStorage,
-  fileFilter: documentFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }
-}).single('additionalDocument');
 
 const uploadPartnerDocuments = multer({
   storage: documentStorage,
@@ -149,11 +143,15 @@ const uploadCompanyDocuments = multer({
   fileFilter: documentFilter,
   limits: { fileSize: 10 * 1024 * 1024 }
 }).fields([
-  { name: 'incorporationCertificate', maxCount: 1 },
   { name: 'gstCertificate', maxCount: 1 },
   { name: 'panCard', maxCount: 1 },
+  { name: 'incorporationCertificate', maxCount: 1 },
+  { name: 'authorizedSignatoryProof', maxCount: 1 },
   { name: 'addressProof', maxCount: 1 },
-  { name: 'authorizedSignatoryProof', maxCount: 1 }
+  { name: 'msme', maxCount: 1 },
+  { name: 'udyamCertificate', maxCount: 1 },
+  { name: 'cinNumber', maxCount: 1 },
+  { name: 'otherCompanyDocument', maxCount: 1 }
 ]);
 
 const uploadAny = multer({
@@ -221,7 +219,6 @@ module.exports = {
   uploadResume,
   uploadLogo,
   uploadDocument,
-  uploadAdditionalDocument,
   uploadPartnerDocuments,
   uploadCompanyDocuments,
   uploadAny,

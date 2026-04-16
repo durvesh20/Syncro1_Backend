@@ -553,25 +553,27 @@ exports.uploadDocuments = async (req, res) => {
     const {
       gstCertificate,
       panCard,
-      additionalDocuments,
+      incorporationCertificate,
+      authorizedSignatoryProof,
+      addressProof,
+      msme,
+      udyamCertificate,
+      cinNumber,
+      otherCompanyDocument,
     } = req.body;
 
+    // Mandatory
     if (gstCertificate) company.documents.gstCertificate = gstCertificate;
     if (panCard) company.documents.panCard = panCard;
 
-    if (additionalDocuments && Array.isArray(additionalDocuments)) {
-      if (!company.documents.additionalDocuments) {
-        company.documents.additionalDocuments = [];
-      }
-      additionalDocuments.forEach(doc => {
-        company.documents.additionalDocuments.push({
-          documentType: doc.documentType,
-          documentUrl: doc.documentUrl,
-          documentName: doc.documentName,
-          uploadedAt: new Date()
-        });
-      });
-    }
+    // Optional
+    if (incorporationCertificate) company.documents.incorporationCertificate = incorporationCertificate;
+    if (authorizedSignatoryProof) company.documents.authorizedSignatoryProof = authorizedSignatoryProof;
+    if (addressProof) company.documents.addressProof = addressProof;
+    if (msme) company.documents.msme = msme;
+    if (udyamCertificate) company.documents.udyamCertificate = udyamCertificate;
+    if (cinNumber) company.documents.cinNumber = cinNumber;
+    if (otherCompanyDocument) company.documents.otherCompanyDocument = otherCompanyDocument;
 
     // Mark complete only if mandatory docs uploaded
     company.profileCompletion.documents = !!(
