@@ -90,7 +90,8 @@ const jobSchema = new mongoose.Schema({
     state: { type: String, required: true },
     country: { type: String, default: 'India' },
     isRemote: { type: Boolean, default: false },
-    isHybrid: { type: Boolean, default: false }
+    isHybrid: { type: Boolean, default: false },
+    onSite: { type: Boolean, default: false }
   },
 
   // ==================== SKILLS & EDUCATION ====================
@@ -117,7 +118,11 @@ const jobSchema = new mongoose.Schema({
 
   // ==================== DATES ====================
   applicationDeadline: Date,
-  expectedJoiningDate: Date,
+  expectedJoiningDate: {
+    type:String,
+    enum:['0-15 days', '0-30 days', '0-60 days', '0-90 days'],
+    default: '0-15 days'
+  },
 
   // ==================== JOB STATUS (for partner visibility) ====================
   status: {

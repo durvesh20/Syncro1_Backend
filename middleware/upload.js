@@ -120,7 +120,11 @@ uploadPartnerDocuments: upload.fields([
     { name: 'gstCertificate', maxCount: 1 },
     { name: 'panCard', maxCount: 1 },
     { name: 'addressProof', maxCount: 1 },
-    { name: 'authorizedSignatoryProof', maxCount: 1 }
+    { name: 'authorizedSignatoryProof', maxCount: 1 },
+    { name: 'msme', maxCount: 1 },
+    { name: 'udyamCertificate', maxCount: 1 },
+    { name: 'cinNumber', maxCount: 1 },
+    { name: 'otherCompanyDocument', maxCount: 1 }
   ]),
 
   // Generic upload for any file

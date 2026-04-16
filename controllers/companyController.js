@@ -458,7 +458,7 @@ exports.updateLegalConsents = async (req, res) => {
     const {
       termsAccepted,
       privacyPolicyAccepted,
-      dataProcessingAgreementAccepted,
+      cookiePolicyAccepted,
       dataStorageConsent,
       vendorSharingConsent,
       communicationConsent,
@@ -485,13 +485,13 @@ exports.updateLegalConsents = async (req, res) => {
         ? ipAddress
         : company.legalConsents?.privacyPolicyAcceptedIp,
 
-      dataProcessingAgreementAccepted,
-      dataProcessingAgreementAcceptedAt: dataProcessingAgreementAccepted
+      cookiePolicyAccepted,
+      cookiePolicyAcceptedAt: cookiePolicyAccepted
         ? timestamp
-        : company.legalConsents?.dataProcessingAgreementAcceptedAt,
-      dataProcessingAgreementAcceptedIp: dataProcessingAgreementAccepted
+        : company.legalConsents?.cookiePolicyAcceptedAt,
+      cookiePolicyAcceptedIp: cookiePolicyAccepted
         ? ipAddress
-        : company.legalConsents?.dataProcessingAgreementAcceptedIp,
+        : company.legalConsents?.cookiePolicyAcceptedIp,
 
       dataStorageConsent,
       dataStorageConsentAt: dataStorageConsent
@@ -556,6 +556,10 @@ exports.uploadDocuments = async (req, res) => {
       incorporationCertificate,
       authorizedSignatoryProof,
       addressProof,
+      msme,
+      udyamCertificate,
+      cinNumber,
+      otherCompanyDocument
     } = req.body;
 
     if (gstCertificate) company.documents.gstCertificate = gstCertificate;
@@ -565,6 +569,10 @@ exports.uploadDocuments = async (req, res) => {
     if (authorizedSignatoryProof)
       company.documents.authorizedSignatoryProof = authorizedSignatoryProof;
     if (addressProof) company.documents.addressProof = addressProof;
+    if (msme) company.documents.msme = msme;
+    if (udyamCertificate) company.documents.udyamCertificate = udyamCertificate;
+    if (cinNumber) company.documents.cinNumber = cinNumber;
+    if (otherCompanyDocument) company.documents.otherCompanyDocument = otherCompanyDocument;
 
     company.profileCompletion.documents = true;
     await company.save();

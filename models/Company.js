@@ -115,25 +115,8 @@ const companySchema = new mongoose.Schema({
       state: String,
       pincode: String
     },
-    gstRegistrationType: {
-      type: String,
-      enum: ['Regular', 'Composition', 'Unregistered'],
-      default: 'Unregistered'
-    },
     gstNumber: String,
     panNumber: String,
-    poRequired: { type: Boolean, default: false },
-    tdsApplicable: { type: Boolean, default: true },
-    paymentTerms: {
-      type: String,
-      enum: ['Immediate', 'Net 15', 'Net 30', 'Net 45', 'Net 60'],
-      default: 'Net 30'
-    },
-    preferredPaymentMethod: {
-      type: String,
-      enum: ['Bank Transfer', 'Cheque', 'Online Payment'],
-      default: 'Bank Transfer'
-    }
   },
 
   // ==================== 6. USER ROLES & ACCESS CONTROL ====================
@@ -165,10 +148,10 @@ const companySchema = new mongoose.Schema({
     privacyPolicyAcceptedAt: Date,
     privacyPolicyAcceptedIp: String,
 
-    // Data Processing Agreement
-    dataProcessingAgreementAccepted: { type: Boolean, default: false },
-    dataProcessingAgreementAcceptedAt: Date,
-    dataProcessingAgreementAcceptedIp: String,
+    // cookie Policy
+    cookiePolicyAccepted: { type: Boolean, default: false },
+    cookiePolicyAcceptedAt: Date,
+    cookiePolicyAcceptedIp: String,
 
     // Data Storage Consent
     dataStorageConsent: { type: Boolean, default: false },
@@ -196,7 +179,11 @@ const companySchema = new mongoose.Schema({
     panCard: String,
     incorporationCertificate: String,
     authorizedSignatoryProof: String,
-    addressProof: String
+    addressProof: String,
+    msme:String,
+    udyamCertificate:String,
+    cinNumber:String,
+    otherCompanyDocument:String,
   },
 
   // ==================== VERIFICATION ====================
