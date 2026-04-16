@@ -113,7 +113,6 @@ exports.updateFirmDetails = async (req, res) => {
       employeeCount,
     } = req.body;
 
-    // Handle operating address "same as registered" logic
     let finalOperatingAddress = operatingAddress;
     if (operatingAddress?.sameAsRegistered && registeredOfficeAddress) {
       finalOperatingAddress = {
@@ -232,12 +231,10 @@ exports.updateCompliance = async (req, res) => {
 
     const { syncrotechAgreement, digitalSignature } = req.body;
 
-    // Get IP address
     const ipAddress =
       req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress;
     const timestamp = new Date();
 
-    // Validate all clauses are accepted
     const requiredClauses = [
       "noCvRecycling",
       "noFakeProfiles",
@@ -265,7 +262,6 @@ exports.updateCompliance = async (req, res) => {
       });
     }
 
-    // Build compliance object with timestamps
     const complianceData = {
       syncrotechAgreement: {},
     };
@@ -369,7 +365,6 @@ exports.updateTeamAccess = async (req, res) => {
       });
     }
 
-    // Only verified partners can manage team
     if (partner.verificationStatus !== "APPROVED") {
       return res.status(403).json({
         success: false,
@@ -425,7 +420,6 @@ exports.addTeamMember = async (req, res) => {
       });
     }
 
-    // Check if email already exists
     const existingMember = partner.teamAccess.teamMembers.find(
       (m) => m.email === email,
     );
@@ -503,7 +497,6 @@ exports.updateTeamMember = async (req, res) => {
       });
     }
 
-    // Check if email already exists (for different member)
     if (email) {
       const existingMember = partner.teamAccess.teamMembers.find(
         (m) => m.email === email && m._id.toString() !== memberId,
@@ -517,7 +510,6 @@ exports.updateTeamMember = async (req, res) => {
       }
     }
 
-    // Update member fields
     if (name) partner.teamAccess.teamMembers[memberIndex].name = name;
     if (email) partner.teamAccess.teamMembers[memberIndex].email = email;
     if (mobile) partner.teamAccess.teamMembers[memberIndex].mobile = mobile;
@@ -580,7 +572,6 @@ exports.removeTeamMember = async (req, res) => {
       (m) => m._id.toString() !== memberId,
     );
 
-    // If no team members left, disable team access
     if (partner.teamAccess.teamMembers.length === 0) {
       partner.teamAccess.isTeamEnabled = false;
     }
@@ -718,7 +709,6 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // Check if already submitted
     if (partner.verificationStatus === 'PENDING' || partner.verificationStatus === 'VERIFIED') {
       return res.status(400).json({
         success: false,
@@ -726,7 +716,6 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // ✅ Enforce ALL sections including commercial & documents
     const required = [
       'basicInfo',
       'firmDetails',
@@ -748,15 +737,13 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // ✅ Validate bank details exist
-    if (!partner.commercialDetails?.bankAccountNumber) {
+    if (!partner.commercialDetails?.accountNumber) {
       return res.status(400).json({
         success: false,
         message: 'Bank account details are required for payouts'
       });
     }
 
-    // ✅ Validate at least PAN & GST docs uploaded
     const requiredDocs = ['panCard', 'gstCertificate'];
     const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
 
@@ -769,14 +756,12 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // Update verification status
     partner.verificationStatus = 'PENDING';
     partner.submittedAt = new Date();
     await partner.save();
 
-    // Update user status
     const user = await User.findById(req.user._id);
-    user.status = 'PENDING_VERIFICATION';
+    user.status = 'UNDER_VERIFICATION';
     await user.save();
 
     res.json({
@@ -798,7 +783,6 @@ exports.submitProfile = async (req, res) => {
 
 // @desc    Get Available Jobs
 // @route   GET /api/staffing-partners/jobs
-// ✅ ENHANCED: Uses jobAccessService for plan-based filtering
 exports.getAvailableJobs = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -812,7 +796,6 @@ exports.getAvailableJobs = async (req, res) => {
 
     const partnerPlan = partner.subscription?.plan || "FREE";
 
-    // ✅ Use job access service with plan-based filtering
     const result = await jobAccessService.getAccessibleJobs(
       partner._id,
       partnerPlan,
@@ -831,7 +814,6 @@ exports.getAvailableJobs = async (req, res) => {
       },
     );
 
-    // ✅ If no jobs found, provide helpful debug info
     if (result.jobs.length === 0) {
       const totalActiveJobs = await Job.countDocuments({ status: "ACTIVE" });
       const jobsForPlan = await Job.countDocuments({
@@ -891,7 +873,6 @@ exports.getJobDetails = async (req, res) => {
       });
     }
 
-    // Increment view count
     job.metrics.views += 1;
     await job.save();
 
@@ -913,7 +894,6 @@ exports.getJobDetails = async (req, res) => {
 
 // @desc    Submit Candidate for a Job
 // @route   POST /api/staffing-partners/jobs/:jobId/candidates
-// ✅ COMPLETE: All validations, duplicate detection, notifications
 exports.submitCandidate = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -940,7 +920,6 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // Check plan eligibility
     const partnerPlan = partner.subscription?.plan || "FREE";
     if (
       job.eligiblePlans &&
@@ -965,7 +944,6 @@ exports.submitCandidate = async (req, res) => {
       forceSubmit,
     } = req.body;
 
-    // Validate required fields
     if (!firstName || !lastName || !email || !mobile) {
       return res.status(400).json({
         success: false,
@@ -980,14 +958,12 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // ✅ DUPLICATE DETECTION
     const duplicateCheck = await duplicateDetection.checkBeforeSubmission(
       { email, mobile },
       job._id,
       partner._id,
     );
 
-    // Hard block — cannot submit
     if (!duplicateCheck.canSubmit) {
       return res.status(409).json({
         success: false,
@@ -1000,7 +976,6 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // Warnings exist — ask for confirmation unless forceSubmit
     const highSeverityWarnings = duplicateCheck.warnings.filter(
       (w) => w.severity === "high",
     );
@@ -1017,7 +992,6 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // ✅ CREATE CANDIDATE
     const candidate = await Candidate.create({
       submittedBy: partner._id,
       job: job._id,
@@ -1045,7 +1019,6 @@ exports.submitCandidate = async (req, res) => {
       ],
     });
 
-    // ✅ UPDATE METRICS
     await Job.findByIdAndUpdate(job._id, {
       $inc: { "metrics.applications": 1 },
     });
@@ -1053,7 +1026,6 @@ exports.submitCandidate = async (req, res) => {
       $inc: { "metrics.totalSubmissions": 1 },
     });
 
-    // ✅ NOTIFY COMPANY about new candidate
     const company = await Company.findById(job.company).populate("user", "_id");
 
     if (company?.user) {
@@ -1240,32 +1212,27 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
-    // Get recent submissions
     const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
       .populate('job', 'title')
       .populate('company', 'companyName')
       .sort({ createdAt: -1 })
       .limit(5);
 
-    // Get status breakdown
     const statusBreakdown = await Candidate.aggregate([
       { $match: { submittedBy: partner._id } },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
-    // Get available jobs count
     const availableJobsCount = await Job.countDocuments({
       status: 'ACTIVE',
       eligiblePlans: partner.subscription?.plan || 'FREE'
     });
 
-    // Calculate profile completion
     const profileCompletion = partner.profileCompletion;
     const completedSections = Object.values(profileCompletion).filter(Boolean).length;
     const totalSections = Object.keys(profileCompletion).length;
     const completionPercentage = Math.round((completedSections / totalSections) * 100);
 
-    // ✅ NEW: Earnings summary
     const Payout = require('../models/Payout');
     const earningsSummary = {
       totalEarnings: partner.metrics.totalEarnings || 0,
@@ -1275,7 +1242,6 @@ exports.getDashboard = async (req, res) => {
       totalPlacements: partner.metrics.totalPlacements || 0
     };
 
-    // ✅ NEW: Upcoming payouts (becoming eligible soon)
     const upcomingDate = new Date();
     upcomingDate.setDate(upcomingDate.getDate() + 30);
 
@@ -1291,7 +1257,6 @@ exports.getDashboard = async (req, res) => {
       .sort({ 'replacementGuarantee.endDate': 1 })
       .limit(5);
 
-    // ✅ NEW: Recent payouts
     const recentPayouts = await Payout.find({
       staffingPartner: partner._id,
       status: { $in: ['PAID', 'ELIGIBLE', 'APPROVED'] }
@@ -1314,8 +1279,6 @@ exports.getDashboard = async (req, res) => {
           ...profileCompletion,
           percentage: completionPercentage
         },
-
-        // ✅ NEW: Earnings data
         earnings: {
           summary: earningsSummary,
           upcomingPayouts: upcomingPayouts.map(p => ({
@@ -1333,7 +1296,6 @@ exports.getDashboard = async (req, res) => {
             paidAt: p.payment?.paidAt
           }))
         },
-
         recentSubmissions,
         statusBreakdown,
         availableJobsCount
@@ -1351,6 +1313,7 @@ exports.getDashboard = async (req, res) => {
 
 // @desc    Get Earnings/Payouts
 // @route   GET /api/staffing-partners/earnings
+// ✅ SINGLE KEPT VERSION - payout model based
 exports.getEarnings = async (req, res) => {
   try {
     const Payout = require('../models/Payout');
@@ -1383,7 +1346,6 @@ exports.getEarnings = async (req, res) => {
       Payout.countDocuments(query)
     ]);
 
-    // Enrich with computed fields
     const enrichedPayouts = payouts.map(p => ({
       ...p.toObject(),
       daysRemaining: p.getDaysRemaining(),
@@ -1391,7 +1353,6 @@ exports.getEarnings = async (req, res) => {
       candidateName: `${p.candidate.firstName} ${p.candidate.lastName}`
     }));
 
-    // Summary from partner metrics
     const summary = {
       totalEarnings: partner.metrics.totalEarnings || 0,
       pendingPayouts: partner.metrics.pendingPayouts || 0,
@@ -1401,7 +1362,6 @@ exports.getEarnings = async (req, res) => {
       totalPlacements: partner.metrics.totalPlacements || 0
     };
 
-    // Status breakdown
     const statusBreakdown = await Payout.aggregate([
       { $match: { staffingPartner: partner._id } },
       {
@@ -1413,7 +1373,6 @@ exports.getEarnings = async (req, res) => {
       }
     ]);
 
-    // Upcoming eligible (becoming eligible in next 30 days)
     const upcomingDate = new Date();
     upcomingDate.setDate(upcomingDate.getDate() + 30);
 
@@ -1610,81 +1569,10 @@ exports.getInvoice = async (req, res) => {
       error: error.message
     });
   }
-};// @desc    Get Earnings/Payouts
-// @route   GET /api/staffing-partners/earnings
-exports.getEarnings = async (req, res) => {
-  try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
-
-    if (!partner) {
-      return res.status(404).json({
-        success: false,
-        message: "Profile not found",
-      });
-    }
-
-    // Get placed candidates with payout info
-    const placements = await Candidate.find({
-      submittedBy: partner._id,
-      status: "JOINED",
-    })
-      .populate("job", "title commission")
-      .populate("company", "companyName")
-      .sort({ "joining.confirmedAt": -1 });
-
-    // Calculate totals
-    const totalEarnings = placements.reduce(
-      (sum, p) => sum + (p.payout?.commissionAmount || 0),
-      0,
-    );
-    const paidEarnings = placements
-      .filter((p) => p.payout?.status === "PAID")
-      .reduce((sum, p) => sum + (p.payout?.commissionAmount || 0), 0);
-    const pendingEarnings = totalEarnings - paidEarnings;
-
-    res.json({
-      success: true,
-      data: {
-        summary: {
-          totalEarnings,
-          paidEarnings,
-          pendingEarnings,
-          totalPlacements: placements.length,
-        },
-        placements,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch earnings",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Get Earnings/Payouts
-// @route   GET /api/staffing-partners/earnings
-// ✅ STUB: Returns empty data (payout system disabled)
-exports.getEarnings = async (req, res) => {
-  res.json({
-    success: true,
-    message: "Earnings feature is currently disabled",
-    data: {
-      summary: {
-        totalEarnings: 0,
-        paidEarnings: 0,
-        pendingEarnings: 0,
-        totalPlacements: 0,
-      },
-      placements: [],
-    },
-  });
 };
 
 // @desc    Withdraw Candidate
 // @route   PUT /api/staffing-partners/submissions/:id/withdraw
-// ✅ COMPLETE: Uses lifecycle service for proper validation
 exports.withdrawCandidate = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -1697,7 +1585,6 @@ exports.withdrawCandidate = async (req, res) => {
       });
     }
 
-    // Verify this candidate belongs to this partner
     const candidate = await Candidate.findOne({
       _id: req.params.id,
       submittedBy: partner._id,
@@ -1710,7 +1597,6 @@ exports.withdrawCandidate = async (req, res) => {
       });
     }
 
-    // Use lifecycle service for proper validation + notifications
     const candidateLifecycleService = require("../services/candidateLifecycleService");
 
     try {

@@ -1,11 +1,20 @@
-// backend/controllers/adminController.js - FIXED
+// backend/controllers/adminController.js
 const User = require('../models/User');
 const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
 const Job = require('../models/Job');
 const Candidate = require('../models/Candidate');
-// const Payout = require('../models/Payout'); // ❌ DISABLED - Payout system inactive
+const { PERMISSIONS } = require('../utils/permissions');
 const emailService = require('../services/emailService');
+
+const hasPermission = (user, permission) => {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  if (user.role !== 'sub_admin') return false;
+
+  const permissions = user.permissions || [];
+  return permissions.includes(permission);
+};
 
 // @desc    Get Dashboard Overview
 // @route   GET /api/admin/dashboard
@@ -21,10 +30,8 @@ exports.getDashboard = async (req, res) => {
         partners: await StaffingPartner.countDocuments({ verificationStatus: 'UNDER_REVIEW' }),
         companies: await Company.countDocuments({ verificationStatus: 'UNDER_REVIEW' })
       }
-      // pendingPayouts: await Payout.countDocuments({ status: 'PENDING' }) // ❌ DISABLED
     };
 
-    // Recent activities
     const recentRegistrations = await User.find()
       .sort({ createdAt: -1 })
       .limit(10)
@@ -63,8 +70,9 @@ exports.getPendingVerifications = async (req, res) => {
     let companies = [];
 
     if (!type || type === 'partners') {
-      partners = await StaffingPartner.find({ verificationStatus: 'UNDER_REVIEW' })
-        .populate('user', 'email mobile createdAt')
+      partners = await StaffingPartner.find({
+        verificationStatus: { $in: ['PENDING', 'UNDER_REVIEW'] }
+      }).populate('user', 'email mobile createdAt')
         .sort({ createdAt: 1 });
     }
 
@@ -92,22 +100,70 @@ exports.getPendingVerifications = async (req, res) => {
 exports.verifyPartner = async (req, res) => {
   try {
     const { action, notes, rejectionReason } = req.body;
+
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid action. Use "approve" or "reject"'
+      });
+    }
+
+    if (action === 'approve' && !hasPermission(req.user, PERMISSIONS.APPROVE_PARTNER)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to approve staffing partners'
+      });
+    }
+
+    if (action === 'reject' && !hasPermission(req.user, PERMISSIONS.REJECT_PARTNER)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to reject staffing partners'
+      });
+    }
+
     const partner = await StaffingPartner.findById(req.params.id);
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Staffing partner not found'
+      });
+    }
+
     const user = await User.findById(partner.user);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Associated user not found'
+      });
+    }
 
     if (action === 'approve') {
       partner.verificationStatus = 'APPROVED';
       partner.verifiedBy = req.user._id;
       partner.verifiedAt = new Date();
-      partner.verificationNotes = notes;
+      partner.verificationNotes = notes || '';
 
       user.status = 'VERIFIED';
 
-      // Send approval email
-      await emailService.sendVerificationApproved(user.email, partner.fullName, 'staffing_partner');
-    } else if (action === 'reject') {
+      await emailService.sendVerificationApproved(
+        user.email,
+        `${partner.firstName} ${partner.lastName}`,
+        'staffing_partner'
+      );
+    } else {
+      if (!rejectionReason || rejectionReason.trim().length < 5) {
+        return res.status(400).json({
+          success: false,
+          message: 'Rejection reason is required (minimum 5 characters)'
+        });
+      }
+
       partner.verificationStatus = 'REJECTED';
-      partner.rejectionReason = rejectionReason;
+      partner.rejectionReason = rejectionReason.trim();
+      partner.verificationNotes = notes || '';
       user.status = 'REJECTED';
     }
 
@@ -120,6 +176,7 @@ exports.verifyPartner = async (req, res) => {
       data: partner
     });
   } catch (error) {
+    console.error('[ADMIN] Verify partner error:', error);
     res.status(500).json({
       success: false,
       message: 'Verification action failed',
@@ -133,26 +190,70 @@ exports.verifyPartner = async (req, res) => {
 exports.verifyCompany = async (req, res) => {
   try {
     const { action, notes, rejectionReason } = req.body;
+
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid action. Use "approve" or "reject"'
+      });
+    }
+
+    if (action === 'approve' && !hasPermission(req.user, PERMISSIONS.APPROVE_COMPANY)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to approve companies'
+      });
+    }
+
+    if (action === 'reject' && !hasPermission(req.user, PERMISSIONS.REJECT_COMPANY)) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to reject companies'
+      });
+    }
+
     const company = await Company.findById(req.params.id);
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
     const user = await User.findById(company.user);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Associated user not found'
+      });
+    }
 
     if (action === 'approve') {
       company.verificationStatus = 'APPROVED';
       company.verifiedBy = req.user._id;
       company.verifiedAt = new Date();
-      company.verificationNotes = notes;
+      company.verificationNotes = notes || '';
 
       user.status = 'VERIFIED';
 
-      // ✅ Use decisionMakerName directly
       await emailService.sendVerificationApproved(
         user.email,
-        company.decisionMakerName,  // ✅ Full name
+        company.decisionMakerName,
         'company'
       );
-    } else if (action === 'reject') {
+    } else {
+      if (!rejectionReason || rejectionReason.trim().length < 5) {
+        return res.status(400).json({
+          success: false,
+          message: 'Rejection reason is required (minimum 5 characters)'
+        });
+      }
+
       company.verificationStatus = 'REJECTED';
-      company.rejectionReason = rejectionReason;
+      company.rejectionReason = rejectionReason.trim();
+      company.verificationNotes = notes || '';
       user.status = 'REJECTED';
     }
 
@@ -165,6 +266,7 @@ exports.verifyCompany = async (req, res) => {
       data: company
     });
   } catch (error) {
+    console.error('[ADMIN] Verify company error:', error);
     res.status(500).json({
       success: false,
       message: 'Verification action failed',
@@ -173,7 +275,6 @@ exports.verifyCompany = async (req, res) => {
   }
 };
 
-
 // ==================== PAYOUT MANAGEMENT ====================
 
 // @desc    Get all payouts
@@ -181,13 +282,12 @@ exports.verifyCompany = async (req, res) => {
 exports.getPayouts = async (req, res) => {
   try {
     const Payout = require('../models/Payout');
-    const { status, page = 1, limit = 20, partnerId, search } = req.query;
+    const { status, page = 1, limit = 20, partnerId } = req.query;
 
     const query = {};
     if (status) query.status = status;
     if (partnerId) query.staffingPartner = partnerId;
 
-    // Sanitize pagination
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
     const skip = (sanitizedPage - 1) * sanitizedLimit;
@@ -206,14 +306,12 @@ exports.getPayouts = async (req, res) => {
       Payout.countDocuments(query)
     ]);
 
-    // Add computed fields
     const enrichedPayouts = payouts.map(p => ({
       ...p.toObject(),
       daysRemaining: p.getDaysRemaining(),
       isEligible: p.checkEligibility()
     }));
 
-    // Summary by status
     const summary = await Payout.aggregate([
       {
         $group: {
@@ -307,7 +405,6 @@ exports.approvePayout = async (req, res) => {
       });
     }
 
-    // Validate status
     if (payout.status !== 'ELIGIBLE') {
       return res.status(400).json({
         success: false,
@@ -318,11 +415,9 @@ exports.approvePayout = async (req, res) => {
       });
     }
 
-    // Approve
     payout.approve(req.user._id, notes);
     await payout.save();
 
-    // Notify partner
     const notificationEngine = require('../services/notificationEngine');
     if (payout.staffingPartner.user) {
       await notificationEngine.send({
@@ -389,7 +484,6 @@ exports.processPayout = async (req, res) => {
       });
     }
 
-    // Mark as paid
     payout.markPaid({
       method: paymentMethod || 'BANK_TRANSFER',
       transactionId,
@@ -400,7 +494,6 @@ exports.processPayout = async (req, res) => {
     if (notes) payout.notes = notes;
     await payout.save();
 
-    // Update candidate payout status
     await Candidate.findByIdAndUpdate(payout.candidate._id, {
       'payout.status': 'PAID',
       'payout.paidAt': new Date(),
@@ -409,14 +502,12 @@ exports.processPayout = async (req, res) => {
       'payout.paymentMethod': paymentMethod || 'BANK_TRANSFER'
     });
 
-    // Update partner metrics
     await commissionService._updatePartnerMetrics(
       payout.staffingPartner._id,
       payout.amount.netPayable,
       'mark_paid'
     );
 
-    // Notify partner
     const notificationEngine = require('../services/notificationEngine');
     if (payout.staffingPartner.user) {
       await notificationEngine.send({
@@ -527,7 +618,6 @@ exports.releasePayout = async (req, res) => {
       });
     }
 
-    // Determine new status based on eligibility
     const newStatus = payout.checkEligibility() ? 'ELIGIBLE' : 'PENDING';
 
     payout.status = newStatus;
@@ -556,7 +646,7 @@ exports.forfeitPayout = async (req, res) => {
   try {
     const commissionService = require('../services/commissionService');
     const Payout = require('../models/Payout');
-    const { leftDate, reason } = req.body;
+    const { leftDate } = req.body;
 
     if (!leftDate) {
       return res.status(400).json({
@@ -599,7 +689,7 @@ exports.forfeitPayout = async (req, res) => {
   }
 };
 
-// @desc    Run eligibility check (manual trigger - also runs via cron)
+// @desc    Run eligibility check
 // @route   POST /api/admin/payouts/check-eligibility
 exports.checkPayoutEligibility = async (req, res) => {
   try {
@@ -615,89 +705,6 @@ exports.checkPayoutEligibility = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to check eligibility',
-      error: error.message
-    });
-  }
-};// @desc    Manage Payouts
-// @route   GET /api/admin/payouts
-exports.getPayouts = async (req, res) => {
-  try {
-    const { status, page = 1, limit = 20 } = req.query;
-
-    const query = {};
-    if (status) query.status = status;
-
-    const payouts = await Payout.find(query)
-      .populate('staffingPartner', 'firstName lastName firmName financeDetails')
-      .populate('candidate', 'firstName lastName')
-      .populate('job', 'title')
-      .populate('company', 'companyName')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await Payout.countDocuments(query);
-
-    res.json({
-      success: true,
-      data: {
-        payouts,
-        pagination: {
-          current: parseInt(page),
-          pages: Math.ceil(total / limit),
-          total
-        }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch payouts',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Process Payout
-// @route   PUT /api/admin/payouts/:id
-exports.processPayout = async (req, res) => {
-  try {
-    const { action, transactionId, utrNumber, rejectionReason } = req.body;
-    const payout = await Payout.findById(req.params.id);
-
-    if (action === 'approve') {
-      payout.status = 'APPROVED';
-      payout.approvedBy = req.user._id;
-      payout.approvedAt = new Date();
-    } else if (action === 'process') {
-      payout.status = 'PROCESSING';
-    } else if (action === 'complete') {
-      payout.status = 'PAID';
-      payout.paymentDetails.transactionId = transactionId;
-      payout.paymentDetails.utrNumber = utrNumber;
-      payout.paymentDetails.paidAt = new Date();
-
-      // Update partner metrics
-      const partner = await StaffingPartner.findById(payout.staffingPartner);
-      partner.metrics.totalEarnings += payout.amount.net;
-      partner.metrics.pendingPayouts -= payout.amount.gross;
-      await partner.save();
-    } else if (action === 'reject') {
-      payout.status = 'REJECTED';
-      payout.rejectionReason = rejectionReason;
-    }
-
-    await payout.save();
-
-    res.json({
-      success: true,
-      message: `Payout ${action} successfully`,
-      data: payout
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Payout action failed',
       error: error.message
     });
   }
@@ -719,7 +726,6 @@ exports.getUsers = async (req, res) => {
       ];
     }
 
-    // ✅ FIX #10: Sanitize pagination
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
 
@@ -782,7 +788,6 @@ exports.getAnalytics = async (req, res) => {
   try {
     const { period = '30d' } = req.query;
 
-    // Calculate date range
     const endDate = new Date();
     let startDate = new Date();
 
@@ -800,7 +805,6 @@ exports.getAnalytics = async (req, res) => {
         startDate.setDate(startDate.getDate() - 30);
     }
 
-    // Registration trends
     const registrationTrends = await User.aggregate([
       { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
       {
@@ -815,7 +819,6 @@ exports.getAnalytics = async (req, res) => {
       { $sort: { '_id.date': 1 } }
     ]);
 
-    // Placement trends
     const placementTrends = await Candidate.aggregate([
       {
         $match: {
@@ -827,19 +830,16 @@ exports.getAnalytics = async (req, res) => {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$joining.confirmedAt' } },
           count: { $sum: 1 }
-          // totalValue: { $sum: '$payout.commissionAmount' } // ❌ DISABLED - Payout system inactive
         }
       },
       { $sort: { _id: 1 } }
     ]);
 
-    // Top performing partners
     const topPartners = await StaffingPartner.find()
       .sort({ 'metrics.totalPlacements': -1 })
       .limit(10)
       .select('firstName lastName firmName metrics');
 
-    // Top hiring companies
     const topCompanies = await Company.find()
       .sort({ 'metrics.totalHires': -1 })
       .limit(10)
@@ -873,7 +873,6 @@ exports.getPendingJobs = async (req, res) => {
 
     const query = { approvalStatus: 'PENDING_APPROVAL' };
 
-    // ✅ FIX #10: Sanitize pagination
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
 
@@ -886,11 +885,10 @@ exports.getPendingJobs = async (req, res) => {
 
     const total = await Job.countDocuments(query);
 
-    // Get submission age for each job
     const jobsWithAge = jobs.map(job => ({
       ...job.toObject(),
-      submittedAge: Math.floor((Date.now() - job.createdAt) / (1000 * 60 * 60)), // hours
-      isStale: (Date.now() - job.createdAt) > (7 * 24 * 60 * 60 * 1000) // > 7 days
+      submittedAge: Math.floor((Date.now() - job.createdAt) / (1000 * 60 * 60)),
+      isStale: (Date.now() - job.createdAt) > (7 * 24 * 60 * 60 * 1000)
     }));
 
     res.json({
@@ -941,7 +939,6 @@ exports.approveJob = async (req, res) => {
       });
     }
 
-    // Update job
     job.approvalStatus = 'ACTIVE';
     job.status = 'ACTIVE';
     job.approvedBy = req.user._id;
@@ -949,9 +946,7 @@ exports.approveJob = async (req, res) => {
     job.addToHistory('APPROVED', req.user._id, {}, notes || 'Job approved by admin');
     await job.save();
 
-    // Notify company
     const notificationEngine = require('../services/notificationEngine');
-    const emailService = require('../services/emailService');
 
     if (job.company.user) {
       await notificationEngine.send({
@@ -973,7 +968,6 @@ exports.approveJob = async (req, res) => {
         priority: 'high'
       });
 
-      // Send detailed email
       await emailService.sendJobApproved(
         job.company.user.email,
         job.company.companyName,
@@ -1034,17 +1028,14 @@ exports.rejectJob = async (req, res) => {
       });
     }
 
-    // Update job
     job.approvalStatus = 'REJECTED';
-    job.status = 'DRAFT'; // Back to draft so company can edit
+    job.status = 'DRAFT';
     job.rejectionReason = reason.trim();
     job.rejectedAt = new Date();
     job.addToHistory('REJECTED', req.user._id, {}, reason);
     await job.save();
 
-    // Notify company
     const notificationEngine = require('../services/notificationEngine');
-    const emailService = require('../services/emailService');
 
     if (job.company.user) {
       await notificationEngine.send({
@@ -1108,14 +1099,11 @@ exports.getPendingEditRequests = async (req, res) => {
     const query = { status: 'PENDING' };
     if (priority) query.priority = priority;
 
-    // ✅ FIX #10: Sanitize pagination
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
 
     let sort = {};
     if (sortBy === 'priority') {
-      // URGENT > HIGH > MEDIUM > LOW, then oldest first
-      const priorityOrder = { 'URGENT': 1, 'HIGH': 2, 'MEDIUM': 3, 'LOW': 4 };
       sort = { createdAt: 1 };
     } else if (sortBy === 'oldest') {
       sort = { createdAt: 1 };
@@ -1133,24 +1121,21 @@ exports.getPendingEditRequests = async (req, res) => {
 
     const total = await JobEditRequest.countDocuments(query);
 
-    // Add age and priority sorting
     let sortedRequests = editRequests.map(req => ({
       ...req.toObject(),
       ageHours: Math.floor((Date.now() - req.createdAt) / (1000 * 60 * 60)),
       isStale: req.isStale()
     }));
 
-    // Manual priority sort if needed
     if (sortBy === 'priority') {
-      const priorityOrder = { 'URGENT': 1, 'HIGH': 2, 'MEDIUM': 3, 'LOW': 4 };
+      const priorityOrder = { URGENT: 1, HIGH: 2, MEDIUM: 3, LOW: 4 };
       sortedRequests.sort((a, b) => {
         const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
         if (priorityDiff !== 0) return priorityDiff;
-        return a.createdAt - b.createdAt; // Older first if same priority
+        return a.createdAt - b.createdAt;
       });
     }
 
-    // Get priority breakdown
     const priorityStats = await JobEditRequest.aggregate([
       { $match: query },
       { $group: { _id: '$priority', count: { $sum: 1 } } }
@@ -1203,7 +1188,6 @@ exports.getEditRequest = async (req, res) => {
       });
     }
 
-    // Get job's edit history
     const allEditRequests = await JobEditRequest.find({
       job: editRequest.job._id
     }).sort({ createdAt: -1 });
@@ -1256,8 +1240,6 @@ exports.approveEditRequest = async (req, res) => {
     }
 
     const job = editRequest.job;
-
-    // Apply changes to job
     const changes = editRequest.requestedChanges;
     const appliedChanges = {};
 
@@ -1266,7 +1248,6 @@ exports.approveEditRequest = async (req, res) => {
         const keys = field.split('.');
         let target = job;
 
-        // Navigate to the nested field
         for (let i = 0; i < keys.length - 1; i++) {
           if (!target[keys[i]]) target[keys[i]] = {};
           target = target[keys[i]];
@@ -1286,16 +1267,12 @@ exports.approveEditRequest = async (req, res) => {
       }
     }
 
-    // ✅ FIX #1: Use Job model method for proper markModified
     job.applyEditChanges(appliedChanges);
-
-    // Update job
     job.approvalStatus = 'ACTIVE';
     job.approvedEditCount += 1;
     job.addToHistory('EDIT_APPROVED', req.user._id, appliedChanges, notes || 'Edit request approved');
     await job.save();
 
-    // Update edit request
     editRequest.status = 'APPROVED';
     editRequest.reviewedBy = req.user._id;
     editRequest.reviewedAt = new Date();
@@ -1304,9 +1281,7 @@ exports.approveEditRequest = async (req, res) => {
     editRequest.appliedChanges = appliedChanges;
     await editRequest.save();
 
-    // Notify company
     const notificationEngine = require('../services/notificationEngine');
-    const emailService = require('../services/emailService');
 
     if (editRequest.company.user) {
       await notificationEngine.send({
@@ -1393,15 +1368,13 @@ exports.rejectEditRequest = async (req, res) => {
 
     const job = editRequest.job;
 
-    // Update edit request
     editRequest.status = 'REJECTED';
     editRequest.reviewedBy = req.user._id;
     editRequest.reviewedAt = new Date();
     editRequest.adminResponse = reason.trim();
     await editRequest.save();
 
-    // Update job
-    job.approvalStatus = 'ACTIVE'; // Back to active
+    job.approvalStatus = 'ACTIVE';
     job.rejectedEditCount += 1;
     job.addToHistory('EDIT_REJECTED', req.user._id, editRequest.requestedChanges, reason);
     await job.save();
@@ -1410,9 +1383,7 @@ exports.rejectEditRequest = async (req, res) => {
     const shouldWarn = job.rejectedEditCount >= 3;
     const shouldDiscontinue = job.rejectedEditCount >= 5;
 
-    // Notify company
     const notificationEngine = require('../services/notificationEngine');
-    const emailService = require('../services/emailService');
 
     let warningMessage = '';
     if (shouldDiscontinue) {
@@ -1482,7 +1453,7 @@ exports.rejectEditRequest = async (req, res) => {
   }
 };
 
-// @desc    Discontinue job (too many rejected edits)
+// @desc    Discontinue job
 // @route   POST /api/admin/jobs/:id/discontinue
 exports.discontinueJob = async (req, res) => {
   try {
@@ -1512,7 +1483,6 @@ exports.discontinueJob = async (req, res) => {
       });
     }
 
-    // Update job
     job.approvalStatus = 'DISCONTINUED';
     job.status = 'CLOSED';
     job.discontinuedReason = reason.trim();
@@ -1521,16 +1491,13 @@ exports.discontinueJob = async (req, res) => {
     job.addToHistory('DISCONTINUED', req.user._id, {}, reason);
     await job.save();
 
-    // Mark all pending edit requests as SUPERSEDED
     const JobEditRequest = require('../models/JobEditRequest');
     await JobEditRequest.updateMany(
       { job: job._id, status: 'PENDING' },
       { status: 'SUPERSEDED' }
     );
 
-    // Notify company
     const notificationEngine = require('../services/notificationEngine');
-    const emailService = require('../services/emailService');
 
     if (job.company.user) {
       await notificationEngine.send({
@@ -1587,7 +1554,7 @@ exports.discontinueJob = async (req, res) => {
   }
 };
 
-// @desc    Get job edit history (audit trail)
+// @desc    Get job edit history
 // @route   GET /api/admin/jobs/:id/edit-history
 exports.getJobEditHistory = async (req, res) => {
   try {
@@ -1605,13 +1572,11 @@ exports.getJobEditHistory = async (req, res) => {
       });
     }
 
-    // Get all edit requests
     const editRequests = await JobEditRequest.find({ job: job._id })
       .populate('requestedBy', 'email')
       .populate('reviewedBy', 'email')
       .sort({ createdAt: -1 });
 
-    // Get change history from job
     const changeHistory = job.changeHistory.sort((a, b) => b.changedAt - a.changedAt);
 
     res.json({
@@ -1628,7 +1593,7 @@ exports.getJobEditHistory = async (req, res) => {
         stats: job.getEditStats(),
         editRequests,
         changeHistory,
-        timeline: this._buildTimeline(job, editRequests, changeHistory)
+        timeline: exports._buildTimeline(job, editRequests, changeHistory)
       }
     });
   } catch (error) {
@@ -1644,14 +1609,12 @@ exports.getJobEditHistory = async (req, res) => {
 exports._buildTimeline = (job, editRequests, changeHistory) => {
   const events = [];
 
-  // Add job creation
   events.push({
     type: 'CREATED',
     timestamp: job.createdAt,
     description: 'Job created'
   });
 
-  // Add change history events
   changeHistory.forEach(change => {
     events.push({
       type: change.changeType,
@@ -1661,7 +1624,6 @@ exports._buildTimeline = (job, editRequests, changeHistory) => {
     });
   });
 
-  // Add edit request events
   editRequests.forEach(req => {
     events.push({
       type: 'EDIT_REQUEST_CREATED',
@@ -1681,6 +1643,5 @@ exports._buildTimeline = (job, editRequests, changeHistory) => {
     }
   });
 
-  // Sort by timestamp descending
   return events.sort((a, b) => b.timestamp - a.timestamp);
 };

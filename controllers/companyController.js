@@ -553,20 +553,32 @@ exports.uploadDocuments = async (req, res) => {
     const {
       gstCertificate,
       panCard,
-      incorporationCertificate,
-      authorizedSignatoryProof,
-      addressProof,
+      additionalDocuments,
     } = req.body;
 
     if (gstCertificate) company.documents.gstCertificate = gstCertificate;
     if (panCard) company.documents.panCard = panCard;
-    if (incorporationCertificate)
-      company.documents.incorporationCertificate = incorporationCertificate;
-    if (authorizedSignatoryProof)
-      company.documents.authorizedSignatoryProof = authorizedSignatoryProof;
-    if (addressProof) company.documents.addressProof = addressProof;
 
-    company.profileCompletion.documents = true;
+    if (additionalDocuments && Array.isArray(additionalDocuments)) {
+      if (!company.documents.additionalDocuments) {
+        company.documents.additionalDocuments = [];
+      }
+      additionalDocuments.forEach(doc => {
+        company.documents.additionalDocuments.push({
+          documentType: doc.documentType,
+          documentUrl: doc.documentUrl,
+          documentName: doc.documentName,
+          uploadedAt: new Date()
+        });
+      });
+    }
+
+    // Mark complete only if mandatory docs uploaded
+    company.profileCompletion.documents = !!(
+      company.documents.gstCertificate &&
+      company.documents.panCard
+    );
+
     await company.save();
 
     res.json({
@@ -800,13 +812,13 @@ exports.getDashboard = async (req, res) => {
         },
         metrics: company.metrics,
         jobStats,
-        
+
         // ✅ NEW: Approval stats
         approvalStats: approvalStats.reduce((acc, curr) => {
           acc[curr._id] = curr.count;
           return acc;
         }, {}),
-        
+
         // ✅ NEW: Alerts section
         alerts: {
           rejectedJobs: {
@@ -829,7 +841,7 @@ exports.getDashboard = async (req, res) => {
             }))
           }
         },
-        
+
         recentCandidates,
         hiringFunnel,
         activeJobs,
@@ -1004,8 +1016,8 @@ exports.getRejectedJobs = async (req, res) => {
           total,
           limit
         },
-        message: total === 0 
-          ? '✅ No rejected jobs! All your submissions are either approved or pending review.' 
+        message: total === 0
+          ? '✅ No rejected jobs! All your submissions are either approved or pending review.'
           : `You have ${total} rejected job post${total > 1 ? 's' : ''} that need${total === 1 ? 's' : ''} revision.`
       }
     });
@@ -1241,7 +1253,7 @@ exports.getCandidate = async (req, res) => {
           message: "Not authorized to view this candidate",
         });
       }
-    } else if (req.user.role !== "admin") {
+    } else if (!["admin", "sub_admin"].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: "Not authorized to view this candidate",
@@ -1886,7 +1898,7 @@ exports.requestJobEdit = async (req, res) => {
 
       // Check if field exists in job
       const currentValue = field.split('.').reduce((obj, key) => obj?.[key], job);
-      
+
       if (currentValue === undefined) {
         invalidFields.push(`${field}: Field does not exist in job`);
         continue;

@@ -15,6 +15,11 @@ dotenv.config();
 // Connect to database
 connectDB();
 
+// Test Cloudinary connection
+const { testConnection: testCloudinary } = require('./config/cloudinary');
+testCloudinary();
+
+
 // ✅ Register Notification model BEFORE routes
 require('./models/Notification');
 
@@ -144,6 +149,7 @@ app.use('/api/companies', require('./routes/companyRoutes'));
 app.use('/api/jobs', require('./routes/jobRoutes'));
 app.use('/api/candidates', require('./routes/candidateRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api/admin/sub-admins', require('./routes/adminSubAdminRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
 // Register routes
 app.use('/api/onboarding', onboardingRoutes);
@@ -238,11 +244,22 @@ const server = app.listen(PORT, () => {
       ? '✅ Enabled'
       : '⏸️  Disabled (Mock)')
   );
+  console.log(
+    '   Cloudinary: ' +
+    (cloudinaryConfigured
+      ? '☁️ Configured'
+      : '⚠️ Not configured (check .env)')
+  );
   console.log('═══════════════════════════════════════════════════════');
   console.log('');
 });
 
-/* =========================================================
+const cloudinaryConfigured =
+  !!process.env.CLOUDINARY_CLOUD_NAME &&
+  !!process.env.CLOUDINARY_API_KEY &&
+  !!process.env.CLOUDINARY_API_SECRET;
+
+/* ==================================== =====================
    PROCESS ERROR HANDLING
 ========================================================= */
 

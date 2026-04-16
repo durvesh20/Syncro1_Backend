@@ -90,7 +90,8 @@ const jobSchema = new mongoose.Schema({
     state: { type: String, required: true },
     country: { type: String, default: 'India' },
     isRemote: { type: Boolean, default: false },
-    isHybrid: { type: Boolean, default: false }
+    isHybrid: { type: Boolean, default: false },
+    isOnSite: { type: Boolean, default: false }
   },
 
   // ==================== SKILLS & EDUCATION ====================
@@ -244,7 +245,7 @@ const jobSchema = new mongoose.Schema({
 jobSchema.index({ company: 1, approvalStatus: 1 });
 jobSchema.index({ approvalStatus: 1, createdAt: -1 });
 jobSchema.index({ status: 1, eligiblePlans: 1 });
-jobSchema.index({ slug: 1 });
+// jobSchema.index({ slug: 1 });
 jobSchema.index({ category: 1, status: 1 });
 jobSchema.index({ 'location.city': 1, status: 1 });
 // ✅ FIX #8: Added missing index
@@ -266,12 +267,27 @@ jobSchema.virtual('requiresApproval').get(function () {
 // ==================== MIDDLEWARE ====================
 
 jobSchema.pre('save', function (next) {
+  // Auto-generate slug
   if (this.isModified('title') && !this.slug) {
     this.slug = this.title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '') + '-' + Date.now();
   }
+
+  // Auto-generate uniqueId: YYYY-DD-MM-HHmmss-random
+  if (!this.uniqueId) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const date = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+    this.uniqueId = `JOB-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
+  }
+
   next();
 });
 

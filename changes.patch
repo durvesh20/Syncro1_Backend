@@ -1,1689 +1,4438 @@
-diff --git a/controllers/authController.js b/controllers/authController.js
-index ce20878..7be2698 100644
---- a/controllers/authController.js
-+++ b/controllers/authController.js
-@@ -8,10 +8,117 @@ const emailService = require('../services/emailService');
- const whatsappService = require('../services/whatsappService');
- const otpService = require('../services/otpService');
- const sendTokenResponse = require('../utils/sendTokenResponse');
-+const { validateEmail, validateMobile } = require('../utils/validators');
+diff --git a/changes.patch b/changes.patch
+index d99f84e..e69de29 100644
+--- a/changes.patch
++++ b/changes.patch
+@@ -1,1689 +0,0 @@
+-diff --git a/controllers/authController.js b/controllers/authController.js
+-index ce20878..7be2698 100644
+---- a/controllers/authController.js
+-+++ b/controllers/authController.js
+-@@ -8,10 +8,117 @@ const emailService = require('../services/emailService');
+- const whatsappService = require('../services/whatsappService');
+- const otpService = require('../services/otpService');
+- const sendTokenResponse = require('../utils/sendTokenResponse');
+-+const { validateEmail, validateMobile } = require('../utils/validators');
+- 
+- // Check if we should skip mobile OTP (for development)
+- const skipMobileOTP = process.env.WHATSAPP_ENABLED !== 'true';
+- 
+-+/**
+-+ * Helper: determine verification state for frontend
+-+ */
+-+const getVerificationState = (user) => {
+-+  if (!user.emailVerified && !user.mobileVerified) {
+-+    return {
+-+      canLogin: false,
+-+      nextStep: 'VERIFY_CONTACTS',
+-+      allowedActions: [
+-+        'RESEND_EMAIL_VERIFICATION',
+-+        'RESEND_MOBILE_OTP',
+-+        'CHECK_VERIFICATION_STATUS'
+-+      ]
+-+    };
+-+  }
+-+
+-+  if (!user.emailVerified) {
+-+    return {
+-+      canLogin: false,
+-+      nextStep: 'VERIFY_EMAIL',
+-+      allowedActions: [
+-+        'RESEND_EMAIL_VERIFICATION',
+-+        'CHECK_VERIFICATION_STATUS'
+-+      ]
+-+    };
+-+  }
+-+
+-+  if (!user.mobileVerified) {
+-+    return {
+-+      canLogin: false,
+-+      nextStep: 'VERIFY_MOBILE',
+-+      allowedActions: [
+-+        'RESEND_MOBILE_OTP',
+-+        'CHECK_VERIFICATION_STATUS'
+-+      ]
+-+    };
+-+  }
+-+
+-+  return {
+-+    canLogin: true,
+-+    nextStep: 'LOGIN',
+-+    allowedActions: []
+-+  };
+-+};
+-+
+-+/**
+-+ * Helper: set user status based on verification state
+-+ */
+-+const syncUserStatusAfterVerification = (user) => {
+-+  if (user.emailVerified && user.mobileVerified) {
+-+    user.status = 'ACTIVE';
+-+  } else {
+-+    user.status = 'PENDING_EMAIL_VERIFICATION';
+-+  }
+-+};
+-+
+-+/**
+-+ * Helper: get onboarding next step after successful login
+-+ */
+-+const getPostLoginNextStep = async (user) => {
+-+  let profile = null;
+-+
+-+  if (user.role === 'staffing_partner') {
+-+    profile = await StaffingPartner.findOne({ user: user._id });
+-+  } else if (user.role === 'company') {
+-+    profile = await Company.findOne({ user: user._id });
+-+  }
+-+
+-+  if (!profile) {
+-+    return {
+-+      profile,
+-+      profileMeta: {
+-+        completionPercentage: 0,
+-+        verificationStatus: 'PENDING'
+-+      },
+-+      nextStep: 'COMPLETE_PROFILE'
+-+    };
+-+  }
+-+
+-+  const completion = profile.profileCompletion || {};
+-+  const total = Object.keys(completion).length || 1;
+-+  const completed = Object.values(completion).filter(Boolean).length;
+-+  const completionPercentage = Math.round((completed / total) * 100);
+-+
+-+  let nextStep = 'COMPLETE_PROFILE';
+-+
+-+  if (completionPercentage < 100) {
+-+    nextStep = 'COMPLETE_PROFILE';
+-+  } else if (['PENDING', 'UNDER_REVIEW'].includes(profile.verificationStatus)) {
+-+    nextStep = 'WAITING_APPROVAL';
+-+  } else if (profile.verificationStatus === 'REJECTED') {
+-+    nextStep = 'PROFILE_REJECTED';
+-+  } else if (profile.verificationStatus === 'APPROVED') {
+-+    nextStep = 'GO_TO_DASHBOARD';
+-+  }
+-+
+-+  return {
+-+    profile,
+-+    profileMeta: {
+-+      completionPercentage,
+-+      verificationStatus: profile.verificationStatus
+-+    },
+-+    nextStep
+-+  };
+-+};
+-+
+- // @desc Register Staffing Partner - Step 1 (Basic Info + Send Verification)
+- // @route POST /api/auth/register/staffing-partner/init
+- exports.initStaffingPartnerRegistration = async (req, res) => {
+-@@ -29,7 +136,6 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+-       state
+-     } = req.body;
+- 
+--    // Validate required fields
+-     if (!firstName || !lastName || !email || !mobile || !password || !firmName || !designation || !city || !state) {
+-       return res.status(400).json({
+-         success: false,
+-@@ -37,7 +143,20 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+-       });
+-     }
+- 
+--    // Validate password
+-+    if (!validateEmail(email)) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Invalid email format'
+-+      });
+-+    }
+-+
+-+    if (!validateMobile(mobile)) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Invalid mobile number. Please provide 10-digit number'
+-+      });
+-+    }
+-+
+-     if (password.length < 8) {
+-       return res.status(400).json({
+-         success: false,
+-@@ -45,8 +164,13 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+-       });
+-     }
+- 
+--    // Check if user already exists
+--    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
+-+    const normalizedEmail = email.toLowerCase().trim();
+-+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+-+
+-+    const existingUser = await User.findOne({
+-+      $or: [{ email: normalizedEmail }, { mobile: normalizedMobile }]
+-+    });
+-+
+-     if (existingUser) {
+-       return res.status(400).json({
+-         success: false,
+-@@ -54,20 +178,29 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+-       });
+-     }
+- 
+--    // Generate email verification token & mobile OTP
+-+    const existingFirm = await StaffingPartner.findOne({
+-+      firmName: new RegExp(`^${firmName.trim()}$`, 'i')
+-+    });
+-+
+-+    if (existingFirm) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'A firm with this name is already registered'
+-+      });
+-+    }
+-+
+-     const emailToken = crypto.randomBytes(32).toString('hex');
+-     const mobileOTP = otpService.generateOTP();
+- 
+--    // Create user with pending verification
+-     const user = await User.create({
+--      email,
+--      mobile,
+-+      email: normalizedEmail,
+-+      mobile: normalizedMobile,
+-       password,
+-       role: 'staffing_partner',
+-       status: 'PENDING_EMAIL_VERIFICATION',
+-       emailVerified: false,
+-       emailVerificationToken: emailToken,
+--      emailVerificationExpires: Date.now() + 30 * 60 * 1000, // 30 min
+-+      emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
+-       mobileOTP: {
+-         code: mobileOTP,
+-         expiresAt: otpService.getExpiryTime()
+-@@ -75,7 +208,6 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+-       mobileVerified: skipMobileOTP
+-     });
+- 
+--    // Create staffing partner profile with registration fields only
+-     await StaffingPartner.create({
+-       user: user._id,
+-       firstName,
+-@@ -88,22 +220,31 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+-       profileCompletion: { basicInfo: true }
+-     });
+- 
+--    // Send Email Verification Link
+-     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
+--    await emailService.sendVerificationLink(email, verifyUrl);
+-+    await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
+-+    await whatsappService.sendOTP(normalizedMobile, mobileOTP);
+- 
+--    // Send Mobile OTP (or mock it)
+--    await whatsappService.sendOTP(mobile, mobileOTP);
+-+    const verificationState = getVerificationState(user);
+- 
+-     res.status(201).json({
+-       success: true,
+--      message: skipMobileOTP 
+--        ? 'Registration successful! Check your email for verification link. (Mobile OTP skipped in development)'
+--        : 'Registration successful! Check your email for verification link and verify your mobile.',
+-+      message: skipMobileOTP
+-+        ? 'Registration successful. Please verify your email. Mobile OTP skipped in development.'
+-+        : 'Registration successful. Please verify your email and mobile.',
+-       data: {
+-         userId: user._id,
+-+        role: user.role,
+-         email: user.email,
+-         mobile: user.mobile,
+-+        verification: {
+-+          emailRequired: true,
+-+          mobileRequired: !skipMobileOTP,
+-+          emailVerified: user.emailVerified,
+-+          mobileVerified: user.mobileVerified
+-+        },
+-+        canLogin: verificationState.canLogin,
+-+        nextStep: verificationState.nextStep,
+-+        allowedActions: verificationState.allowedActions,
+-         skipMobileOTP,
+-         ...(process.env.NODE_ENV === 'development' && {
+-           devInfo: {
+-@@ -115,9 +256,8 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
+-         })
+-       }
+-     });
+--
+-   } catch (error) {
+--    console.error('Registration error:', error);
+-+    console.error('Staffing partner registration error:', error);
+-     res.status(500).json({
+-       success: false,
+-       message: 'Registration failed',
+-@@ -144,7 +284,6 @@ exports.initCompanyRegistration = async (req, res) => {
+-       state
+-     } = req.body;
+- 
+--    // Validate required fields
+-     if (!firstName || !lastName || !email || !mobile || !password || !companyName || !designation || !department || !city || !state) {
+-       return res.status(400).json({
+-         success: false,
+-@@ -164,7 +303,20 @@ exports.initCompanyRegistration = async (req, res) => {
+-       });
+-     }
+- 
+--    // Validate password
+-+    if (!validateEmail(email)) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Invalid email format'
+-+      });
+-+    }
+-+
+-+    if (!validateMobile(mobile)) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Invalid mobile number. Please provide 10-digit number'
+-+      });
+-+    }
+-+
+-     if (password.length < 8) {
+-       return res.status(400).json({
+-         success: false,
+-@@ -172,8 +324,13 @@ exports.initCompanyRegistration = async (req, res) => {
+-       });
+-     }
+- 
+--    // Check if user already exists
+--    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
+-+    const normalizedEmail = email.toLowerCase().trim();
+-+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+-+
+-+    const existingUser = await User.findOne({
+-+      $or: [{ email: normalizedEmail }, { mobile: normalizedMobile }]
+-+    });
+-+
+-     if (existingUser) {
+-       return res.status(400).json({
+-         success: false,
+-@@ -181,20 +338,18 @@ exports.initCompanyRegistration = async (req, res) => {
+-       });
+-     }
+- 
+--    // Generate email verification token & mobile OTP
+-     const emailToken = crypto.randomBytes(32).toString('hex');
+-     const mobileOTP = otpService.generateOTP();
+- 
+--    // Create user
+-     const user = await User.create({
+--      email,
+--      mobile,
+-+      email: normalizedEmail,
+-+      mobile: normalizedMobile,
+-       password,
+-       role: 'company',
+-       status: 'PENDING_EMAIL_VERIFICATION',
+-       emailVerified: false,
+-       emailVerificationToken: emailToken,
+--      emailVerificationExpires: Date.now() + 30 * 60 * 1000,
+-+      emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
+-       mobileOTP: {
+-         code: mobileOTP,
+-         expiresAt: otpService.getExpiryTime()
+-@@ -202,7 +357,6 @@ exports.initCompanyRegistration = async (req, res) => {
+-       mobileVerified: skipMobileOTP
+-     });
+- 
+--    // Create company profile - combine firstName + lastName
+-     await Company.create({
+-       user: user._id,
+-       companyName,
+-@@ -215,22 +369,31 @@ exports.initCompanyRegistration = async (req, res) => {
+-       profileCompletion: { basicInfo: true }
+-     });
+- 
+--    // Send email verification link
+-     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
+--    await emailService.sendVerificationLink(email, verifyUrl);
+-+    await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
+-+    await whatsappService.sendOTP(normalizedMobile, mobileOTP);
+- 
+--    // Send mobile OTP
+--    await whatsappService.sendOTP(mobile, mobileOTP);
+-+    const verificationState = getVerificationState(user);
+- 
+-     res.status(201).json({
+-       success: true,
+--      message: skipMobileOTP 
+--        ? 'Registration successful! Check your email for verification link.'
+--        : 'Registration successful! Check your email for verification link and verify your mobile.',
+-+      message: skipMobileOTP
+-+        ? 'Registration successful. Please verify your email. Mobile OTP skipped in development.'
+-+        : 'Registration successful. Please verify your email and mobile.',
+-       data: {
+-         userId: user._id,
+-+        role: user.role,
+-         email: user.email,
+-         mobile: user.mobile,
+-+        verification: {
+-+          emailRequired: true,
+-+          mobileRequired: !skipMobileOTP,
+-+          emailVerified: user.emailVerified,
+-+          mobileVerified: user.mobileVerified
+-+        },
+-+        canLogin: verificationState.canLogin,
+-+        nextStep: verificationState.nextStep,
+-+        allowedActions: verificationState.allowedActions,
+-         skipMobileOTP,
+-         ...(process.env.NODE_ENV === 'development' && {
+-           devInfo: {
+-@@ -242,7 +405,6 @@ exports.initCompanyRegistration = async (req, res) => {
+-         })
+-       }
+-     });
+--
+-   } catch (error) {
+-     console.error('Company registration error:', error);
+-     res.status(500).json({
+-@@ -253,12 +415,12 @@ exports.initCompanyRegistration = async (req, res) => {
+-   }
+- };
+- 
+--// @desc Verify Email via Token (from link)
+-+// @desc Verify Email via Token (Legacy GET route support)
+- // @route GET /api/auth/verify-email
+- exports.verifyEmailByToken = async (req, res) => {
+-   try {
+-     const { token } = req.query;
+--    
+-+
+-     if (!token) {
+-       return res.status(400).json({
+-         success: false,
+-@@ -266,7 +428,6 @@ exports.verifyEmailByToken = async (req, res) => {
+-       });
+-     }
+- 
+--    // Find user by email verification token
+-     const user = await User.findOne({
+-       emailVerificationToken: token,
+-       emailVerificationExpires: { $gt: Date.now() }
+-@@ -275,37 +436,147 @@ exports.verifyEmailByToken = async (req, res) => {
+-     if (!user) {
+-       return res.status(400).json({
+-         success: false,
+--        message: 'Invalid or expired verification token'
+-+        message: 'Invalid or expired verification token',
+-+        code: 'INVALID_OR_EXPIRED_TOKEN'
+-       });
+-     }
+- 
+--    // Update user status
+--    user.isEmailVerified = true;
+-+    user.emailVerified = true;
+-     user.emailVerificationToken = undefined;
+-     user.emailVerificationExpires = undefined;
+--    
+--    // Update status based on mobile verification
+--    if (user.isMobileVerified) {
+--      user.status = 'VERIFIED';
+--    }
+--    
+-+
+-+    syncUserStatusAfterVerification(user);
+-     await user.save();
+- 
+--    // ✅ CORRECT: Return JSON response
+-+    const verificationState = getVerificationState(user);
+-+
+-     return res.status(200).json({
+-       success: true,
+--      message: 'Email verified successfully! You can now login.',
+-+      message: verificationState.canLogin
+-+        ? 'Email verified successfully. You can now login.'
+-+        : 'Email verified successfully. Please complete remaining verification.',
+-       data: {
+--        emailVerified: true,
+--        status: user.status
+-+        verification: {
+-+          emailVerified: user.emailVerified,
+-+          mobileVerified: user.mobileVerified
+-+        },
+-+        status: user.status,
+-+        canLogin: verificationState.canLogin,
+-+        nextStep: verificationState.nextStep,
+-+        allowedActions: verificationState.allowedActions
+-       }
+-     });
+-+  } catch (error) {
+-+    console.error('Email verification error:', error);
+-+    return res.status(500).json({
+-+      success: false,
+-+      message: 'Email verification failed',
+-+      error: error.message
+-+    });
+-+  }
+-+};
+-+
+-+// @desc Verify Email via Token (Recommended POST route)
+-+// @route POST /api/auth/verify-email
+-+exports.verifyEmail = async (req, res) => {
+-+  try {
+-+    const { token } = req.body;
+-+
+-+    if (!token) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Verification token is required'
+-+      });
+-+    }
+-+
+-+    const user = await User.findOne({
+-+      emailVerificationToken: token,
+-+      emailVerificationExpires: { $gt: Date.now() }
+-+    });
+-+
+-+    if (!user) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Invalid or expired verification token',
+-+        code: 'INVALID_OR_EXPIRED_TOKEN'
+-+      });
+-+    }
+-+
+-+    user.emailVerified = true;
+-+    user.emailVerificationToken = undefined;
+-+    user.emailVerificationExpires = undefined;
+-+
+-+    syncUserStatusAfterVerification(user);
+-+    await user.save();
+-+
+-+    const verificationState = getVerificationState(user);
+- 
+-+    return res.status(200).json({
+-+      success: true,
+-+      message: verificationState.canLogin
+-+        ? 'Email verified successfully. You can now login.'
+-+        : 'Email verified successfully. Please complete remaining verification.',
+-+      data: {
+-+        verification: {
+-+          emailVerified: user.emailVerified,
+-+          mobileVerified: user.mobileVerified
+-+        },
+-+        status: user.status,
+-+        canLogin: verificationState.canLogin,
+-+        nextStep: verificationState.nextStep,
+-+        allowedActions: verificationState.allowedActions
+-+      }
+-+    });
+-   } catch (error) {
+-     console.error('Email verification error:', error);
+-     return res.status(500).json({
+-       success: false,
+--      message: 'Email verification failed'
+-+      message: 'Email verification failed',
+-+      error: error.message
+-+    });
+-+  }
+-+};
+-+
+-+// @desc Get Verification Status
+-+// @route GET /api/auth/verification-status/:userId
+-+exports.getVerificationStatus = async (req, res) => {
+-+  try {
+-+    const user = await User.findById(req.params.userId).select(
+-+      'email mobile role status emailVerified mobileVerified'
+-+    );
+-+
+-+    if (!user) {
+-+      return res.status(404).json({
+-+        success: false,
+-+        message: 'User not found'
+-+      });
+-+    }
+-+
+-+    const verificationState = getVerificationState(user);
+-+
+-+    res.json({
+-+      success: true,
+-+      data: {
+-+        userId: user._id,
+-+        email: user.email,
+-+        mobile: user.mobile,
+-+        role: user.role,
+-+        status: user.status,
+-+        verification: {
+-+          emailVerified: user.emailVerified,
+-+          mobileVerified: user.mobileVerified
+-+        },
+-+        canLogin: verificationState.canLogin,
+-+        nextStep: verificationState.nextStep,
+-+        allowedActions: verificationState.allowedActions
+-+      }
+-+    });
+-+  } catch (error) {
+-+    console.error('Verification status error:', error);
+-+    res.status(500).json({
+-+      success: false,
+-+      message: 'Failed to fetch verification status',
+-+      error: error.message
+-     });
+-   }
+- };
+-@@ -316,6 +587,13 @@ exports.verifyMobileOTP = async (req, res) => {
+-   try {
+-     const { userId, otp } = req.body;
+- 
+-+    if (!userId || !otp) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Please provide userId and otp'
+-+      });
+-+    }
+-+
+-     const user = await User.findById(userId);
+-     if (!user) {
+-       return res.status(404).json({
+-@@ -324,25 +602,28 @@ exports.verifyMobileOTP = async (req, res) => {
+-       });
+-     }
+- 
+--    // If mobile OTP is skipped, auto-verify
+-     if (skipMobileOTP) {
+-       user.mobileVerified = true;
+-       user.mobileOTP = undefined;
+--
+--      // Update status if both verified
+--      if (user.emailVerified) {
+--        user.status = 'ACTIVE';
+--      }
+--
+-+      syncUserStatusAfterVerification(user);
+-       await user.save();
+- 
+-+      const verificationState = getVerificationState(user);
+-+
+-       return res.json({
+-         success: true,
+--        message: 'Mobile auto-verified (WhatsApp disabled in development)',
+-+        message: verificationState.canLogin
+-+          ? 'Mobile verified successfully. You can now login.'
+-+          : 'Mobile verified successfully. Please verify your email to continue.',
+-         data: {
+--          emailVerified: user.emailVerified,
+--          mobileVerified: true,
+--          status: user.status
+-+          verification: {
+-+            emailVerified: user.emailVerified,
+-+            mobileVerified: user.mobileVerified
+-+          },
+-+          status: user.status,
+-+          canLogin: verificationState.canLogin,
+-+          nextStep: verificationState.nextStep,
+-+          allowedActions: verificationState.allowedActions
+-         }
+-       });
+-     }
+-@@ -354,35 +635,57 @@ exports.verifyMobileOTP = async (req, res) => {
+-       });
+-     }
+- 
+-+    if (user.otpAttempts && user.otpAttempts.mobile >= 5) {
+-+      const timeSinceLastAttempt = Date.now() - new Date(user.otpAttempts.lastAttempt).getTime();
+-+      if (timeSinceLastAttempt < 3600000) {
+-+        return res.status(400).json({
+-+          success: false,
+-+          message: 'Too many failed attempts. Please try again after 1 hour.'
+-+        });
+-+      }
+-+    }
+-+
+-     const verification = user.verifyOTP('mobile', otp);
+-     if (!verification.valid) {
+-+      user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
+-+      user.otpAttempts.mobile += 1;
+-+      user.otpAttempts.lastAttempt = new Date();
+-+      await user.save();
+-+
+-       return res.status(400).json({
+-         success: false,
+-         message: verification.message
+-       });
+-     }
+- 
+-+    user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
+-+    user.otpAttempts.mobile = 0;
+-     user.mobileVerified = true;
+-     user.mobileOTP = undefined;
+- 
+--    // Update status if both verified
+--    if (user.emailVerified && user.mobileVerified) {
+--      user.status = 'ACTIVE';
+--    }
+--
+-+    syncUserStatusAfterVerification(user);
+-     await user.save();
+- 
+-+    const verificationState = getVerificationState(user);
+-+
+-     res.json({
+-       success: true,
+--      message: 'Mobile verified successfully',
+-+      message: verificationState.canLogin
+-+        ? 'Mobile verified successfully. You can now login.'
+-+        : 'Mobile verified successfully. Please verify your email to continue.',
+-       data: {
+--        emailVerified: user.emailVerified,
+--        mobileVerified: true,
+--        status: user.status
+-+        verification: {
+-+          emailVerified: user.emailVerified,
+-+          mobileVerified: user.mobileVerified
+-+        },
+-+        status: user.status,
+-+        canLogin: verificationState.canLogin,
+-+        nextStep: verificationState.nextStep,
+-+        allowedActions: verificationState.allowedActions
+-       }
+-     });
+--
+-   } catch (error) {
+-+    console.error('Mobile verification error:', error);
+-     res.status(500).json({
+-       success: false,
+-       message: 'Verification failed',
+-@@ -397,7 +700,6 @@ exports.login = async (req, res) => {
+-   try {
+-     const { email, password } = req.body;
+- 
+--    // Validate input
+-     if (!email || !password) {
+-       return res.status(400).json({
+-         success: false,
+-@@ -405,75 +707,130 @@ exports.login = async (req, res) => {
+-       });
+-     }
+- 
+--    // Find user
+--    const user = await User.findOne({ email }).select('+password');
+-+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
+-     if (!user) {
+-       return res.status(401).json({
+-         success: false,
+--        message: 'Invalid credentials'
+-+        message: 'Invalid credentials',
+-+        code: 'INVALID_CREDENTIALS'
+-       });
+-     }
+- 
+--    // Check password
+-     const isMatch = await user.comparePassword(password);
+-     if (!isMatch) {
+-       return res.status(401).json({
+-         success: false,
+--        message: 'Invalid credentials'
+-+        message: 'Invalid credentials',
+-+        code: 'INVALID_CREDENTIALS'
+-       });
+-     }
+- 
+--    // Check mobile verification
+--    if (!user.mobileVerified) {
+-+    if (!user.emailVerified && !user.mobileVerified) {
+-       return res.status(403).json({
+-         success: false,
+--        message: 'Please verify your mobile number first',
+--        requiresVerification: 'mobile',
+--        userId: user._id
+-+        message: 'Please verify your email and mobile number before logging in.',
+-+        code: 'CONTACTS_NOT_VERIFIED',
+-+        data: {
+-+          userId: user._id,
+-+          verification: {
+-+            emailVerified: false,
+-+            mobileVerified: false
+-+          },
+-+          canLogin: false,
+-+          nextStep: 'VERIFY_CONTACTS',
+-+          allowedActions: [
+-+            'RESEND_EMAIL_VERIFICATION',
+-+            'RESEND_MOBILE_OTP',
+-+            'CHECK_VERIFICATION_STATUS'
+-+          ]
+-+        }
+-       });
+-     }
+- 
+--    // Check email verification
+-     if (!user.emailVerified) {
+-       return res.status(403).json({
+-         success: false,
+--        message: 'Please verify your email before logging in. Check your inbox for the verification link.',
+--        requiresVerification: 'email',
+--        userId: user._id
+-+        message: 'Please verify your email before logging in.',
+-+        code: 'EMAIL_NOT_VERIFIED',
+-+        data: {
+-+          userId: user._id,
+-+          verification: {
+-+            emailVerified: false,
+-+            mobileVerified: true
+-+          },
+-+          canLogin: false,
+-+          nextStep: 'VERIFY_EMAIL',
+-+          allowedActions: [
+-+            'RESEND_EMAIL_VERIFICATION',
+-+            'CHECK_VERIFICATION_STATUS'
+-+          ]
+-+        }
+-+      });
+-+    }
+-+
+-+    if (!user.mobileVerified) {
+-+      return res.status(403).json({
+-+        success: false,
+-+        message: 'Please verify your mobile number before logging in.',
+-+        code: 'MOBILE_NOT_VERIFIED',
+-+        data: {
+-+          userId: user._id,
+-+          verification: {
+-+            emailVerified: true,
+-+            mobileVerified: false
+-+          },
+-+          canLogin: false,
+-+          nextStep: 'VERIFY_MOBILE',
+-+          allowedActions: [
+-+            'RESEND_MOBILE_OTP',
+-+            'CHECK_VERIFICATION_STATUS'
+-+          ]
+-+        }
+-+      });
+-+    }
+-+
+-+    if (user.status === 'SUSPENDED') {
+-+      return res.status(403).json({
+-+        success: false,
+-+        message: 'Your account is suspended. Please contact support.',
+-+        code: 'ACCOUNT_SUSPENDED'
+-+      });
+-+    }
+-+
+-+    if (user.status === 'REJECTED') {
+-+      return res.status(403).json({
+-+        success: false,
+-+        message: 'Your account has been rejected.',
+-+        code: 'ACCOUNT_REJECTED'
+-       });
+-     }
+- 
+--    // Update last login
+-     user.lastLogin = new Date();
+-     await user.save();
+- 
+--    // Get profile
+--    let profile = null;
+--    if (user.role === 'staffing_partner') {
+--      profile = await StaffingPartner.findOne({ user: user._id });
+--    } else if (user.role === 'company') {
+--      profile = await Company.findOne({ user: user._id });
+--    }
+-+    const { profile, profileMeta, nextStep } = await getPostLoginNextStep(user);
+- 
+--    // Generate token
+-     const token = generateToken(user._id, user.role);
+- 
+--    // Build user payload (no password)
+-     const userPayload = {
+-       id: user._id,
+-       email: user.email,
+-       role: user.role,
+-       status: user.status,
+-+      emailVerified: user.emailVerified,
+-+      mobileVerified: user.mobileVerified,
+-       isPasswordChanged: user.isPasswordChanged
+-     };
+- 
+--    // Send token in cookie
+-     return sendTokenResponse(res, token, userPayload, {
+-       profile,
+-+      profileMeta,
+-+      canLogin: true,
+-+      nextStep,
+-       requirePasswordChange: !user.isPasswordChanged
+-     });
+--
+-   } catch (error) {
+-+    console.error('Login error:', error);
+-     res.status(500).json({
+-       success: false,
+-       message: 'Login failed',
+-@@ -488,11 +845,10 @@ exports.changePassword = async (req, res) => {
+-   try {
+-     const { currentPassword, newPassword, confirmPassword } = req.body;
+- 
+--    // Validate
+--    if (!currentPassword || !newPassword) {
+-+    if (!currentPassword || !newPassword || !confirmPassword) {
+-       return res.status(400).json({
+-         success: false,
+--        message: 'Please provide current and new password'
+-+        message: 'Please provide current password, new password, and confirm password'
+-       });
+-     }
+- 
+-@@ -512,7 +868,13 @@ exports.changePassword = async (req, res) => {
+- 
+-     const user = await User.findById(req.user._id).select('+password');
+- 
+--    // Verify current password
+-+    if (!user) {
+-+      return res.status(404).json({
+-+        success: false,
+-+        message: 'User not found'
+-+      });
+-+    }
+-+
+-     const isMatch = await user.comparePassword(currentPassword);
+-     if (!isMatch) {
+-       return res.status(400).json({
+-@@ -521,7 +883,6 @@ exports.changePassword = async (req, res) => {
+-       });
+-     }
+- 
+--    // Check if new password is same as old
+-     const isSamePassword = await user.comparePassword(newPassword);
+-     if (isSamePassword) {
+-       return res.status(400).json({
+-@@ -530,26 +891,18 @@ exports.changePassword = async (req, res) => {
+-       });
+-     }
+- 
+--    // Update password
+-     user.password = newPassword;
+-     user.isPasswordChanged = true;
+--
+--    // Update status if it was PASSWORD_CHANGED or earlier
+--    if (['REGISTERED', 'PROFILE_INCOMPLETE'].includes(user.status)) {
+--      user.status = 'PASSWORD_CHANGED';
+--    }
+--
+-     await user.save();
+- 
+--    // Generate new token
+-     const token = generateToken(user._id, user.role);
+- 
+--    // Refresh auth cookie
+-     res.cookie('token', token, {
+-       httpOnly: true,
+--      secure: process.env.NODE_ENV === 'production',
+--      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+--      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+-+      secure: process.env.COOKIE_SECURE === 'true',
+-+      sameSite: process.env.COOKIE_SECURE === 'true' ? 'none' : 'lax',
+-+      maxAge: 7 * 24 * 60 * 60 * 1000,
+-+      path: '/'
+-     });
+- 
+-     res.json({
+-@@ -559,8 +912,8 @@ exports.changePassword = async (req, res) => {
+-         status: user.status
+-       }
+-     });
+--
+-   } catch (error) {
+-+    console.error('Change password error:', error);
+-     res.status(500).json({
+-       success: false,
+-       message: 'Password change failed',
+-@@ -569,11 +922,11 @@ exports.changePassword = async (req, res) => {
+-   }
+- };
+- 
+--// @desc Resend OTP
+-+// @desc Resend OTP (legacy email/mobile combined)
+- // @route POST /api/auth/resend-otp
+- exports.resendOTP = async (req, res) => {
+-   try {
+--    const { userId, type } = req.body; // type: 'email' or 'mobile'
+-+    const { userId, type } = req.body;
+- 
+-     if (!userId || !type) {
+-       return res.status(400).json({
+-@@ -590,26 +943,17 @@ exports.resendOTP = async (req, res) => {
+-       });
+-     }
+- 
+--    // Check if already verified
+--    if (type === 'email' && user.emailVerified) {
+--      return res.status(400).json({
+--        success: false,
+--        message: 'Email already verified'
+--      });
+--    }
+--
+--    if (type === 'mobile' && user.mobileVerified) {
+--      return res.status(400).json({
+--        success: false,
+--        message: 'Mobile already verified'
+--      });
+--    }
+--
+-     if (type === 'email') {
+--      // Generate new email token
+-+      if (user.emailVerified) {
+-+        return res.status(400).json({
+-+          success: false,
+-+          message: 'Email already verified'
+-+        });
+-+      }
+-+
+-       const emailToken = crypto.randomBytes(32).toString('hex');
+-       user.emailVerificationToken = emailToken;
+--      user.emailVerificationExpires = Date.now() + 30 * 60 * 1000;
+-+      user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+-       await user.save();
+- 
+-       const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
+-@@ -626,8 +970,16 @@ exports.resendOTP = async (req, res) => {
+-           }
+-         })
+-       });
+-+    }
+-+
+-+    if (type === 'mobile') {
+-+      if (user.mobileVerified) {
+-+        return res.status(400).json({
+-+          success: false,
+-+          message: 'Mobile already verified'
+-+        });
+-+      }
+- 
+--    } else if (type === 'mobile') {
+-       const otp = otpService.generateOTP();
+-       user.mobileOTP = {
+-         code: otp,
+-@@ -648,7 +1000,12 @@ exports.resendOTP = async (req, res) => {
+-       });
+-     }
+- 
+-+    return res.status(400).json({
+-+      success: false,
+-+      message: 'Invalid type. Use "email" or "mobile"'
+-+    });
+-   } catch (error) {
+-+    console.error('Resend OTP error:', error);
+-     res.status(500).json({
+-       success: false,
+-       message: 'Failed to resend OTP',
+-@@ -688,8 +1045,7 @@ exports.resendEmailVerification = async (req, res) => {
+- 
+-     const emailToken = crypto.randomBytes(32).toString('hex');
+-     user.emailVerificationToken = emailToken;
+--    user.emailVerificationExpires = Date.now() + 30 * 60 * 1000;
+--
+-+    user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+-     await user.save();
+- 
+-     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
+-@@ -699,13 +1055,12 @@ exports.resendEmailVerification = async (req, res) => {
+-       success: true,
+-       message: 'Verification email resent. Please check your inbox.',
+-       ...(process.env.NODE_ENV === 'development' && {
+--        devInfo: { 
+-+        devInfo: {
+-           emailToken,
+--          verifyUrl 
+-+          verifyUrl
+-         }
+-       })
+-     });
+--
+-   } catch (error) {
+-     console.error('Resend email error:', error);
+-     res.status(500).json({
+-@@ -716,6 +1071,63 @@ exports.resendEmailVerification = async (req, res) => {
+-   }
+- };
+- 
+-+// @desc Resend Mobile OTP
+-+// @route POST /api/auth/resend-mobile-otp
+-+exports.resendMobileOTP = async (req, res) => {
+-+  try {
+-+    const { userId } = req.body;
+-+
+-+    if (!userId) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'User ID is required'
+-+      });
+-+    }
+-+
+-+    const user = await User.findById(userId);
+-+
+-+    if (!user) {
+-+      return res.status(404).json({
+-+        success: false,
+-+        message: 'User not found'
+-+      });
+-+    }
+-+
+-+    if (user.mobileVerified) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Mobile already verified'
+-+      });
+-+    }
+-+
+-+    const otp = otpService.generateOTP();
+-+    user.mobileOTP = {
+-+      code: otp,
+-+      expiresAt: otpService.getExpiryTime()
+-+    };
+-+    await user.save();
+-+
+-+    await whatsappService.sendOTP(user.mobile, otp);
+-+
+-+    res.json({
+-+      success: true,
+-+      message: 'Mobile OTP resent successfully.',
+-+      ...(process.env.NODE_ENV === 'development' && {
+-+        devInfo: {
+-+          otp
+-+        }
+-+      })
+-+    });
+-+  } catch (error) {
+-+    console.error('Resend mobile OTP error:', error);
+-+    res.status(500).json({
+-+      success: false,
+-+      message: 'Failed to resend mobile OTP',
+-+      error: error.message
+-+    });
+-+  }
+-+};
+-+
+- // @desc Get Current User
+- // @route GET /api/auth/me
+- exports.getMe = async (req, res) => {
+-@@ -729,6 +1141,8 @@ exports.getMe = async (req, res) => {
+-       profile = await Company.findOne({ user: user._id });
+-     }
+- 
+-+    const { profileMeta, nextStep } = await getPostLoginNextStep(user);
+-+
+-     res.json({
+-       success: true,
+-       data: {
+-@@ -744,11 +1158,13 @@ exports.getMe = async (req, res) => {
+-           lastLogin: user.lastLogin,
+-           createdAt: user.createdAt
+-         },
+--        profile
+-+        profile,
+-+        profileMeta,
+-+        nextStep
+-       }
+-     });
+--
+-   } catch (error) {
+-+    console.error('Get me error:', error);
+-     res.status(500).json({
+-       success: false,
+-       message: 'Failed to fetch user',
+-@@ -770,9 +1186,8 @@ exports.forgotPassword = async (req, res) => {
+-       });
+-     }
+- 
+--    const user = await User.findOne({ email });
+-+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+-     if (!user) {
+--      // Don't reveal if user exists
+-       return res.json({
+-         success: true,
+-         message: 'If an account exists with this email, you will receive a password reset OTP'
+-@@ -786,20 +1201,20 @@ exports.forgotPassword = async (req, res) => {
+-     };
+-     await user.save();
+- 
+--    await emailService.sendOTP(email, otp, 'reset');
+-+    await emailService.sendOTP(user.email, otp, 'reset');
+- 
+-     res.json({
+-       success: true,
+-       message: 'Password reset OTP sent to your email',
+--      data: { 
+-+      data: {
+-         userId: user._id,
+-         ...(process.env.NODE_ENV === 'development' && {
+-           devInfo: { otp }
+-         })
+-       }
+-     });
+--
+-   } catch (error) {
+-+    console.error('Forgot password error:', error);
+-     res.status(500).json({
+-       success: false,
+-       message: 'Failed to process request',
+-@@ -814,7 +1229,7 @@ exports.resetPassword = async (req, res) => {
+-   try {
+-     const { userId, otp, newPassword, confirmPassword } = req.body;
+- 
+--    if (!userId || !otp || !newPassword) {
+-+    if (!userId || !otp || !newPassword || !confirmPassword) {
+-       return res.status(400).json({
+-         success: false,
+-         message: 'Please provide all required fields'
+-@@ -835,7 +1250,7 @@ exports.resetPassword = async (req, res) => {
+-       });
+-     }
+- 
+--    const user = await User.findById(userId);
+-+    const user = await User.findById(userId).select('+password');
+-     if (!user) {
+-       return res.status(404).json({
+-         success: false,
+-@@ -843,14 +1258,31 @@ exports.resetPassword = async (req, res) => {
+-       });
+-     }
+- 
+-+    if (user.otpAttempts && user.otpAttempts.email >= 5) {
+-+      const timeSinceLastAttempt = Date.now() - new Date(user.otpAttempts.lastAttempt).getTime();
+-+      if (timeSinceLastAttempt < 3600000) {
+-+        return res.status(400).json({
+-+          success: false,
+-+          message: 'Too many failed attempts. Please try again after 1 hour.'
+-+        });
+-+      }
+-+    }
+-+
+-     const verification = user.verifyOTP('email', otp);
+-     if (!verification.valid) {
+-+      user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
+-+      user.otpAttempts.email += 1;
+-+      user.otpAttempts.lastAttempt = new Date();
+-+      await user.save();
+-+
+-       return res.status(400).json({
+-         success: false,
+-         message: verification.message
+-       });
+-     }
+- 
+-+    user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
+-+    user.otpAttempts.email = 0;
+-     user.password = newPassword;
+-     user.emailOTP = undefined;
+-     user.isPasswordChanged = true;
+-@@ -860,8 +1292,8 @@ exports.resetPassword = async (req, res) => {
+-       success: true,
+-       message: 'Password reset successfully. You can now login with your new password.'
+-     });
+--
+-   } catch (error) {
+-+    console.error('Reset password error:', error);
+-     res.status(500).json({
+-       success: false,
+-       message: 'Password reset failed',
+-@@ -875,12 +1307,13 @@ exports.resetPassword = async (req, res) => {
+- exports.logout = async (req, res) => {
+-   res.clearCookie('token', {
+-     httpOnly: true,
+--    secure: process.env.NODE_ENV === 'production',
+--    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+-+    secure: process.env.COOKIE_SECURE === 'true',
+-+    sameSite: process.env.COOKIE_SECURE === 'true' ? 'none' : 'lax',
+-+    path: '/'
+-   });
+- 
+-   res.json({
+-     success: true,
+--    message: 'Logged out successfully',
+-+    message: 'Logged out successfully'
+-   });
+- };
+-\ No newline at end of file
+-diff --git a/controllers/staffingPartnerController.js b/controllers/staffingPartnerController.js
+-index 28e5204..345888b 100644
+---- a/controllers/staffingPartnerController.js
+-+++ b/controllers/staffingPartnerController.js
+-@@ -710,57 +710,88 @@ exports.getProfileCompletion = async (req, res) => {
+- exports.submitProfile = async (req, res) => {
+-   try {
+-     const partner = await StaffingPartner.findOne({ user: req.user._id });
+--    const user = await User.findById(req.user._id);
+- 
+-     if (!partner) {
+-       return res.status(404).json({
+-         success: false,
+--        message: "Profile not found",
+-+        message: 'Partner profile not found'
+-       });
+-     }
+- 
+--    // Check if required sections are complete
+--    const {
+--      basicInfo,
+--      firmDetails,
+--      Syncro1Competency,
+--      geographicReach,
+--      compliance,
+--    } = partner.profileCompletion;
+-+    // Check if already submitted
+-+    if (partner.verificationStatus === 'PENDING' || partner.verificationStatus === 'VERIFIED') {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Profile already submitted for verification'
+-+      });
+-+    }
+- 
+--    if (
+--      !basicInfo ||
+--      !firmDetails ||
+--      !Syncro1Competency ||
+--      !geographicReach ||
+--      !compliance
+--    ) {
+-+    // ✅ Enforce ALL sections including commercial & documents
+-+    const required = [
+-+      'basicInfo',
+-+      'firmDetails',
+-+      'Syncro1Competency',
+-+      'geographicReach',
+-+      'compliance',
+-+      'commercialDetails',
+-+      'documents'
+-+    ];
+-+
+-+    const incomplete = required.filter(section => !partner.profileCompletion[section]);
+-+
+-+    if (incomplete.length > 0) {
+-       return res.status(400).json({
+-         success: false,
+--        message: "Please complete all required sections before submitting",
+--        data: partner.profileCompletion,
+-+        message: 'Please complete all required sections before submitting',
+-+        incompleteSections: incomplete,
+-+        hint: `Missing: ${incomplete.join(', ')}`
+-       });
+-     }
+- 
+--    partner.verificationStatus = "UNDER_REVIEW";
+--    user.status = "UNDER_VERIFICATION";
+-+    // ✅ Validate bank details exist
+-+    if (!partner.commercialDetails?.bankAccountNumber) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Bank account details are required for payouts'
+-+      });
+-+    }
+-+
+-+    // ✅ Validate at least PAN & GST docs uploaded
+-+    const requiredDocs = ['panCard', 'gstCertificate'];
+-+    const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
+-+
+-+    if (missingDocs.length > 0) {
+-+      return res.status(400).json({
+-+        success: false,
+-+        message: 'Required documents missing',
+-+        missingDocuments: missingDocs,
+-+        hint: 'PAN card and GST certificate are mandatory'
+-+      });
+-+    }
+- 
+-+    // Update verification status
+-+    partner.verificationStatus = 'PENDING';
+-+    partner.submittedAt = new Date();
+-     await partner.save();
+-+
+-+    // Update user status
+-+    const user = await User.findById(req.user._id);
+-+    user.status = 'PENDING_VERIFICATION';
+-     await user.save();
+- 
+-     res.json({
+-       success: true,
+--      message: "Profile submitted for verification",
+-+      message: 'Profile submitted for verification successfully',
+-       data: {
+-         verificationStatus: partner.verificationStatus,
+--        userStatus: user.status,
+--      },
+-+        submittedAt: partner.submittedAt
+-+      }
+-     });
+-   } catch (error) {
+-     res.status(500).json({
+-       success: false,
+--      message: "Submission failed",
+--      error: error.message,
+-+      message: 'Failed to submit profile',
+-+      error: error.message
+-     });
+-   }
+- };
+-diff --git a/models/Job.js b/models/Job.js
+-index b3cde39..fae22a8 100644
+---- a/models/Job.js
+-+++ b/models/Job.js
+-@@ -31,7 +31,7 @@ const jobSchema = new mongoose.Schema({
+-   },
+-   requirements: [String],
+-   responsibilities: [String],
+--  
+-+
+-   // ==================== JOB DETAILS ====================
+-   category: {
+-     type: String,
+-@@ -70,7 +70,7 @@ const jobSchema = new mongoose.Schema({
+-       default: false
+-     }
+-   },
+--  
+-+
+-   commission: {
+-     type: {
+-       type: String,
+-@@ -251,21 +251,21 @@ jobSchema.index({ 'location.city': 1, status: 1 });
+- jobSchema.index({ company: 1, status: 1, createdAt: -1 });
+- 
+- // ==================== VIRTUAL FIELDS ====================
+--jobSchema.virtual('isPendingReview').get(function() {
+-+jobSchema.virtual('isPendingReview').get(function () {
+-   return this.approvalStatus === 'PENDING_APPROVAL' || this.approvalStatus === 'EDIT_REQUESTED';
+- });
+- 
+--jobSchema.virtual('canBeEdited').get(function() {
+-+jobSchema.virtual('canBeEdited').get(function () {
+-   return ['DRAFT', 'REJECTED'].includes(this.approvalStatus);
+- });
+- 
+--jobSchema.virtual('requiresApproval').get(function() {
+-+jobSchema.virtual('requiresApproval').get(function () {
+-   return this.approvalStatus === 'EDIT_REQUESTED';
+- });
+- 
+- // ==================== MIDDLEWARE ====================
+- 
+--jobSchema.pre('save', function(next) {
+-+jobSchema.pre('save', function (next) {
+-   if (this.isModified('title') && !this.slug) {
+-     this.slug = this.title
+-       .toLowerCase()
+-@@ -275,21 +275,21 @@ jobSchema.pre('save', function(next) {
+-   next();
+- });
+- 
+--jobSchema.pre('save', function(next) {
+-+jobSchema.pre('save', function (next) {
+-   if (!this.shareableLink && this.slug) {
+-     this.shareableLink = `${process.env.FRONTEND_URL}/jobs/${this.slug}`;
+-   }
+-   next();
+- });
+- 
+--jobSchema.pre('save', function(next) {
+-+jobSchema.pre('save', function (next) {
+-   if (this.experienceRange && this.experienceRange.min > this.experienceRange.max) {
+-     next(new Error('Experience range min cannot be greater than max'));
+-   }
+-   next();
+- });
+- 
+--jobSchema.pre('save', function(next) {
+-+jobSchema.pre('save', function (next) {
+-   if (this.salary && this.salary.min && this.salary.max && this.salary.min > this.salary.max) {
+-     next(new Error('Salary min cannot be greater than max'));
+-   }
+-@@ -298,7 +298,7 @@ jobSchema.pre('save', function(next) {
+- 
+- // ==================== METHODS ====================
+- 
+--jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, notes = '') {
+-+jobSchema.methods.addToHistory = function (changeType, changedBy, changes = {}, notes = '') {
+-   this.changeHistory.push({
+-     changedAt: new Date(),
+-     changedBy,
+-@@ -309,7 +309,7 @@ jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, n
+- };
+- 
+- // ✅ FIX #1: Proper markModified with actual field names
+--jobSchema.methods.applyEditChanges = function(appliedChanges) {
+-+jobSchema.methods.applyEditChanges = function (appliedChanges) {
+-   Object.keys(appliedChanges).forEach(field => {
+-     const keys = field.split('.');
+-     let obj = this;
+-@@ -321,10 +321,10 @@ jobSchema.methods.applyEditChanges = function(appliedChanges) {
+-   });
+- };
+- 
+--jobSchema.methods.canAcceptEditRequest = function() {
+-+jobSchema.methods.canAcceptEditRequest = function () {
+-   if (this.approvalStatus !== 'ACTIVE') return false;
+-   if (this.rejectedEditCount >= 5) return false;
+--  
+-+
+-   const JobEditRequest = mongoose.model('JobEditRequest');
+-   return JobEditRequest.countDocuments({
+-     job: this._id,
+-@@ -332,14 +332,14 @@ jobSchema.methods.canAcceptEditRequest = function() {
+-   }).then(count => count === 0);
+- };
+- 
+--jobSchema.methods.getEditStats = function() {
+-+jobSchema.methods.getEditStats = function () {
+-   return {
+-     total: this.editRequestCount,
+-     approved: this.approvedEditCount,
+-     rejected: this.rejectedEditCount,
+-     pending: this.editRequestCount - this.approvedEditCount - this.rejectedEditCount,
+--    rejectionRate: this.editRequestCount > 0 
+--      ? Math.round((this.rejectedEditCount / this.editRequestCount) * 100) 
+-+    rejectionRate: this.editRequestCount > 0
+-+      ? Math.round((this.rejectedEditCount / this.editRequestCount) * 100)
+-       : 0
+-   };
+- };
+-diff --git a/models/User.js b/models/User.js
+-index 6909d34..d288e7b 100644
+---- a/models/User.js
+-+++ b/models/User.js
+-@@ -21,6 +21,11 @@ const userSchema = new mongoose.Schema({
+-     minlength: 8,
+-     select: false
+-   },
+-+  otpAttempts: {
+-+    email: { type: Number, default: 0 },
+-+    mobile: { type: Number, default: 0 },
+-+    lastAttempt: Date
+-+  },
+-   role: {
+-     type: String,
+-     enum: ['staffing_partner', 'company', 'admin', 'candidate'],
+-@@ -82,7 +87,7 @@ const userSchema = new mongoose.Schema({
+- });
+- 
+- // Hash password before saving
+--userSchema.pre('save', async function(next) {
+-+userSchema.pre('save', async function (next) {
+-   if (!this.isModified('password')) {
+-     return next();
+-   }
+-@@ -92,40 +97,40 @@ userSchema.pre('save', async function(next) {
+- });
+- 
+- // Compare password method
+--userSchema.methods.comparePassword = async function(enteredPassword) {
+-+userSchema.methods.comparePassword = async function (enteredPassword) {
+-   return await bcrypt.compare(enteredPassword, this.password);
+- };
+- 
+- // Generate OTP
+--userSchema.methods.generateOTP = function(type) {
+-+userSchema.methods.generateOTP = function (type) {
+-   const otp = Math.floor(100000 + Math.random() * 900000).toString();
+-   const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+--  
+-+
+-   if (type === 'email') {
+-     this.emailOTP = { code: otp, expiresAt };
+-   } else if (type === 'mobile') {
+-     this.mobileOTP = { code: otp, expiresAt };
+-   }
+--  
+-+
+-   return otp;
+- };
+- 
+- // Verify OTP
+--userSchema.methods.verifyOTP = function(type, code) {
+-+userSchema.methods.verifyOTP = function (type, code) {
+-   const otpData = type === 'email' ? this.emailOTP : this.mobileOTP;
+--  
+-+
+-   if (!otpData || !otpData.code) {
+-     return { valid: false, message: 'OTP not found' };
+-   }
+--  
+-+
+-   if (new Date() > otpData.expiresAt) {
+-     return { valid: false, message: 'OTP expired' };
+-   }
+--  
+-+
+-   if (otpData.code !== code) {
+-     return { valid: false, message: 'Invalid OTP' };
+-   }
+--  
+-+
+-   return { valid: true };
+- };
+- 
+-diff --git a/routes/authRoutes.js b/routes/authRoutes.js
+-index b8d80bf..5224a0b 100644
+---- a/routes/authRoutes.js
+-+++ b/routes/authRoutes.js
+-@@ -1,42 +1,60 @@
+- // backend/routes/authRoutes.js
+- const express = require('express');
+- const router = express.Router();
+-+
+- const {
+-   initStaffingPartnerRegistration,
+-   initCompanyRegistration,
+--  verifyEmailByToken,
+-+  verifyEmailByToken,     // Legacy GET support
+-+  verifyEmail,            // Recommended POST
+-+  getVerificationStatus,
+-   verifyMobileOTP,
+-+  resendOTP,              // Legacy combined resend
+-+  resendEmailVerification,
+-+  resendMobileOTP,
+-   login,
+-   changePassword,
+--  resendOTP,
+--  resendEmailVerification,
+-   getMe,
+-   forgotPassword,
+-   resetPassword,
+--  logout,
+-+  logout
+- } = require('../controllers/authController');
+-+
+- const { protect } = require('../middleware/auth');
+- 
+--// Registration routes
+-+// ==================== REGISTRATION ====================
+- router.post('/register/staffing-partner/init', initStaffingPartnerRegistration);
+- router.post('/register/company/init', initCompanyRegistration);
+- 
+--// Verification routes
+-+// ==================== VERIFICATION ====================
+-+
+-+// Legacy GET route for email verification from link
+- router.get('/verify-email', verifyEmailByToken);
+-+
+-+// Recommended POST route for frontend-driven verification
+-+router.post('/verify-email', verifyEmail);
+-+
+-+// Mobile OTP verify
+- router.post('/verify/mobile', verifyMobileOTP);
+--router.post('/resend-otp', resendOTP);
+-+
+-+// Verification status
+-+router.get('/verification-status/:userId', getVerificationStatus);
+-+
+-+// Resend routes
+-+router.post('/resend-otp', resendOTP); // legacy
+- router.post('/resend-email-verification', resendEmailVerification);
+-+router.post('/resend-mobile-otp', resendMobileOTP);
+- 
+--// Login & Password
+-+// ==================== AUTH ====================
+- router.post('/login', login);
+-+router.post('/logout', protect, logout);
+-+
+-+// ==================== PASSWORD ====================
+- router.post('/change-password', protect, changePassword);
+- router.post('/forgot-password', forgotPassword);
+- router.post('/reset-password', resetPassword);
+- 
+--// User
+-+// ==================== USER ====================
+- router.get('/me', protect, getMe);
+- 
+--// Logout route
+--router.post('/logout', protect, logout);
+--
+- module.exports = router;
+-\ No newline at end of file
+-diff --git a/server.js b/server.js
+-index 5d57461..b86fc88 100644
+---- a/server.js
+-+++ b/server.js
+-@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
+- const path = require('path');
+- const dotenv = require('dotenv');
+- const connectDB = require('./config/db');
+-+const onboardingRoutes = require('./routes/onboardingRoutes');
+- 
+- // Load env vars
+- dotenv.config();
+-@@ -122,6 +123,8 @@ app.use('/api/jobs', require('./routes/jobRoutes'));
+- app.use('/api/candidates', require('./routes/candidateRoutes'));
+- app.use('/api/admin', require('./routes/adminRoutes'));
+- app.use('/api/payments', require('./routes/paymentRoutes'));
+-+// Register routes
+-+app.use('/api/onboarding', onboardingRoutes);
+- 
+- // ✅ Newly added routes
+- app.use('/api/notifications', require('./routes/notificationRoutes'));
+-diff --git a/utils/validators.js b/utils/validators.js
+-index e69de29..d645685 100644
+---- a/utils/validators.js
+-+++ b/utils/validators.js
+-@@ -0,0 +1,25 @@
+-+// utils/validators.js
+-+const validateEmail = (email) => {
+-+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+-+    return re.test(email);
+-+};
+-+
+-+const validateMobile = (mobile) => {
+-+    const cleaned = mobile.replace(/\D/g, '');
+-+    return cleaned.length === 10;
+-+};
+-+
+-+const validateGST = (gst) => {
+-+    const re = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+-+    return re.test(gst);
+-+};
+-+
+-+const validatePAN = (pan) => {
+-+    const re = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+-+    return re.test(pan);
+-+};
+-+
+-+module.exports = { validateEmail, validateMobile, validateGST, validatePAN };
+-+
+-+
+-+
+diff --git a/controllers/adminController.js b/controllers/adminController.js
+index bfc0499..da2bb60 100644
+--- a/controllers/adminController.js
++++ b/controllers/adminController.js
+@@ -1,12 +1,21 @@
+-// backend/controllers/adminController.js - FIXED
++// backend/controllers/adminController.js
+ const User = require('../models/User');
+ const StaffingPartner = require('../models/StaffingPartner');
+ const Company = require('../models/Company');
+ const Job = require('../models/Job');
+ const Candidate = require('../models/Candidate');
+-// const Payout = require('../models/Payout'); // ❌ DISABLED - Payout system inactive
++const { PERMISSIONS } = require('../utils/permissions');
+ const emailService = require('../services/emailService');
  
- // Check if we should skip mobile OTP (for development)
- const skipMobileOTP = process.env.WHATSAPP_ENABLED !== 'true';
- 
-+/**
-+ * Helper: determine verification state for frontend
-+ */
-+const getVerificationState = (user) => {
-+  if (!user.emailVerified && !user.mobileVerified) {
-+    return {
-+      canLogin: false,
-+      nextStep: 'VERIFY_CONTACTS',
-+      allowedActions: [
-+        'RESEND_EMAIL_VERIFICATION',
-+        'RESEND_MOBILE_OTP',
-+        'CHECK_VERIFICATION_STATUS'
-+      ]
-+    };
-+  }
++const hasPermission = (user, permission) => {
++  if (!user) return false;
++  if (user.role === 'admin') return true;
++  if (user.role !== 'sub_admin') return false;
 +
-+  if (!user.emailVerified) {
-+    return {
-+      canLogin: false,
-+      nextStep: 'VERIFY_EMAIL',
-+      allowedActions: [
-+        'RESEND_EMAIL_VERIFICATION',
-+        'CHECK_VERIFICATION_STATUS'
-+      ]
-+    };
-+  }
-+
-+  if (!user.mobileVerified) {
-+    return {
-+      canLogin: false,
-+      nextStep: 'VERIFY_MOBILE',
-+      allowedActions: [
-+        'RESEND_MOBILE_OTP',
-+        'CHECK_VERIFICATION_STATUS'
-+      ]
-+    };
-+  }
-+
-+  return {
-+    canLogin: true,
-+    nextStep: 'LOGIN',
-+    allowedActions: []
-+  };
++  const permissions = user.permissions || [];
++  return permissions.includes(permission);
 +};
 +
-+/**
-+ * Helper: set user status based on verification state
-+ */
-+const syncUserStatusAfterVerification = (user) => {
-+  if (user.emailVerified && user.mobileVerified) {
-+    user.status = 'ACTIVE';
-+  } else {
-+    user.status = 'PENDING_EMAIL_VERIFICATION';
-+  }
-+};
-+
-+/**
-+ * Helper: get onboarding next step after successful login
-+ */
-+const getPostLoginNextStep = async (user) => {
-+  let profile = null;
-+
-+  if (user.role === 'staffing_partner') {
-+    profile = await StaffingPartner.findOne({ user: user._id });
-+  } else if (user.role === 'company') {
-+    profile = await Company.findOne({ user: user._id });
-+  }
-+
-+  if (!profile) {
-+    return {
-+      profile,
-+      profileMeta: {
-+        completionPercentage: 0,
-+        verificationStatus: 'PENDING'
-+      },
-+      nextStep: 'COMPLETE_PROFILE'
-+    };
-+  }
-+
-+  const completion = profile.profileCompletion || {};
-+  const total = Object.keys(completion).length || 1;
-+  const completed = Object.values(completion).filter(Boolean).length;
-+  const completionPercentage = Math.round((completed / total) * 100);
-+
-+  let nextStep = 'COMPLETE_PROFILE';
-+
-+  if (completionPercentage < 100) {
-+    nextStep = 'COMPLETE_PROFILE';
-+  } else if (['PENDING', 'UNDER_REVIEW'].includes(profile.verificationStatus)) {
-+    nextStep = 'WAITING_APPROVAL';
-+  } else if (profile.verificationStatus === 'REJECTED') {
-+    nextStep = 'PROFILE_REJECTED';
-+  } else if (profile.verificationStatus === 'APPROVED') {
-+    nextStep = 'GO_TO_DASHBOARD';
-+  }
-+
-+  return {
-+    profile,
-+    profileMeta: {
-+      completionPercentage,
-+      verificationStatus: profile.verificationStatus
-+    },
-+    nextStep
-+  };
-+};
-+
- // @desc Register Staffing Partner - Step 1 (Basic Info + Send Verification)
- // @route POST /api/auth/register/staffing-partner/init
- exports.initStaffingPartnerRegistration = async (req, res) => {
-@@ -29,7 +136,6 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
-       state
-     } = req.body;
- 
--    // Validate required fields
-     if (!firstName || !lastName || !email || !mobile || !password || !firmName || !designation || !city || !state) {
-       return res.status(400).json({
-         success: false,
-@@ -37,7 +143,20 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
-       });
-     }
- 
--    // Validate password
-+    if (!validateEmail(email)) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Invalid email format'
-+      });
-+    }
-+
-+    if (!validateMobile(mobile)) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Invalid mobile number. Please provide 10-digit number'
-+      });
-+    }
-+
-     if (password.length < 8) {
-       return res.status(400).json({
-         success: false,
-@@ -45,8 +164,13 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
-       });
-     }
- 
--    // Check if user already exists
--    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
-+    const normalizedEmail = email.toLowerCase().trim();
-+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
-+
-+    const existingUser = await User.findOne({
-+      $or: [{ email: normalizedEmail }, { mobile: normalizedMobile }]
-+    });
-+
-     if (existingUser) {
-       return res.status(400).json({
-         success: false,
-@@ -54,20 +178,29 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
-       });
-     }
- 
--    // Generate email verification token & mobile OTP
-+    const existingFirm = await StaffingPartner.findOne({
-+      firmName: new RegExp(`^${firmName.trim()}$`, 'i')
-+    });
-+
-+    if (existingFirm) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'A firm with this name is already registered'
-+      });
-+    }
-+
-     const emailToken = crypto.randomBytes(32).toString('hex');
-     const mobileOTP = otpService.generateOTP();
- 
--    // Create user with pending verification
-     const user = await User.create({
--      email,
--      mobile,
-+      email: normalizedEmail,
-+      mobile: normalizedMobile,
-       password,
-       role: 'staffing_partner',
-       status: 'PENDING_EMAIL_VERIFICATION',
-       emailVerified: false,
-       emailVerificationToken: emailToken,
--      emailVerificationExpires: Date.now() + 30 * 60 * 1000, // 30 min
-+      emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
-       mobileOTP: {
-         code: mobileOTP,
-         expiresAt: otpService.getExpiryTime()
-@@ -75,7 +208,6 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
-       mobileVerified: skipMobileOTP
-     });
- 
--    // Create staffing partner profile with registration fields only
-     await StaffingPartner.create({
-       user: user._id,
-       firstName,
-@@ -88,22 +220,31 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
-       profileCompletion: { basicInfo: true }
-     });
- 
--    // Send Email Verification Link
-     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
--    await emailService.sendVerificationLink(email, verifyUrl);
-+    await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
-+    await whatsappService.sendOTP(normalizedMobile, mobileOTP);
- 
--    // Send Mobile OTP (or mock it)
--    await whatsappService.sendOTP(mobile, mobileOTP);
-+    const verificationState = getVerificationState(user);
- 
-     res.status(201).json({
-       success: true,
--      message: skipMobileOTP 
--        ? 'Registration successful! Check your email for verification link. (Mobile OTP skipped in development)'
--        : 'Registration successful! Check your email for verification link and verify your mobile.',
-+      message: skipMobileOTP
-+        ? 'Registration successful. Please verify your email. Mobile OTP skipped in development.'
-+        : 'Registration successful. Please verify your email and mobile.',
-       data: {
-         userId: user._id,
-+        role: user.role,
-         email: user.email,
-         mobile: user.mobile,
-+        verification: {
-+          emailRequired: true,
-+          mobileRequired: !skipMobileOTP,
-+          emailVerified: user.emailVerified,
-+          mobileVerified: user.mobileVerified
-+        },
-+        canLogin: verificationState.canLogin,
-+        nextStep: verificationState.nextStep,
-+        allowedActions: verificationState.allowedActions,
-         skipMobileOTP,
-         ...(process.env.NODE_ENV === 'development' && {
-           devInfo: {
-@@ -115,9 +256,8 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
-         })
+ // @desc    Get Dashboard Overview
+ // @route   GET /api/admin/dashboard
+ exports.getDashboard = async (req, res) => {
+@@ -21,10 +30,8 @@ exports.getDashboard = async (req, res) => {
+         partners: await StaffingPartner.countDocuments({ verificationStatus: 'UNDER_REVIEW' }),
+         companies: await Company.countDocuments({ verificationStatus: 'UNDER_REVIEW' })
        }
-     });
--
-   } catch (error) {
--    console.error('Registration error:', error);
-+    console.error('Staffing partner registration error:', error);
-     res.status(500).json({
-       success: false,
-       message: 'Registration failed',
-@@ -144,7 +284,6 @@ exports.initCompanyRegistration = async (req, res) => {
-       state
-     } = req.body;
+-      // pendingPayouts: await Payout.countDocuments({ status: 'PENDING' }) // ❌ DISABLED
+     };
  
--    // Validate required fields
-     if (!firstName || !lastName || !email || !mobile || !password || !companyName || !designation || !department || !city || !state) {
-       return res.status(400).json({
-         success: false,
-@@ -164,7 +303,20 @@ exports.initCompanyRegistration = async (req, res) => {
-       });
+-    // Recent activities
+     const recentRegistrations = await User.find()
+       .sort({ createdAt: -1 })
+       .limit(10)
+@@ -63,8 +70,9 @@ exports.getPendingVerifications = async (req, res) => {
+     let companies = [];
+ 
+     if (!type || type === 'partners') {
+-      partners = await StaffingPartner.find({ verificationStatus: 'UNDER_REVIEW' })
+-        .populate('user', 'email mobile createdAt')
++      partners = await StaffingPartner.find({
++        verificationStatus: { $in: ['PENDING', 'UNDER_REVIEW'] }
++      }).populate('user', 'email mobile createdAt')
+         .sort({ createdAt: 1 });
      }
  
--    // Validate password
-+    if (!validateEmail(email)) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Invalid email format'
-+      });
-+    }
-+
-+    if (!validateMobile(mobile)) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Invalid mobile number. Please provide 10-digit number'
-+      });
-+    }
-+
-     if (password.length < 8) {
-       return res.status(400).json({
-         success: false,
-@@ -172,8 +324,13 @@ exports.initCompanyRegistration = async (req, res) => {
-       });
-     }
- 
--    // Check if user already exists
--    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
-+    const normalizedEmail = email.toLowerCase().trim();
-+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
-+
-+    const existingUser = await User.findOne({
-+      $or: [{ email: normalizedEmail }, { mobile: normalizedMobile }]
-+    });
-+
-     if (existingUser) {
-       return res.status(400).json({
-         success: false,
-@@ -181,20 +338,18 @@ exports.initCompanyRegistration = async (req, res) => {
-       });
-     }
- 
--    // Generate email verification token & mobile OTP
-     const emailToken = crypto.randomBytes(32).toString('hex');
-     const mobileOTP = otpService.generateOTP();
- 
--    // Create user
-     const user = await User.create({
--      email,
--      mobile,
-+      email: normalizedEmail,
-+      mobile: normalizedMobile,
-       password,
-       role: 'company',
-       status: 'PENDING_EMAIL_VERIFICATION',
-       emailVerified: false,
-       emailVerificationToken: emailToken,
--      emailVerificationExpires: Date.now() + 30 * 60 * 1000,
-+      emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
-       mobileOTP: {
-         code: mobileOTP,
-         expiresAt: otpService.getExpiryTime()
-@@ -202,7 +357,6 @@ exports.initCompanyRegistration = async (req, res) => {
-       mobileVerified: skipMobileOTP
-     });
- 
--    // Create company profile - combine firstName + lastName
-     await Company.create({
-       user: user._id,
-       companyName,
-@@ -215,22 +369,31 @@ exports.initCompanyRegistration = async (req, res) => {
-       profileCompletion: { basicInfo: true }
-     });
- 
--    // Send email verification link
-     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
--    await emailService.sendVerificationLink(email, verifyUrl);
-+    await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
-+    await whatsappService.sendOTP(normalizedMobile, mobileOTP);
- 
--    // Send mobile OTP
--    await whatsappService.sendOTP(mobile, mobileOTP);
-+    const verificationState = getVerificationState(user);
- 
-     res.status(201).json({
-       success: true,
--      message: skipMobileOTP 
--        ? 'Registration successful! Check your email for verification link.'
--        : 'Registration successful! Check your email for verification link and verify your mobile.',
-+      message: skipMobileOTP
-+        ? 'Registration successful. Please verify your email. Mobile OTP skipped in development.'
-+        : 'Registration successful. Please verify your email and mobile.',
-       data: {
-         userId: user._id,
-+        role: user.role,
-         email: user.email,
-         mobile: user.mobile,
-+        verification: {
-+          emailRequired: true,
-+          mobileRequired: !skipMobileOTP,
-+          emailVerified: user.emailVerified,
-+          mobileVerified: user.mobileVerified
-+        },
-+        canLogin: verificationState.canLogin,
-+        nextStep: verificationState.nextStep,
-+        allowedActions: verificationState.allowedActions,
-         skipMobileOTP,
-         ...(process.env.NODE_ENV === 'development' && {
-           devInfo: {
-@@ -242,7 +405,6 @@ exports.initCompanyRegistration = async (req, res) => {
-         })
-       }
-     });
--
-   } catch (error) {
-     console.error('Company registration error:', error);
-     res.status(500).json({
-@@ -253,12 +415,12 @@ exports.initCompanyRegistration = async (req, res) => {
-   }
- };
- 
--// @desc Verify Email via Token (from link)
-+// @desc Verify Email via Token (Legacy GET route support)
- // @route GET /api/auth/verify-email
- exports.verifyEmailByToken = async (req, res) => {
+@@ -92,22 +100,70 @@ exports.getPendingVerifications = async (req, res) => {
+ exports.verifyPartner = async (req, res) => {
    try {
-     const { token } = req.query;
--    
+     const { action, notes, rejectionReason } = req.body;
 +
-     if (!token) {
-       return res.status(400).json({
-         success: false,
-@@ -266,7 +428,6 @@ exports.verifyEmailByToken = async (req, res) => {
-       });
-     }
- 
--    // Find user by email verification token
-     const user = await User.findOne({
-       emailVerificationToken: token,
-       emailVerificationExpires: { $gt: Date.now() }
-@@ -275,37 +436,147 @@ exports.verifyEmailByToken = async (req, res) => {
-     if (!user) {
-       return res.status(400).json({
-         success: false,
--        message: 'Invalid or expired verification token'
-+        message: 'Invalid or expired verification token',
-+        code: 'INVALID_OR_EXPIRED_TOKEN'
-       });
-     }
- 
--    // Update user status
--    user.isEmailVerified = true;
-+    user.emailVerified = true;
-     user.emailVerificationToken = undefined;
-     user.emailVerificationExpires = undefined;
--    
--    // Update status based on mobile verification
--    if (user.isMobileVerified) {
--      user.status = 'VERIFIED';
--    }
--    
-+
-+    syncUserStatusAfterVerification(user);
-     await user.save();
- 
--    // ✅ CORRECT: Return JSON response
-+    const verificationState = getVerificationState(user);
-+
-     return res.status(200).json({
-       success: true,
--      message: 'Email verified successfully! You can now login.',
-+      message: verificationState.canLogin
-+        ? 'Email verified successfully. You can now login.'
-+        : 'Email verified successfully. Please complete remaining verification.',
-       data: {
--        emailVerified: true,
--        status: user.status
-+        verification: {
-+          emailVerified: user.emailVerified,
-+          mobileVerified: user.mobileVerified
-+        },
-+        status: user.status,
-+        canLogin: verificationState.canLogin,
-+        nextStep: verificationState.nextStep,
-+        allowedActions: verificationState.allowedActions
-       }
-     });
-+  } catch (error) {
-+    console.error('Email verification error:', error);
-+    return res.status(500).json({
-+      success: false,
-+      message: 'Email verification failed',
-+      error: error.message
-+    });
-+  }
-+};
-+
-+// @desc Verify Email via Token (Recommended POST route)
-+// @route POST /api/auth/verify-email
-+exports.verifyEmail = async (req, res) => {
-+  try {
-+    const { token } = req.body;
-+
-+    if (!token) {
++    if (!['approve', 'reject'].includes(action)) {
 +      return res.status(400).json({
 +        success: false,
-+        message: 'Verification token is required'
++        message: 'Invalid action. Use "approve" or "reject"'
 +      });
 +    }
 +
-+    const user = await User.findOne({
-+      emailVerificationToken: token,
-+      emailVerificationExpires: { $gt: Date.now() }
-+    });
-+
-+    if (!user) {
-+      return res.status(400).json({
++    if (action === 'approve' && !hasPermission(req.user, PERMISSIONS.APPROVE_PARTNER)) {
++      return res.status(403).json({
 +        success: false,
-+        message: 'Invalid or expired verification token',
-+        code: 'INVALID_OR_EXPIRED_TOKEN'
++        message: 'You do not have permission to approve staffing partners'
 +      });
 +    }
 +
-+    user.emailVerified = true;
-+    user.emailVerificationToken = undefined;
-+    user.emailVerificationExpires = undefined;
++    if (action === 'reject' && !hasPermission(req.user, PERMISSIONS.REJECT_PARTNER)) {
++      return res.status(403).json({
++        success: false,
++        message: 'You do not have permission to reject staffing partners'
++      });
++    }
 +
-+    syncUserStatusAfterVerification(user);
-+    await user.save();
+     const partner = await StaffingPartner.findById(req.params.id);
 +
-+    const verificationState = getVerificationState(user);
++    if (!partner) {
++      return res.status(404).json({
++        success: false,
++        message: 'Staffing partner not found'
++      });
++    }
++
+     const user = await User.findById(partner.user);
  
-+    return res.status(200).json({
-+      success: true,
-+      message: verificationState.canLogin
-+        ? 'Email verified successfully. You can now login.'
-+        : 'Email verified successfully. Please complete remaining verification.',
-+      data: {
-+        verification: {
-+          emailVerified: user.emailVerified,
-+          mobileVerified: user.mobileVerified
-+        },
-+        status: user.status,
-+        canLogin: verificationState.canLogin,
-+        nextStep: verificationState.nextStep,
-+        allowedActions: verificationState.allowedActions
-+      }
-+    });
-   } catch (error) {
-     console.error('Email verification error:', error);
-     return res.status(500).json({
-       success: false,
--      message: 'Email verification failed'
-+      message: 'Email verification failed',
-+      error: error.message
-+    });
-+  }
-+};
-+
-+// @desc Get Verification Status
-+// @route GET /api/auth/verification-status/:userId
-+exports.getVerificationStatus = async (req, res) => {
-+  try {
-+    const user = await User.findById(req.params.userId).select(
-+      'email mobile role status emailVerified mobileVerified'
-+    );
-+
 +    if (!user) {
 +      return res.status(404).json({
 +        success: false,
-+        message: 'User not found'
++        message: 'Associated user not found'
 +      });
 +    }
 +
-+    const verificationState = getVerificationState(user);
-+
-+    res.json({
-+      success: true,
-+      data: {
-+        userId: user._id,
-+        email: user.email,
-+        mobile: user.mobile,
-+        role: user.role,
-+        status: user.status,
-+        verification: {
-+          emailVerified: user.emailVerified,
-+          mobileVerified: user.mobileVerified
-+        },
-+        canLogin: verificationState.canLogin,
-+        nextStep: verificationState.nextStep,
-+        allowedActions: verificationState.allowedActions
-+      }
-+    });
-+  } catch (error) {
-+    console.error('Verification status error:', error);
-+    res.status(500).json({
-+      success: false,
-+      message: 'Failed to fetch verification status',
-+      error: error.message
-     });
-   }
- };
-@@ -316,6 +587,13 @@ exports.verifyMobileOTP = async (req, res) => {
-   try {
-     const { userId, otp } = req.body;
+     if (action === 'approve') {
+       partner.verificationStatus = 'APPROVED';
+       partner.verifiedBy = req.user._id;
+       partner.verifiedAt = new Date();
+-      partner.verificationNotes = notes;
++      partner.verificationNotes = notes || '';
  
-+    if (!userId || !otp) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Please provide userId and otp'
-+      });
-+    }
-+
-     const user = await User.findById(userId);
-     if (!user) {
-       return res.status(404).json({
-@@ -324,25 +602,28 @@ exports.verifyMobileOTP = async (req, res) => {
-       });
-     }
+       user.status = 'VERIFIED';
  
--    // If mobile OTP is skipped, auto-verify
-     if (skipMobileOTP) {
-       user.mobileVerified = true;
-       user.mobileOTP = undefined;
--
--      // Update status if both verified
--      if (user.emailVerified) {
--        user.status = 'ACTIVE';
--      }
--
-+      syncUserStatusAfterVerification(user);
-       await user.save();
- 
-+      const verificationState = getVerificationState(user);
-+
-       return res.json({
-         success: true,
--        message: 'Mobile auto-verified (WhatsApp disabled in development)',
-+        message: verificationState.canLogin
-+          ? 'Mobile verified successfully. You can now login.'
-+          : 'Mobile verified successfully. Please verify your email to continue.',
-         data: {
--          emailVerified: user.emailVerified,
--          mobileVerified: true,
--          status: user.status
-+          verification: {
-+            emailVerified: user.emailVerified,
-+            mobileVerified: user.mobileVerified
-+          },
-+          status: user.status,
-+          canLogin: verificationState.canLogin,
-+          nextStep: verificationState.nextStep,
-+          allowedActions: verificationState.allowedActions
-         }
-       });
-     }
-@@ -354,35 +635,57 @@ exports.verifyMobileOTP = async (req, res) => {
-       });
-     }
- 
-+    if (user.otpAttempts && user.otpAttempts.mobile >= 5) {
-+      const timeSinceLastAttempt = Date.now() - new Date(user.otpAttempts.lastAttempt).getTime();
-+      if (timeSinceLastAttempt < 3600000) {
+-      // Send approval email
+-      await emailService.sendVerificationApproved(user.email, partner.fullName, 'staffing_partner');
+-    } else if (action === 'reject') {
++      await emailService.sendVerificationApproved(
++        user.email,
++        `${partner.firstName} ${partner.lastName}`,
++        'staffing_partner'
++      );
++    } else {
++      if (!rejectionReason || rejectionReason.trim().length < 5) {
 +        return res.status(400).json({
 +          success: false,
-+          message: 'Too many failed attempts. Please try again after 1 hour.'
++          message: 'Rejection reason is required (minimum 5 characters)'
 +        });
 +      }
-+    }
 +
-     const verification = user.verifyOTP('mobile', otp);
-     if (!verification.valid) {
-+      user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
-+      user.otpAttempts.mobile += 1;
-+      user.otpAttempts.lastAttempt = new Date();
-+      await user.save();
-+
-       return res.status(400).json({
-         success: false,
-         message: verification.message
-       });
+       partner.verificationStatus = 'REJECTED';
+-      partner.rejectionReason = rejectionReason;
++      partner.rejectionReason = rejectionReason.trim();
++      partner.verificationNotes = notes || '';
+       user.status = 'REJECTED';
      }
  
-+    user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
-+    user.otpAttempts.mobile = 0;
-     user.mobileVerified = true;
-     user.mobileOTP = undefined;
- 
--    // Update status if both verified
--    if (user.emailVerified && user.mobileVerified) {
--      user.status = 'ACTIVE';
--    }
--
-+    syncUserStatusAfterVerification(user);
-     await user.save();
- 
-+    const verificationState = getVerificationState(user);
-+
-     res.json({
-       success: true,
--      message: 'Mobile verified successfully',
-+      message: verificationState.canLogin
-+        ? 'Mobile verified successfully. You can now login.'
-+        : 'Mobile verified successfully. Please verify your email to continue.',
-       data: {
--        emailVerified: user.emailVerified,
--        mobileVerified: true,
--        status: user.status
-+        verification: {
-+          emailVerified: user.emailVerified,
-+          mobileVerified: user.mobileVerified
-+        },
-+        status: user.status,
-+        canLogin: verificationState.canLogin,
-+        nextStep: verificationState.nextStep,
-+        allowedActions: verificationState.allowedActions
-       }
+@@ -120,6 +176,7 @@ exports.verifyPartner = async (req, res) => {
+       data: partner
      });
--
    } catch (error) {
-+    console.error('Mobile verification error:', error);
++    console.error('[ADMIN] Verify partner error:', error);
      res.status(500).json({
        success: false,
-       message: 'Verification failed',
-@@ -397,7 +700,6 @@ exports.login = async (req, res) => {
+       message: 'Verification action failed',
+@@ -133,26 +190,70 @@ exports.verifyPartner = async (req, res) => {
+ exports.verifyCompany = async (req, res) => {
    try {
-     const { email, password } = req.body;
+     const { action, notes, rejectionReason } = req.body;
++
++    if (!['approve', 'reject'].includes(action)) {
++      return res.status(400).json({
++        success: false,
++        message: 'Invalid action. Use "approve" or "reject"'
++      });
++    }
++
++    if (action === 'approve' && !hasPermission(req.user, PERMISSIONS.APPROVE_COMPANY)) {
++      return res.status(403).json({
++        success: false,
++        message: 'You do not have permission to approve companies'
++      });
++    }
++
++    if (action === 'reject' && !hasPermission(req.user, PERMISSIONS.REJECT_COMPANY)) {
++      return res.status(403).json({
++        success: false,
++        message: 'You do not have permission to reject companies'
++      });
++    }
++
+     const company = await Company.findById(req.params.id);
++
++    if (!company) {
++      return res.status(404).json({
++        success: false,
++        message: 'Company not found'
++      });
++    }
++
+     const user = await User.findById(company.user);
  
--    // Validate input
-     if (!email || !password) {
++    if (!user) {
++      return res.status(404).json({
++        success: false,
++        message: 'Associated user not found'
++      });
++    }
++
+     if (action === 'approve') {
+       company.verificationStatus = 'APPROVED';
+       company.verifiedBy = req.user._id;
+       company.verifiedAt = new Date();
+-      company.verificationNotes = notes;
++      company.verificationNotes = notes || '';
+ 
+       user.status = 'VERIFIED';
+ 
+-      // ✅ Use decisionMakerName directly
+       await emailService.sendVerificationApproved(
+         user.email,
+-        company.decisionMakerName,  // ✅ Full name
++        company.decisionMakerName,
+         'company'
+       );
+-    } else if (action === 'reject') {
++    } else {
++      if (!rejectionReason || rejectionReason.trim().length < 5) {
++        return res.status(400).json({
++          success: false,
++          message: 'Rejection reason is required (minimum 5 characters)'
++        });
++      }
++
+       company.verificationStatus = 'REJECTED';
+-      company.rejectionReason = rejectionReason;
++      company.rejectionReason = rejectionReason.trim();
++      company.verificationNotes = notes || '';
+       user.status = 'REJECTED';
+     }
+ 
+@@ -165,6 +266,7 @@ exports.verifyCompany = async (req, res) => {
+       data: company
+     });
+   } catch (error) {
++    console.error('[ADMIN] Verify company error:', error);
+     res.status(500).json({
+       success: false,
+       message: 'Verification action failed',
+@@ -173,7 +275,6 @@ exports.verifyCompany = async (req, res) => {
+   }
+ };
+ 
+-
+ // ==================== PAYOUT MANAGEMENT ====================
+ 
+ // @desc    Get all payouts
+@@ -181,13 +282,12 @@ exports.verifyCompany = async (req, res) => {
+ exports.getPayouts = async (req, res) => {
+   try {
+     const Payout = require('../models/Payout');
+-    const { status, page = 1, limit = 20, partnerId, search } = req.query;
++    const { status, page = 1, limit = 20, partnerId } = req.query;
+ 
+     const query = {};
+     if (status) query.status = status;
+     if (partnerId) query.staffingPartner = partnerId;
+ 
+-    // Sanitize pagination
+     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+     const skip = (sanitizedPage - 1) * sanitizedLimit;
+@@ -206,14 +306,12 @@ exports.getPayouts = async (req, res) => {
+       Payout.countDocuments(query)
+     ]);
+ 
+-    // Add computed fields
+     const enrichedPayouts = payouts.map(p => ({
+       ...p.toObject(),
+       daysRemaining: p.getDaysRemaining(),
+       isEligible: p.checkEligibility()
+     }));
+ 
+-    // Summary by status
+     const summary = await Payout.aggregate([
+       {
+         $group: {
+@@ -307,7 +405,6 @@ exports.approvePayout = async (req, res) => {
+       });
+     }
+ 
+-    // Validate status
+     if (payout.status !== 'ELIGIBLE') {
        return res.status(400).json({
          success: false,
-@@ -405,75 +707,130 @@ exports.login = async (req, res) => {
+@@ -318,11 +415,9 @@ exports.approvePayout = async (req, res) => {
        });
      }
  
--    // Find user
--    const user = await User.findOne({ email }).select('+password');
-+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
-     if (!user) {
-       return res.status(401).json({
-         success: false,
--        message: 'Invalid credentials'
-+        message: 'Invalid credentials',
-+        code: 'INVALID_CREDENTIALS'
+-    // Approve
+     payout.approve(req.user._id, notes);
+     await payout.save();
+ 
+-    // Notify partner
+     const notificationEngine = require('../services/notificationEngine');
+     if (payout.staffingPartner.user) {
+       await notificationEngine.send({
+@@ -389,7 +484,6 @@ exports.processPayout = async (req, res) => {
        });
      }
  
--    // Check password
-     const isMatch = await user.comparePassword(password);
-     if (!isMatch) {
-       return res.status(401).json({
-         success: false,
--        message: 'Invalid credentials'
-+        message: 'Invalid credentials',
-+        code: 'INVALID_CREDENTIALS'
+-    // Mark as paid
+     payout.markPaid({
+       method: paymentMethod || 'BANK_TRANSFER',
+       transactionId,
+@@ -400,7 +494,6 @@ exports.processPayout = async (req, res) => {
+     if (notes) payout.notes = notes;
+     await payout.save();
+ 
+-    // Update candidate payout status
+     await Candidate.findByIdAndUpdate(payout.candidate._id, {
+       'payout.status': 'PAID',
+       'payout.paidAt': new Date(),
+@@ -409,14 +502,12 @@ exports.processPayout = async (req, res) => {
+       'payout.paymentMethod': paymentMethod || 'BANK_TRANSFER'
+     });
+ 
+-    // Update partner metrics
+     await commissionService._updatePartnerMetrics(
+       payout.staffingPartner._id,
+       payout.amount.netPayable,
+       'mark_paid'
+     );
+ 
+-    // Notify partner
+     const notificationEngine = require('../services/notificationEngine');
+     if (payout.staffingPartner.user) {
+       await notificationEngine.send({
+@@ -527,7 +618,6 @@ exports.releasePayout = async (req, res) => {
        });
      }
  
--    // Check mobile verification
--    if (!user.mobileVerified) {
-+    if (!user.emailVerified && !user.mobileVerified) {
-       return res.status(403).json({
-         success: false,
--        message: 'Please verify your mobile number first',
--        requiresVerification: 'mobile',
--        userId: user._id
-+        message: 'Please verify your email and mobile number before logging in.',
-+        code: 'CONTACTS_NOT_VERIFIED',
-+        data: {
-+          userId: user._id,
-+          verification: {
-+            emailVerified: false,
-+            mobileVerified: false
-+          },
-+          canLogin: false,
-+          nextStep: 'VERIFY_CONTACTS',
-+          allowedActions: [
-+            'RESEND_EMAIL_VERIFICATION',
-+            'RESEND_MOBILE_OTP',
-+            'CHECK_VERIFICATION_STATUS'
-+          ]
-+        }
-       });
-     }
+-    // Determine new status based on eligibility
+     const newStatus = payout.checkEligibility() ? 'ELIGIBLE' : 'PENDING';
  
--    // Check email verification
-     if (!user.emailVerified) {
-       return res.status(403).json({
-         success: false,
--        message: 'Please verify your email before logging in. Check your inbox for the verification link.',
--        requiresVerification: 'email',
--        userId: user._id
-+        message: 'Please verify your email before logging in.',
-+        code: 'EMAIL_NOT_VERIFIED',
-+        data: {
-+          userId: user._id,
-+          verification: {
-+            emailVerified: false,
-+            mobileVerified: true
-+          },
-+          canLogin: false,
-+          nextStep: 'VERIFY_EMAIL',
-+          allowedActions: [
-+            'RESEND_EMAIL_VERIFICATION',
-+            'CHECK_VERIFICATION_STATUS'
-+          ]
-+        }
-+      });
-+    }
-+
-+    if (!user.mobileVerified) {
-+      return res.status(403).json({
-+        success: false,
-+        message: 'Please verify your mobile number before logging in.',
-+        code: 'MOBILE_NOT_VERIFIED',
-+        data: {
-+          userId: user._id,
-+          verification: {
-+            emailVerified: true,
-+            mobileVerified: false
-+          },
-+          canLogin: false,
-+          nextStep: 'VERIFY_MOBILE',
-+          allowedActions: [
-+            'RESEND_MOBILE_OTP',
-+            'CHECK_VERIFICATION_STATUS'
-+          ]
-+        }
-+      });
-+    }
-+
-+    if (user.status === 'SUSPENDED') {
-+      return res.status(403).json({
-+        success: false,
-+        message: 'Your account is suspended. Please contact support.',
-+        code: 'ACCOUNT_SUSPENDED'
-+      });
-+    }
-+
-+    if (user.status === 'REJECTED') {
-+      return res.status(403).json({
-+        success: false,
-+        message: 'Your account has been rejected.',
-+        code: 'ACCOUNT_REJECTED'
-       });
-     }
+     payout.status = newStatus;
+@@ -556,7 +646,7 @@ exports.forfeitPayout = async (req, res) => {
+   try {
+     const commissionService = require('../services/commissionService');
+     const Payout = require('../models/Payout');
+-    const { leftDate, reason } = req.body;
++    const { leftDate } = req.body;
  
--    // Update last login
-     user.lastLogin = new Date();
-     await user.save();
+     if (!leftDate) {
+       return res.status(400).json({
+@@ -599,7 +689,7 @@ exports.forfeitPayout = async (req, res) => {
+   }
+ };
  
--    // Get profile
--    let profile = null;
--    if (user.role === 'staffing_partner') {
--      profile = await StaffingPartner.findOne({ user: user._id });
--    } else if (user.role === 'company') {
--      profile = await Company.findOne({ user: user._id });
+-// @desc    Run eligibility check (manual trigger - also runs via cron)
++// @desc    Run eligibility check
+ // @route   POST /api/admin/payouts/check-eligibility
+ exports.checkPayoutEligibility = async (req, res) => {
+   try {
+@@ -618,89 +708,6 @@ exports.checkPayoutEligibility = async (req, res) => {
+       error: error.message
+     });
+   }
+-};// @desc    Manage Payouts
+-// @route   GET /api/admin/payouts
+-exports.getPayouts = async (req, res) => {
+-  try {
+-    const { status, page = 1, limit = 20 } = req.query;
+-
+-    const query = {};
+-    if (status) query.status = status;
+-
+-    const payouts = await Payout.find(query)
+-      .populate('staffingPartner', 'firstName lastName firmName financeDetails')
+-      .populate('candidate', 'firstName lastName')
+-      .populate('job', 'title')
+-      .populate('company', 'companyName')
+-      .sort({ createdAt: -1 })
+-      .skip((page - 1) * limit)
+-      .limit(parseInt(limit));
+-
+-    const total = await Payout.countDocuments(query);
+-
+-    res.json({
+-      success: true,
+-      data: {
+-        payouts,
+-        pagination: {
+-          current: parseInt(page),
+-          pages: Math.ceil(total / limit),
+-          total
+-        }
+-      }
+-    });
+-  } catch (error) {
+-    res.status(500).json({
+-      success: false,
+-      message: 'Failed to fetch payouts',
+-      error: error.message
+-    });
+-  }
+-};
+-
+-// @desc    Process Payout
+-// @route   PUT /api/admin/payouts/:id
+-exports.processPayout = async (req, res) => {
+-  try {
+-    const { action, transactionId, utrNumber, rejectionReason } = req.body;
+-    const payout = await Payout.findById(req.params.id);
+-
+-    if (action === 'approve') {
+-      payout.status = 'APPROVED';
+-      payout.approvedBy = req.user._id;
+-      payout.approvedAt = new Date();
+-    } else if (action === 'process') {
+-      payout.status = 'PROCESSING';
+-    } else if (action === 'complete') {
+-      payout.status = 'PAID';
+-      payout.paymentDetails.transactionId = transactionId;
+-      payout.paymentDetails.utrNumber = utrNumber;
+-      payout.paymentDetails.paidAt = new Date();
+-
+-      // Update partner metrics
+-      const partner = await StaffingPartner.findById(payout.staffingPartner);
+-      partner.metrics.totalEarnings += payout.amount.net;
+-      partner.metrics.pendingPayouts -= payout.amount.gross;
+-      await partner.save();
+-    } else if (action === 'reject') {
+-      payout.status = 'REJECTED';
+-      payout.rejectionReason = rejectionReason;
 -    }
-+    const { profile, profileMeta, nextStep } = await getPostLoginNextStep(user);
+-
+-    await payout.save();
+-
+-    res.json({
+-      success: true,
+-      message: `Payout ${action} successfully`,
+-      data: payout
+-    });
+-  } catch (error) {
+-    res.status(500).json({
+-      success: false,
+-      message: 'Payout action failed',
+-      error: error.message
+-    });
+-  }
+ };
  
--    // Generate token
-     const token = generateToken(user._id, user.role);
+ // @desc    Get All Users
+@@ -719,7 +726,6 @@ exports.getUsers = async (req, res) => {
+       ];
+     }
  
--    // Build user payload (no password)
-     const userPayload = {
-       id: user._id,
+-    // ✅ FIX #10: Sanitize pagination
+     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+ 
+@@ -782,7 +788,6 @@ exports.getAnalytics = async (req, res) => {
+   try {
+     const { period = '30d' } = req.query;
+ 
+-    // Calculate date range
+     const endDate = new Date();
+     let startDate = new Date();
+ 
+@@ -800,7 +805,6 @@ exports.getAnalytics = async (req, res) => {
+         startDate.setDate(startDate.getDate() - 30);
+     }
+ 
+-    // Registration trends
+     const registrationTrends = await User.aggregate([
+       { $match: { createdAt: { $gte: startDate, $lte: endDate } } },
+       {
+@@ -815,7 +819,6 @@ exports.getAnalytics = async (req, res) => {
+       { $sort: { '_id.date': 1 } }
+     ]);
+ 
+-    // Placement trends
+     const placementTrends = await Candidate.aggregate([
+       {
+         $match: {
+@@ -827,19 +830,16 @@ exports.getAnalytics = async (req, res) => {
+         $group: {
+           _id: { $dateToString: { format: '%Y-%m-%d', date: '$joining.confirmedAt' } },
+           count: { $sum: 1 }
+-          // totalValue: { $sum: '$payout.commissionAmount' } // ❌ DISABLED - Payout system inactive
+         }
+       },
+       { $sort: { _id: 1 } }
+     ]);
+ 
+-    // Top performing partners
+     const topPartners = await StaffingPartner.find()
+       .sort({ 'metrics.totalPlacements': -1 })
+       .limit(10)
+       .select('firstName lastName firmName metrics');
+ 
+-    // Top hiring companies
+     const topCompanies = await Company.find()
+       .sort({ 'metrics.totalHires': -1 })
+       .limit(10)
+@@ -873,7 +873,6 @@ exports.getPendingJobs = async (req, res) => {
+ 
+     const query = { approvalStatus: 'PENDING_APPROVAL' };
+ 
+-    // ✅ FIX #10: Sanitize pagination
+     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+ 
+@@ -886,11 +885,10 @@ exports.getPendingJobs = async (req, res) => {
+ 
+     const total = await Job.countDocuments(query);
+ 
+-    // Get submission age for each job
+     const jobsWithAge = jobs.map(job => ({
+       ...job.toObject(),
+-      submittedAge: Math.floor((Date.now() - job.createdAt) / (1000 * 60 * 60)), // hours
+-      isStale: (Date.now() - job.createdAt) > (7 * 24 * 60 * 60 * 1000) // > 7 days
++      submittedAge: Math.floor((Date.now() - job.createdAt) / (1000 * 60 * 60)),
++      isStale: (Date.now() - job.createdAt) > (7 * 24 * 60 * 60 * 1000)
+     }));
+ 
+     res.json({
+@@ -941,7 +939,6 @@ exports.approveJob = async (req, res) => {
+       });
+     }
+ 
+-    // Update job
+     job.approvalStatus = 'ACTIVE';
+     job.status = 'ACTIVE';
+     job.approvedBy = req.user._id;
+@@ -949,9 +946,7 @@ exports.approveJob = async (req, res) => {
+     job.addToHistory('APPROVED', req.user._id, {}, notes || 'Job approved by admin');
+     await job.save();
+ 
+-    // Notify company
+     const notificationEngine = require('../services/notificationEngine');
+-    const emailService = require('../services/emailService');
+ 
+     if (job.company.user) {
+       await notificationEngine.send({
+@@ -973,7 +968,6 @@ exports.approveJob = async (req, res) => {
+         priority: 'high'
+       });
+ 
+-      // Send detailed email
+       await emailService.sendJobApproved(
+         job.company.user.email,
+         job.company.companyName,
+@@ -1034,17 +1028,14 @@ exports.rejectJob = async (req, res) => {
+       });
+     }
+ 
+-    // Update job
+     job.approvalStatus = 'REJECTED';
+-    job.status = 'DRAFT'; // Back to draft so company can edit
++    job.status = 'DRAFT';
+     job.rejectionReason = reason.trim();
+     job.rejectedAt = new Date();
+     job.addToHistory('REJECTED', req.user._id, {}, reason);
+     await job.save();
+ 
+-    // Notify company
+     const notificationEngine = require('../services/notificationEngine');
+-    const emailService = require('../services/emailService');
+ 
+     if (job.company.user) {
+       await notificationEngine.send({
+@@ -1108,14 +1099,11 @@ exports.getPendingEditRequests = async (req, res) => {
+     const query = { status: 'PENDING' };
+     if (priority) query.priority = priority;
+ 
+-    // ✅ FIX #10: Sanitize pagination
+     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+ 
+     let sort = {};
+     if (sortBy === 'priority') {
+-      // URGENT > HIGH > MEDIUM > LOW, then oldest first
+-      const priorityOrder = { 'URGENT': 1, 'HIGH': 2, 'MEDIUM': 3, 'LOW': 4 };
+       sort = { createdAt: 1 };
+     } else if (sortBy === 'oldest') {
+       sort = { createdAt: 1 };
+@@ -1133,24 +1121,21 @@ exports.getPendingEditRequests = async (req, res) => {
+ 
+     const total = await JobEditRequest.countDocuments(query);
+ 
+-    // Add age and priority sorting
+     let sortedRequests = editRequests.map(req => ({
+       ...req.toObject(),
+       ageHours: Math.floor((Date.now() - req.createdAt) / (1000 * 60 * 60)),
+       isStale: req.isStale()
+     }));
+ 
+-    // Manual priority sort if needed
+     if (sortBy === 'priority') {
+-      const priorityOrder = { 'URGENT': 1, 'HIGH': 2, 'MEDIUM': 3, 'LOW': 4 };
++      const priorityOrder = { URGENT: 1, HIGH: 2, MEDIUM: 3, LOW: 4 };
+       sortedRequests.sort((a, b) => {
+         const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+         if (priorityDiff !== 0) return priorityDiff;
+-        return a.createdAt - b.createdAt; // Older first if same priority
++        return a.createdAt - b.createdAt;
+       });
+     }
+ 
+-    // Get priority breakdown
+     const priorityStats = await JobEditRequest.aggregate([
+       { $match: query },
+       { $group: { _id: '$priority', count: { $sum: 1 } } }
+@@ -1203,7 +1188,6 @@ exports.getEditRequest = async (req, res) => {
+       });
+     }
+ 
+-    // Get job's edit history
+     const allEditRequests = await JobEditRequest.find({
+       job: editRequest.job._id
+     }).sort({ createdAt: -1 });
+@@ -1256,8 +1240,6 @@ exports.approveEditRequest = async (req, res) => {
+     }
+ 
+     const job = editRequest.job;
+-
+-    // Apply changes to job
+     const changes = editRequest.requestedChanges;
+     const appliedChanges = {};
+ 
+@@ -1266,7 +1248,6 @@ exports.approveEditRequest = async (req, res) => {
+         const keys = field.split('.');
+         let target = job;
+ 
+-        // Navigate to the nested field
+         for (let i = 0; i < keys.length - 1; i++) {
+           if (!target[keys[i]]) target[keys[i]] = {};
+           target = target[keys[i]];
+@@ -1286,16 +1267,12 @@ exports.approveEditRequest = async (req, res) => {
+       }
+     }
+ 
+-    // ✅ FIX #1: Use Job model method for proper markModified
+     job.applyEditChanges(appliedChanges);
+-
+-    // Update job
+     job.approvalStatus = 'ACTIVE';
+     job.approvedEditCount += 1;
+     job.addToHistory('EDIT_APPROVED', req.user._id, appliedChanges, notes || 'Edit request approved');
+     await job.save();
+ 
+-    // Update edit request
+     editRequest.status = 'APPROVED';
+     editRequest.reviewedBy = req.user._id;
+     editRequest.reviewedAt = new Date();
+@@ -1304,9 +1281,7 @@ exports.approveEditRequest = async (req, res) => {
+     editRequest.appliedChanges = appliedChanges;
+     await editRequest.save();
+ 
+-    // Notify company
+     const notificationEngine = require('../services/notificationEngine');
+-    const emailService = require('../services/emailService');
+ 
+     if (editRequest.company.user) {
+       await notificationEngine.send({
+@@ -1393,15 +1368,13 @@ exports.rejectEditRequest = async (req, res) => {
+ 
+     const job = editRequest.job;
+ 
+-    // Update edit request
+     editRequest.status = 'REJECTED';
+     editRequest.reviewedBy = req.user._id;
+     editRequest.reviewedAt = new Date();
+     editRequest.adminResponse = reason.trim();
+     await editRequest.save();
+ 
+-    // Update job
+-    job.approvalStatus = 'ACTIVE'; // Back to active
++    job.approvalStatus = 'ACTIVE';
+     job.rejectedEditCount += 1;
+     job.addToHistory('EDIT_REJECTED', req.user._id, editRequest.requestedChanges, reason);
+     await job.save();
+@@ -1410,9 +1383,7 @@ exports.rejectEditRequest = async (req, res) => {
+     const shouldWarn = job.rejectedEditCount >= 3;
+     const shouldDiscontinue = job.rejectedEditCount >= 5;
+ 
+-    // Notify company
+     const notificationEngine = require('../services/notificationEngine');
+-    const emailService = require('../services/emailService');
+ 
+     let warningMessage = '';
+     if (shouldDiscontinue) {
+@@ -1482,7 +1453,7 @@ exports.rejectEditRequest = async (req, res) => {
+   }
+ };
+ 
+-// @desc    Discontinue job (too many rejected edits)
++// @desc    Discontinue job
+ // @route   POST /api/admin/jobs/:id/discontinue
+ exports.discontinueJob = async (req, res) => {
+   try {
+@@ -1512,7 +1483,6 @@ exports.discontinueJob = async (req, res) => {
+       });
+     }
+ 
+-    // Update job
+     job.approvalStatus = 'DISCONTINUED';
+     job.status = 'CLOSED';
+     job.discontinuedReason = reason.trim();
+@@ -1521,16 +1491,13 @@ exports.discontinueJob = async (req, res) => {
+     job.addToHistory('DISCONTINUED', req.user._id, {}, reason);
+     await job.save();
+ 
+-    // Mark all pending edit requests as SUPERSEDED
+     const JobEditRequest = require('../models/JobEditRequest');
+     await JobEditRequest.updateMany(
+       { job: job._id, status: 'PENDING' },
+       { status: 'SUPERSEDED' }
+     );
+ 
+-    // Notify company
+     const notificationEngine = require('../services/notificationEngine');
+-    const emailService = require('../services/emailService');
+ 
+     if (job.company.user) {
+       await notificationEngine.send({
+@@ -1587,7 +1554,7 @@ exports.discontinueJob = async (req, res) => {
+   }
+ };
+ 
+-// @desc    Get job edit history (audit trail)
++// @desc    Get job edit history
+ // @route   GET /api/admin/jobs/:id/edit-history
+ exports.getJobEditHistory = async (req, res) => {
+   try {
+@@ -1605,13 +1572,11 @@ exports.getJobEditHistory = async (req, res) => {
+       });
+     }
+ 
+-    // Get all edit requests
+     const editRequests = await JobEditRequest.find({ job: job._id })
+       .populate('requestedBy', 'email')
+       .populate('reviewedBy', 'email')
+       .sort({ createdAt: -1 });
+ 
+-    // Get change history from job
+     const changeHistory = job.changeHistory.sort((a, b) => b.changedAt - a.changedAt);
+ 
+     res.json({
+@@ -1628,7 +1593,7 @@ exports.getJobEditHistory = async (req, res) => {
+         stats: job.getEditStats(),
+         editRequests,
+         changeHistory,
+-        timeline: this._buildTimeline(job, editRequests, changeHistory)
++        timeline: exports._buildTimeline(job, editRequests, changeHistory)
+       }
+     });
+   } catch (error) {
+@@ -1644,14 +1609,12 @@ exports.getJobEditHistory = async (req, res) => {
+ exports._buildTimeline = (job, editRequests, changeHistory) => {
+   const events = [];
+ 
+-  // Add job creation
+   events.push({
+     type: 'CREATED',
+     timestamp: job.createdAt,
+     description: 'Job created'
+   });
+ 
+-  // Add change history events
+   changeHistory.forEach(change => {
+     events.push({
+       type: change.changeType,
+@@ -1661,7 +1624,6 @@ exports._buildTimeline = (job, editRequests, changeHistory) => {
+     });
+   });
+ 
+-  // Add edit request events
+   editRequests.forEach(req => {
+     events.push({
+       type: 'EDIT_REQUEST_CREATED',
+@@ -1681,6 +1643,5 @@ exports._buildTimeline = (job, editRequests, changeHistory) => {
+     }
+   });
+ 
+-  // Sort by timestamp descending
+   return events.sort((a, b) => b.timestamp - a.timestamp);
+ };
+\ No newline at end of file
+diff --git a/controllers/authController.js b/controllers/authController.js
+index 74caab6..a6eef08 100644
+--- a/controllers/authController.js
++++ b/controllers/authController.js
+@@ -73,6 +73,18 @@ const syncUserStatusAfterVerification = (user) => {
+  * Helper: get onboarding next step after successful login
+  */
+ const getPostLoginNextStep = async (user) => {
++  // Admin and sub_admin go straight to dashboard
++  if (user.role === 'admin' || user.role === 'sub_admin') {
++    return {
++      profile: null,
++      profileMeta: {
++        completionPercentage: 100,
++        verificationStatus: 'APPROVED'
++      },
++      nextStep: 'GO_TO_DASHBOARD'
++    };
++  }
++
+   let profile = null;
+ 
+   if (user.role === 'staffing_partner') {
+@@ -818,6 +830,7 @@ exports.login = async (req, res) => {
        email: user.email,
        role: user.role,
        status: user.status,
-+      emailVerified: user.emailVerified,
-+      mobileVerified: user.mobileVerified,
++      permissions: user.permissions || [],
+       emailVerified: user.emailVerified,
+       mobileVerified: user.mobileVerified,
        isPasswordChanged: user.isPasswordChanged
-     };
+@@ -1152,6 +1165,7 @@ exports.getMe = async (req, res) => {
+           mobile: user.mobile,
+           role: user.role,
+           status: user.status,
++          permissions: user.permissions || [],
+           emailVerified: user.emailVerified,
+           mobileVerified: user.mobileVerified,
+           isPasswordChanged: user.isPasswordChanged,
+diff --git a/controllers/companyController.js b/controllers/companyController.js
+index cf7f735..81e10f1 100644
+--- a/controllers/companyController.js
++++ b/controllers/companyController.js
+@@ -553,20 +553,32 @@ exports.uploadDocuments = async (req, res) => {
+     const {
+       gstCertificate,
+       panCard,
+-      incorporationCertificate,
+-      authorizedSignatoryProof,
+-      addressProof,
++      additionalDocuments,
+     } = req.body;
  
--    // Send token in cookie
-     return sendTokenResponse(res, token, userPayload, {
-       profile,
-+      profileMeta,
-+      canLogin: true,
-+      nextStep,
-       requirePasswordChange: !user.isPasswordChanged
-     });
--
-   } catch (error) {
-+    console.error('Login error:', error);
-     res.status(500).json({
-       success: false,
-       message: 'Login failed',
-@@ -488,11 +845,10 @@ exports.changePassword = async (req, res) => {
-   try {
-     const { currentPassword, newPassword, confirmPassword } = req.body;
+     if (gstCertificate) company.documents.gstCertificate = gstCertificate;
+     if (panCard) company.documents.panCard = panCard;
+-    if (incorporationCertificate)
+-      company.documents.incorporationCertificate = incorporationCertificate;
+-    if (authorizedSignatoryProof)
+-      company.documents.authorizedSignatoryProof = authorizedSignatoryProof;
+-    if (addressProof) company.documents.addressProof = addressProof;
  
--    // Validate
--    if (!currentPassword || !newPassword) {
-+    if (!currentPassword || !newPassword || !confirmPassword) {
-       return res.status(400).json({
-         success: false,
--        message: 'Please provide current and new password'
-+        message: 'Please provide current password, new password, and confirm password'
-       });
-     }
- 
-@@ -512,7 +868,13 @@ exports.changePassword = async (req, res) => {
- 
-     const user = await User.findById(req.user._id).select('+password');
- 
--    // Verify current password
-+    if (!user) {
-+      return res.status(404).json({
-+        success: false,
-+        message: 'User not found'
+-    company.profileCompletion.documents = true;
++    if (additionalDocuments && Array.isArray(additionalDocuments)) {
++      if (!company.documents.additionalDocuments) {
++        company.documents.additionalDocuments = [];
++      }
++      additionalDocuments.forEach(doc => {
++        company.documents.additionalDocuments.push({
++          documentType: doc.documentType,
++          documentUrl: doc.documentUrl,
++          documentName: doc.documentName,
++          uploadedAt: new Date()
++        });
 +      });
 +    }
 +
-     const isMatch = await user.comparePassword(currentPassword);
-     if (!isMatch) {
-       return res.status(400).json({
-@@ -521,7 +883,6 @@ exports.changePassword = async (req, res) => {
-       });
-     }
- 
--    // Check if new password is same as old
-     const isSamePassword = await user.comparePassword(newPassword);
-     if (isSamePassword) {
-       return res.status(400).json({
-@@ -530,26 +891,18 @@ exports.changePassword = async (req, res) => {
-       });
-     }
- 
--    // Update password
-     user.password = newPassword;
-     user.isPasswordChanged = true;
--
--    // Update status if it was PASSWORD_CHANGED or earlier
--    if (['REGISTERED', 'PROFILE_INCOMPLETE'].includes(user.status)) {
--      user.status = 'PASSWORD_CHANGED';
--    }
--
-     await user.save();
- 
--    // Generate new token
-     const token = generateToken(user._id, user.role);
- 
--    // Refresh auth cookie
-     res.cookie('token', token, {
-       httpOnly: true,
--      secure: process.env.NODE_ENV === 'production',
--      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
--      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-+      secure: process.env.COOKIE_SECURE === 'true',
-+      sameSite: process.env.COOKIE_SECURE === 'true' ? 'none' : 'lax',
-+      maxAge: 7 * 24 * 60 * 60 * 1000,
-+      path: '/'
-     });
++    // Mark complete only if mandatory docs uploaded
++    company.profileCompletion.documents = !!(
++      company.documents.gstCertificate &&
++      company.documents.panCard
++    );
++
+     await company.save();
  
      res.json({
-@@ -559,8 +912,8 @@ exports.changePassword = async (req, res) => {
-         status: user.status
-       }
-     });
--
-   } catch (error) {
-+    console.error('Change password error:', error);
-     res.status(500).json({
-       success: false,
-       message: 'Password change failed',
-@@ -569,11 +922,11 @@ exports.changePassword = async (req, res) => {
-   }
- };
- 
--// @desc Resend OTP
-+// @desc Resend OTP (legacy email/mobile combined)
- // @route POST /api/auth/resend-otp
- exports.resendOTP = async (req, res) => {
-   try {
--    const { userId, type } = req.body; // type: 'email' or 'mobile'
-+    const { userId, type } = req.body;
- 
-     if (!userId || !type) {
-       return res.status(400).json({
-@@ -590,26 +943,17 @@ exports.resendOTP = async (req, res) => {
-       });
-     }
- 
--    // Check if already verified
--    if (type === 'email' && user.emailVerified) {
--      return res.status(400).json({
--        success: false,
--        message: 'Email already verified'
--      });
--    }
--
--    if (type === 'mobile' && user.mobileVerified) {
--      return res.status(400).json({
--        success: false,
--        message: 'Mobile already verified'
--      });
--    }
--
-     if (type === 'email') {
--      // Generate new email token
-+      if (user.emailVerified) {
-+        return res.status(400).json({
-+          success: false,
-+          message: 'Email already verified'
-+        });
-+      }
-+
-       const emailToken = crypto.randomBytes(32).toString('hex');
-       user.emailVerificationToken = emailToken;
--      user.emailVerificationExpires = Date.now() + 30 * 60 * 1000;
-+      user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
-       await user.save();
- 
-       const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
-@@ -626,8 +970,16 @@ exports.resendOTP = async (req, res) => {
-           }
-         })
-       });
-+    }
-+
-+    if (type === 'mobile') {
-+      if (user.mobileVerified) {
-+        return res.status(400).json({
-+          success: false,
-+          message: 'Mobile already verified'
-+        });
-+      }
- 
--    } else if (type === 'mobile') {
-       const otp = otpService.generateOTP();
-       user.mobileOTP = {
-         code: otp,
-@@ -648,7 +1000,12 @@ exports.resendOTP = async (req, res) => {
-       });
-     }
- 
-+    return res.status(400).json({
-+      success: false,
-+      message: 'Invalid type. Use "email" or "mobile"'
-+    });
-   } catch (error) {
-+    console.error('Resend OTP error:', error);
-     res.status(500).json({
-       success: false,
-       message: 'Failed to resend OTP',
-@@ -688,8 +1045,7 @@ exports.resendEmailVerification = async (req, res) => {
- 
-     const emailToken = crypto.randomBytes(32).toString('hex');
-     user.emailVerificationToken = emailToken;
--    user.emailVerificationExpires = Date.now() + 30 * 60 * 1000;
--
-+    user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
-     await user.save();
- 
-     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
-@@ -699,13 +1055,12 @@ exports.resendEmailVerification = async (req, res) => {
-       success: true,
-       message: 'Verification email resent. Please check your inbox.',
-       ...(process.env.NODE_ENV === 'development' && {
--        devInfo: { 
-+        devInfo: {
-           emailToken,
--          verifyUrl 
-+          verifyUrl
-         }
-       })
-     });
--
-   } catch (error) {
-     console.error('Resend email error:', error);
-     res.status(500).json({
-@@ -716,6 +1071,63 @@ exports.resendEmailVerification = async (req, res) => {
-   }
- };
- 
-+// @desc Resend Mobile OTP
-+// @route POST /api/auth/resend-mobile-otp
-+exports.resendMobileOTP = async (req, res) => {
-+  try {
-+    const { userId } = req.body;
-+
-+    if (!userId) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'User ID is required'
-+      });
-+    }
-+
-+    const user = await User.findById(userId);
-+
-+    if (!user) {
-+      return res.status(404).json({
-+        success: false,
-+        message: 'User not found'
-+      });
-+    }
-+
-+    if (user.mobileVerified) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Mobile already verified'
-+      });
-+    }
-+
-+    const otp = otpService.generateOTP();
-+    user.mobileOTP = {
-+      code: otp,
-+      expiresAt: otpService.getExpiryTime()
-+    };
-+    await user.save();
-+
-+    await whatsappService.sendOTP(user.mobile, otp);
-+
-+    res.json({
-+      success: true,
-+      message: 'Mobile OTP resent successfully.',
-+      ...(process.env.NODE_ENV === 'development' && {
-+        devInfo: {
-+          otp
-+        }
-+      })
-+    });
-+  } catch (error) {
-+    console.error('Resend mobile OTP error:', error);
-+    res.status(500).json({
-+      success: false,
-+      message: 'Failed to resend mobile OTP',
-+      error: error.message
-+    });
-+  }
-+};
-+
- // @desc Get Current User
- // @route GET /api/auth/me
- exports.getMe = async (req, res) => {
-@@ -729,6 +1141,8 @@ exports.getMe = async (req, res) => {
-       profile = await Company.findOne({ user: user._id });
-     }
- 
-+    const { profileMeta, nextStep } = await getPostLoginNextStep(user);
-+
-     res.json({
-       success: true,
-       data: {
-@@ -744,11 +1158,13 @@ exports.getMe = async (req, res) => {
-           lastLogin: user.lastLogin,
-           createdAt: user.createdAt
+@@ -800,13 +812,13 @@ exports.getDashboard = async (req, res) => {
          },
--        profile
-+        profile,
-+        profileMeta,
-+        nextStep
+         metrics: company.metrics,
+         jobStats,
+-        
++
+         // ✅ NEW: Approval stats
+         approvalStats: approvalStats.reduce((acc, curr) => {
+           acc[curr._id] = curr.count;
+           return acc;
+         }, {}),
+-        
++
+         // ✅ NEW: Alerts section
+         alerts: {
+           rejectedJobs: {
+@@ -829,7 +841,7 @@ exports.getDashboard = async (req, res) => {
+             }))
+           }
+         },
+-        
++
+         recentCandidates,
+         hiringFunnel,
+         activeJobs,
+@@ -1004,8 +1016,8 @@ exports.getRejectedJobs = async (req, res) => {
+           total,
+           limit
+         },
+-        message: total === 0 
+-          ? '✅ No rejected jobs! All your submissions are either approved or pending review.' 
++        message: total === 0
++          ? '✅ No rejected jobs! All your submissions are either approved or pending review.'
+           : `You have ${total} rejected job post${total > 1 ? 's' : ''} that need${total === 1 ? 's' : ''} revision.`
        }
      });
--
-   } catch (error) {
-+    console.error('Get me error:', error);
-     res.status(500).json({
-       success: false,
-       message: 'Failed to fetch user',
-@@ -770,9 +1186,8 @@ exports.forgotPassword = async (req, res) => {
-       });
-     }
- 
--    const user = await User.findOne({ email });
-+    const user = await User.findOne({ email: email.toLowerCase().trim() });
-     if (!user) {
--      // Don't reveal if user exists
-       return res.json({
-         success: true,
-         message: 'If an account exists with this email, you will receive a password reset OTP'
-@@ -786,20 +1201,20 @@ exports.forgotPassword = async (req, res) => {
-     };
-     await user.save();
- 
--    await emailService.sendOTP(email, otp, 'reset');
-+    await emailService.sendOTP(user.email, otp, 'reset');
- 
-     res.json({
-       success: true,
-       message: 'Password reset OTP sent to your email',
--      data: { 
-+      data: {
-         userId: user._id,
-         ...(process.env.NODE_ENV === 'development' && {
-           devInfo: { otp }
-         })
+@@ -1241,7 +1253,7 @@ exports.getCandidate = async (req, res) => {
+           message: "Not authorized to view this candidate",
+         });
        }
-     });
--
-   } catch (error) {
-+    console.error('Forgot password error:', error);
-     res.status(500).json({
-       success: false,
-       message: 'Failed to process request',
-@@ -814,7 +1229,7 @@ exports.resetPassword = async (req, res) => {
-   try {
-     const { userId, otp, newPassword, confirmPassword } = req.body;
- 
--    if (!userId || !otp || !newPassword) {
-+    if (!userId || !otp || !newPassword || !confirmPassword) {
-       return res.status(400).json({
+-    } else if (req.user.role !== "admin") {
++    } else if (!["admin", "sub_admin"].includes(req.user.role)) {
+       return res.status(403).json({
          success: false,
-         message: 'Please provide all required fields'
-@@ -835,7 +1250,7 @@ exports.resetPassword = async (req, res) => {
-       });
-     }
+         message: "Not authorized to view this candidate",
+@@ -1886,7 +1898,7 @@ exports.requestJobEdit = async (req, res) => {
  
--    const user = await User.findById(userId);
-+    const user = await User.findById(userId).select('+password');
-     if (!user) {
-       return res.status(404).json({
-         success: false,
-@@ -843,14 +1258,31 @@ exports.resetPassword = async (req, res) => {
-       });
-     }
- 
-+    if (user.otpAttempts && user.otpAttempts.email >= 5) {
-+      const timeSinceLastAttempt = Date.now() - new Date(user.otpAttempts.lastAttempt).getTime();
-+      if (timeSinceLastAttempt < 3600000) {
-+        return res.status(400).json({
-+          success: false,
-+          message: 'Too many failed attempts. Please try again after 1 hour.'
-+        });
-+      }
-+    }
+       // Check if field exists in job
+       const currentValue = field.split('.').reduce((obj, key) => obj?.[key], job);
+-      
 +
-     const verification = user.verifyOTP('email', otp);
-     if (!verification.valid) {
-+      user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
-+      user.otpAttempts.email += 1;
-+      user.otpAttempts.lastAttempt = new Date();
-+      await user.save();
-+
-       return res.status(400).json({
-         success: false,
-         message: verification.message
-       });
-     }
- 
-+    user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
-+    user.otpAttempts.email = 0;
-     user.password = newPassword;
-     user.emailOTP = undefined;
-     user.isPasswordChanged = true;
-@@ -860,8 +1292,8 @@ exports.resetPassword = async (req, res) => {
-       success: true,
-       message: 'Password reset successfully. You can now login with your new password.'
-     });
--
-   } catch (error) {
-+    console.error('Reset password error:', error);
-     res.status(500).json({
-       success: false,
-       message: 'Password reset failed',
-@@ -875,12 +1307,13 @@ exports.resetPassword = async (req, res) => {
- exports.logout = async (req, res) => {
-   res.clearCookie('token', {
-     httpOnly: true,
--    secure: process.env.NODE_ENV === 'production',
--    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-+    secure: process.env.COOKIE_SECURE === 'true',
-+    sameSite: process.env.COOKIE_SECURE === 'true' ? 'none' : 'lax',
-+    path: '/'
-   });
- 
-   res.json({
-     success: true,
--    message: 'Logged out successfully',
-+    message: 'Logged out successfully'
-   });
- };
-\ No newline at end of file
+       if (currentValue === undefined) {
+         invalidFields.push(`${field}: Field does not exist in job`);
+         continue;
 diff --git a/controllers/staffingPartnerController.js b/controllers/staffingPartnerController.js
-index 28e5204..345888b 100644
+index 345888b..d3355a5 100644
 --- a/controllers/staffingPartnerController.js
 +++ b/controllers/staffingPartnerController.js
-@@ -710,57 +710,88 @@ exports.getProfileCompletion = async (req, res) => {
- exports.submitProfile = async (req, res) => {
-   try {
-     const partner = await StaffingPartner.findOne({ user: req.user._id });
--    const user = await User.findById(req.user._id);
+@@ -113,7 +113,6 @@ exports.updateFirmDetails = async (req, res) => {
+       employeeCount,
+     } = req.body;
  
-     if (!partner) {
-       return res.status(404).json({
-         success: false,
--        message: "Profile not found",
-+        message: 'Partner profile not found'
+-    // Handle operating address "same as registered" logic
+     let finalOperatingAddress = operatingAddress;
+     if (operatingAddress?.sameAsRegistered && registeredOfficeAddress) {
+       finalOperatingAddress = {
+@@ -232,12 +231,10 @@ exports.updateCompliance = async (req, res) => {
+ 
+     const { syncrotechAgreement, digitalSignature } = req.body;
+ 
+-    // Get IP address
+     const ipAddress =
+       req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+     const timestamp = new Date();
+ 
+-    // Validate all clauses are accepted
+     const requiredClauses = [
+       "noCvRecycling",
+       "noFakeProfiles",
+@@ -265,7 +262,6 @@ exports.updateCompliance = async (req, res) => {
        });
      }
  
--    // Check if required sections are complete
--    const {
--      basicInfo,
--      firmDetails,
--      Syncro1Competency,
--      geographicReach,
--      compliance,
--    } = partner.profileCompletion;
-+    // Check if already submitted
-+    if (partner.verificationStatus === 'PENDING' || partner.verificationStatus === 'VERIFIED') {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Profile already submitted for verification'
-+      });
-+    }
+-    // Build compliance object with timestamps
+     const complianceData = {
+       syncrotechAgreement: {},
+     };
+@@ -369,7 +365,6 @@ exports.updateTeamAccess = async (req, res) => {
+       });
+     }
  
--    if (
--      !basicInfo ||
--      !firmDetails ||
--      !Syncro1Competency ||
--      !geographicReach ||
--      !compliance
--    ) {
-+    // ✅ Enforce ALL sections including commercial & documents
-+    const required = [
-+      'basicInfo',
-+      'firmDetails',
-+      'Syncro1Competency',
-+      'geographicReach',
-+      'compliance',
-+      'commercialDetails',
-+      'documents'
-+    ];
-+
-+    const incomplete = required.filter(section => !partner.profileCompletion[section]);
-+
-+    if (incomplete.length > 0) {
+-    // Only verified partners can manage team
+     if (partner.verificationStatus !== "APPROVED") {
+       return res.status(403).json({
+         success: false,
+@@ -425,7 +420,6 @@ exports.addTeamMember = async (req, res) => {
+       });
+     }
+ 
+-    // Check if email already exists
+     const existingMember = partner.teamAccess.teamMembers.find(
+       (m) => m.email === email,
+     );
+@@ -503,7 +497,6 @@ exports.updateTeamMember = async (req, res) => {
+       });
+     }
+ 
+-    // Check if email already exists (for different member)
+     if (email) {
+       const existingMember = partner.teamAccess.teamMembers.find(
+         (m) => m.email === email && m._id.toString() !== memberId,
+@@ -517,7 +510,6 @@ exports.updateTeamMember = async (req, res) => {
+       }
+     }
+ 
+-    // Update member fields
+     if (name) partner.teamAccess.teamMembers[memberIndex].name = name;
+     if (email) partner.teamAccess.teamMembers[memberIndex].email = email;
+     if (mobile) partner.teamAccess.teamMembers[memberIndex].mobile = mobile;
+@@ -580,7 +572,6 @@ exports.removeTeamMember = async (req, res) => {
+       (m) => m._id.toString() !== memberId,
+     );
+ 
+-    // If no team members left, disable team access
+     if (partner.teamAccess.teamMembers.length === 0) {
+       partner.teamAccess.isTeamEnabled = false;
+     }
+@@ -718,7 +709,6 @@ exports.submitProfile = async (req, res) => {
+       });
+     }
+ 
+-    // Check if already submitted
+     if (partner.verificationStatus === 'PENDING' || partner.verificationStatus === 'VERIFIED') {
        return res.status(400).json({
          success: false,
--        message: "Please complete all required sections before submitting",
--        data: partner.profileCompletion,
-+        message: 'Please complete all required sections before submitting',
-+        incompleteSections: incomplete,
-+        hint: `Missing: ${incomplete.join(', ')}`
+@@ -726,7 +716,6 @@ exports.submitProfile = async (req, res) => {
        });
      }
  
--    partner.verificationStatus = "UNDER_REVIEW";
--    user.status = "UNDER_VERIFICATION";
-+    // ✅ Validate bank details exist
-+    if (!partner.commercialDetails?.bankAccountNumber) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Bank account details are required for payouts'
-+      });
-+    }
-+
-+    // ✅ Validate at least PAN & GST docs uploaded
-+    const requiredDocs = ['panCard', 'gstCertificate'];
-+    const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
-+
-+    if (missingDocs.length > 0) {
-+      return res.status(400).json({
-+        success: false,
-+        message: 'Required documents missing',
-+        missingDocuments: missingDocs,
-+        hint: 'PAN card and GST certificate are mandatory'
-+      });
-+    }
+-    // ✅ Enforce ALL sections including commercial & documents
+     const required = [
+       'basicInfo',
+       'firmDetails',
+@@ -748,15 +737,13 @@ exports.submitProfile = async (req, res) => {
+       });
+     }
  
-+    // Update verification status
-+    partner.verificationStatus = 'PENDING';
-+    partner.submittedAt = new Date();
+-    // ✅ Validate bank details exist
+-    if (!partner.commercialDetails?.bankAccountNumber) {
++    if (!partner.commercialDetails?.accountNumber) {
+       return res.status(400).json({
+         success: false,
+         message: 'Bank account details are required for payouts'
+       });
+     }
+ 
+-    // ✅ Validate at least PAN & GST docs uploaded
+     const requiredDocs = ['panCard', 'gstCertificate'];
+     const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
+ 
+@@ -769,14 +756,12 @@ exports.submitProfile = async (req, res) => {
+       });
+     }
+ 
+-    // Update verification status
+     partner.verificationStatus = 'PENDING';
+     partner.submittedAt = new Date();
      await partner.save();
-+
-+    // Update user status
-+    const user = await User.findById(req.user._id);
-+    user.status = 'PENDING_VERIFICATION';
+ 
+-    // Update user status
+     const user = await User.findById(req.user._id);
+-    user.status = 'PENDING_VERIFICATION';
++    user.status = 'UNDER_VERIFICATION';
      await user.save();
  
      res.json({
-       success: true,
--      message: "Profile submitted for verification",
-+      message: 'Profile submitted for verification successfully',
-       data: {
-         verificationStatus: partner.verificationStatus,
--        userStatus: user.status,
--      },
-+        submittedAt: partner.submittedAt
-+      }
+@@ -798,7 +783,6 @@ exports.submitProfile = async (req, res) => {
+ 
+ // @desc    Get Available Jobs
+ // @route   GET /api/staffing-partners/jobs
+-// ✅ ENHANCED: Uses jobAccessService for plan-based filtering
+ exports.getAvailableJobs = async (req, res) => {
+   try {
+     const partner = await StaffingPartner.findOne({ user: req.user._id });
+@@ -812,7 +796,6 @@ exports.getAvailableJobs = async (req, res) => {
+ 
+     const partnerPlan = partner.subscription?.plan || "FREE";
+ 
+-    // ✅ Use job access service with plan-based filtering
+     const result = await jobAccessService.getAccessibleJobs(
+       partner._id,
+       partnerPlan,
+@@ -831,7 +814,6 @@ exports.getAvailableJobs = async (req, res) => {
+       },
+     );
+ 
+-    // ✅ If no jobs found, provide helpful debug info
+     if (result.jobs.length === 0) {
+       const totalActiveJobs = await Job.countDocuments({ status: "ACTIVE" });
+       const jobsForPlan = await Job.countDocuments({
+@@ -891,7 +873,6 @@ exports.getJobDetails = async (req, res) => {
+       });
+     }
+ 
+-    // Increment view count
+     job.metrics.views += 1;
+     await job.save();
+ 
+@@ -913,7 +894,6 @@ exports.getJobDetails = async (req, res) => {
+ 
+ // @desc    Submit Candidate for a Job
+ // @route   POST /api/staffing-partners/jobs/:jobId/candidates
+-// ✅ COMPLETE: All validations, duplicate detection, notifications
+ exports.submitCandidate = async (req, res) => {
+   try {
+     const partner = await StaffingPartner.findOne({ user: req.user._id });
+@@ -940,7 +920,6 @@ exports.submitCandidate = async (req, res) => {
+       });
+     }
+ 
+-    // Check plan eligibility
+     const partnerPlan = partner.subscription?.plan || "FREE";
+     if (
+       job.eligiblePlans &&
+@@ -965,7 +944,6 @@ exports.submitCandidate = async (req, res) => {
+       forceSubmit,
+     } = req.body;
+ 
+-    // Validate required fields
+     if (!firstName || !lastName || !email || !mobile) {
+       return res.status(400).json({
+         success: false,
+@@ -980,14 +958,12 @@ exports.submitCandidate = async (req, res) => {
+       });
+     }
+ 
+-    // ✅ DUPLICATE DETECTION
+     const duplicateCheck = await duplicateDetection.checkBeforeSubmission(
+       { email, mobile },
+       job._id,
+       partner._id,
+     );
+ 
+-    // Hard block — cannot submit
+     if (!duplicateCheck.canSubmit) {
+       return res.status(409).json({
+         success: false,
+@@ -1000,7 +976,6 @@ exports.submitCandidate = async (req, res) => {
+       });
+     }
+ 
+-    // Warnings exist — ask for confirmation unless forceSubmit
+     const highSeverityWarnings = duplicateCheck.warnings.filter(
+       (w) => w.severity === "high",
+     );
+@@ -1017,7 +992,6 @@ exports.submitCandidate = async (req, res) => {
+       });
+     }
+ 
+-    // ✅ CREATE CANDIDATE
+     const candidate = await Candidate.create({
+       submittedBy: partner._id,
+       job: job._id,
+@@ -1045,7 +1019,6 @@ exports.submitCandidate = async (req, res) => {
+       ],
      });
-   } catch (error) {
-     res.status(500).json({
-       success: false,
--      message: "Submission failed",
--      error: error.message,
-+      message: 'Failed to submit profile',
-+      error: error.message
+ 
+-    // ✅ UPDATE METRICS
+     await Job.findByIdAndUpdate(job._id, {
+       $inc: { "metrics.applications": 1 },
+     });
+@@ -1053,7 +1026,6 @@ exports.submitCandidate = async (req, res) => {
+       $inc: { "metrics.totalSubmissions": 1 },
+     });
+ 
+-    // ✅ NOTIFY COMPANY about new candidate
+     const company = await Company.findById(job.company).populate("user", "_id");
+ 
+     if (company?.user) {
+@@ -1240,32 +1212,27 @@ exports.getDashboard = async (req, res) => {
+       });
+     }
+ 
+-    // Get recent submissions
+     const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
+       .populate('job', 'title')
+       .populate('company', 'companyName')
+       .sort({ createdAt: -1 })
+       .limit(5);
+ 
+-    // Get status breakdown
+     const statusBreakdown = await Candidate.aggregate([
+       { $match: { submittedBy: partner._id } },
+       { $group: { _id: '$status', count: { $sum: 1 } } }
+     ]);
+ 
+-    // Get available jobs count
+     const availableJobsCount = await Job.countDocuments({
+       status: 'ACTIVE',
+       eligiblePlans: partner.subscription?.plan || 'FREE'
+     });
+ 
+-    // Calculate profile completion
+     const profileCompletion = partner.profileCompletion;
+     const completedSections = Object.values(profileCompletion).filter(Boolean).length;
+     const totalSections = Object.keys(profileCompletion).length;
+     const completionPercentage = Math.round((completedSections / totalSections) * 100);
+ 
+-    // ✅ NEW: Earnings summary
+     const Payout = require('../models/Payout');
+     const earningsSummary = {
+       totalEarnings: partner.metrics.totalEarnings || 0,
+@@ -1275,7 +1242,6 @@ exports.getDashboard = async (req, res) => {
+       totalPlacements: partner.metrics.totalPlacements || 0
+     };
+ 
+-    // ✅ NEW: Upcoming payouts (becoming eligible soon)
+     const upcomingDate = new Date();
+     upcomingDate.setDate(upcomingDate.getDate() + 30);
+ 
+@@ -1291,7 +1257,6 @@ exports.getDashboard = async (req, res) => {
+       .sort({ 'replacementGuarantee.endDate': 1 })
+       .limit(5);
+ 
+-    // ✅ NEW: Recent payouts
+     const recentPayouts = await Payout.find({
+       staffingPartner: partner._id,
+       status: { $in: ['PAID', 'ELIGIBLE', 'APPROVED'] }
+@@ -1314,8 +1279,6 @@ exports.getDashboard = async (req, res) => {
+           ...profileCompletion,
+           percentage: completionPercentage
+         },
+-
+-        // ✅ NEW: Earnings data
+         earnings: {
+           summary: earningsSummary,
+           upcomingPayouts: upcomingPayouts.map(p => ({
+@@ -1333,7 +1296,6 @@ exports.getDashboard = async (req, res) => {
+             paidAt: p.payment?.paidAt
+           }))
+         },
+-
+         recentSubmissions,
+         statusBreakdown,
+         availableJobsCount
+@@ -1351,6 +1313,7 @@ exports.getDashboard = async (req, res) => {
+ 
+ // @desc    Get Earnings/Payouts
+ // @route   GET /api/staffing-partners/earnings
++// ✅ SINGLE KEPT VERSION - payout model based
+ exports.getEarnings = async (req, res) => {
+   try {
+     const Payout = require('../models/Payout');
+@@ -1383,7 +1346,6 @@ exports.getEarnings = async (req, res) => {
+       Payout.countDocuments(query)
+     ]);
+ 
+-    // Enrich with computed fields
+     const enrichedPayouts = payouts.map(p => ({
+       ...p.toObject(),
+       daysRemaining: p.getDaysRemaining(),
+@@ -1391,7 +1353,6 @@ exports.getEarnings = async (req, res) => {
+       candidateName: `${p.candidate.firstName} ${p.candidate.lastName}`
+     }));
+ 
+-    // Summary from partner metrics
+     const summary = {
+       totalEarnings: partner.metrics.totalEarnings || 0,
+       pendingPayouts: partner.metrics.pendingPayouts || 0,
+@@ -1401,7 +1362,6 @@ exports.getEarnings = async (req, res) => {
+       totalPlacements: partner.metrics.totalPlacements || 0
+     };
+ 
+-    // Status breakdown
+     const statusBreakdown = await Payout.aggregate([
+       { $match: { staffingPartner: partner._id } },
+       {
+@@ -1413,7 +1373,6 @@ exports.getEarnings = async (req, res) => {
+       }
+     ]);
+ 
+-    // Upcoming eligible (becoming eligible in next 30 days)
+     const upcomingDate = new Date();
+     upcomingDate.setDate(upcomingDate.getDate() + 30);
+ 
+@@ -1610,81 +1569,10 @@ exports.getInvoice = async (req, res) => {
+       error: error.message
      });
    }
+-};// @desc    Get Earnings/Payouts
+-// @route   GET /api/staffing-partners/earnings
+-exports.getEarnings = async (req, res) => {
+-  try {
+-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+-
+-    if (!partner) {
+-      return res.status(404).json({
+-        success: false,
+-        message: "Profile not found",
+-      });
+-    }
+-
+-    // Get placed candidates with payout info
+-    const placements = await Candidate.find({
+-      submittedBy: partner._id,
+-      status: "JOINED",
+-    })
+-      .populate("job", "title commission")
+-      .populate("company", "companyName")
+-      .sort({ "joining.confirmedAt": -1 });
+-
+-    // Calculate totals
+-    const totalEarnings = placements.reduce(
+-      (sum, p) => sum + (p.payout?.commissionAmount || 0),
+-      0,
+-    );
+-    const paidEarnings = placements
+-      .filter((p) => p.payout?.status === "PAID")
+-      .reduce((sum, p) => sum + (p.payout?.commissionAmount || 0), 0);
+-    const pendingEarnings = totalEarnings - paidEarnings;
+-
+-    res.json({
+-      success: true,
+-      data: {
+-        summary: {
+-          totalEarnings,
+-          paidEarnings,
+-          pendingEarnings,
+-          totalPlacements: placements.length,
+-        },
+-        placements,
+-      },
+-    });
+-  } catch (error) {
+-    res.status(500).json({
+-      success: false,
+-      message: "Failed to fetch earnings",
+-      error: error.message,
+-    });
+-  }
+-};
+-
+-// @desc    Get Earnings/Payouts
+-// @route   GET /api/staffing-partners/earnings
+-// ✅ STUB: Returns empty data (payout system disabled)
+-exports.getEarnings = async (req, res) => {
+-  res.json({
+-    success: true,
+-    message: "Earnings feature is currently disabled",
+-    data: {
+-      summary: {
+-        totalEarnings: 0,
+-        paidEarnings: 0,
+-        pendingEarnings: 0,
+-        totalPlacements: 0,
+-      },
+-      placements: [],
+-    },
+-  });
  };
+ 
+ // @desc    Withdraw Candidate
+ // @route   PUT /api/staffing-partners/submissions/:id/withdraw
+-// ✅ COMPLETE: Uses lifecycle service for proper validation
+ exports.withdrawCandidate = async (req, res) => {
+   try {
+     const partner = await StaffingPartner.findOne({ user: req.user._id });
+@@ -1697,7 +1585,6 @@ exports.withdrawCandidate = async (req, res) => {
+       });
+     }
+ 
+-    // Verify this candidate belongs to this partner
+     const candidate = await Candidate.findOne({
+       _id: req.params.id,
+       submittedBy: partner._id,
+@@ -1710,7 +1597,6 @@ exports.withdrawCandidate = async (req, res) => {
+       });
+     }
+ 
+-    // Use lifecycle service for proper validation + notifications
+     const candidateLifecycleService = require("../services/candidateLifecycleService");
+ 
+     try {
+diff --git a/middleware/auth.js b/middleware/auth.js
+index 711243a..d64587f 100644
+--- a/middleware/auth.js
++++ b/middleware/auth.js
+@@ -33,6 +33,13 @@ exports.protect = async (req, res, next) => {
+       });
+     }
+ 
++    if (req.user.status === 'SUSPENDED') {
++      return res.status(403).json({
++        success: false,
++        message: 'Your account is suspended'
++      });
++    }
++
+     next();
+   } catch (error) {
+     return res.status(401).json({
+@@ -42,20 +49,20 @@ exports.protect = async (req, res, next) => {
+   }
+ };
+ 
+-// Authorization middleware remains unchanged
++// Generic role authorization
+ exports.authorize = (...roles) => {
+   return (req, res, next) => {
+-    if (!roles.includes(req.user.role)) {
++    if (!req.user || !roles.includes(req.user.role)) {
+       return res.status(403).json({
+         success: false,
+-        message: `User role ${req.user.role} is not authorized to access this route`
++        message: `User role ${req.user?.role} is not authorized to access this route`
+       });
+     }
+     next();
+   };
+ };
+ 
+-// Status check middleware remains unchanged
++// Status check middleware
+ exports.checkStatus = (...statuses) => {
+   return (req, res, next) => {
+     if (!statuses.includes(req.user.status)) {
+@@ -67,3 +74,128 @@ exports.checkStatus = (...statuses) => {
+     next();
+   };
+ };
++
++// Allow admin and sub-admin into admin CMS area
++exports.authorizeAdminAccess = (req, res, next) => {
++  if (!req.user || !['admin', 'sub_admin'].includes(req.user.role)) {
++    return res.status(403).json({
++      success: false,
++      message: 'Only admin or sub-admin can access this route'
++    });
++  }
++
++  next();
++};
++
++// Check a single permission
++exports.checkPermission = (permission) => {
++  return (req, res, next) => {
++    if (!req.user) {
++      return res.status(401).json({
++        success: false,
++        message: 'Not authorized'
++      });
++    }
++
++    // Admin bypasses all permission checks
++    if (req.user.role === 'admin') {
++      return next();
++    }
++
++    // Only sub-admin should be permission-checked here
++    if (req.user.role !== 'sub_admin') {
++      return res.status(403).json({
++        success: false,
++        message: 'Only admin or sub-admin can access this route'
++      });
++    }
++
++    const userPermissions = req.user.permissions || [];
++
++    if (!userPermissions.includes(permission)) {
++      return res.status(403).json({
++        success: false,
++        message: `Missing required permission: ${permission}`
++      });
++    }
++
++    next();
++  };
++};
++
++// Check if user has at least one of the given permissions
++exports.checkAnyPermission = (permissions = []) => {
++  return (req, res, next) => {
++    if (!req.user) {
++      return res.status(401).json({
++        success: false,
++        message: 'Not authorized'
++      });
++    }
++
++    // Admin bypasses all permission checks
++    if (req.user.role === 'admin') {
++      return next();
++    }
++
++    if (req.user.role !== 'sub_admin') {
++      return res.status(403).json({
++        success: false,
++        message: 'Only admin or sub-admin can access this route'
++      });
++    }
++
++    const userPermissions = req.user.permissions || [];
++    const hasAnyPermission = permissions.some((permission) =>
++      userPermissions.includes(permission)
++    );
++
++    if (!hasAnyPermission) {
++      return res.status(403).json({
++        success: false,
++        message: 'You do not have permission to access this resource',
++        requiredAnyOf: permissions
++      });
++    }
++
++    next();
++  };
++};
++
++// Optional helper if needed later
++exports.checkAllPermissions = (permissions = []) => {
++  return (req, res, next) => {
++    if (!req.user) {
++      return res.status(401).json({
++        success: false,
++        message: 'Not authorized'
++      });
++    }
++
++    if (req.user.role === 'admin') {
++      return next();
++    }
++
++    if (req.user.role !== 'sub_admin') {
++      return res.status(403).json({
++        success: false,
++        message: 'Only admin or sub-admin can access this route'
++      });
++    }
++
++    const userPermissions = req.user.permissions || [];
++    const hasAllPermissions = permissions.every((permission) =>
++      userPermissions.includes(permission)
++    );
++
++    if (!hasAllPermissions) {
++      return res.status(403).json({
++        success: false,
++        message: 'You do not have all required permissions',
++        requiredAllOf: permissions
++      });
++    }
++
++    next();
++  };
++};
+\ No newline at end of file
+diff --git a/middleware/upload.js b/middleware/upload.js
+index 800705d..e021f8c 100644
+--- a/middleware/upload.js
++++ b/middleware/upload.js
+@@ -1,150 +1,230 @@
+ // backend/middleware/upload.js
+ const multer = require('multer');
++const { CloudinaryStorage } = require('multer-storage-cloudinary');
++const { cloudinary } = require('../config/cloudinary');
+ const path = require('path');
+-const fs = require('fs');
+-const { v4: uuidv4 } = require('uuid');
+-
+-// Ensure upload directories exist
+-const uploadDirs = [
+-  'uploads',
+-  'uploads/resumes',
+-  'uploads/documents',
+-  'uploads/logos',
+-  'uploads/others'
+-];
+-
+-uploadDirs.forEach(dir => {
+-  if (!fs.existsSync(dir)) {
+-    fs.mkdirSync(dir, { recursive: true });
++
++// ==================== CLOUDINARY STORAGE CONFIGS ====================
++
++// Resume storage
++const resumeStorage = new CloudinaryStorage({
++  cloudinary,
++  params: {
++    folder: 'syncro1/resumes',
++    resource_type: 'raw',
++    allowed_formats: ['pdf', 'doc', 'docx'],
++    transformation: [],
++    public_id: (req, file) => {
++      const uniqueName = `resume_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
++      return uniqueName;
++    }
+   }
+ });
+ 
+-// Configure storage
+-const storage = multer.diskStorage({
+-  destination: function(req, file, cb) {
+-    let uploadPath = 'uploads/';
+-    
+-    switch (file.fieldname) {
+-      case 'resume':
+-        uploadPath += 'resumes/';
+-        break;
+-      case 'logo':
+-        uploadPath += 'logos/';
+-        break;
+-      case 'panCard':
+-      case 'gstCertificate':
+-      case 'incorporationCertificate':
+-      case 'authorizedSignatoryProof':
+-      case 'addressProof':
+-      case 'cancelledCheque':
+-        uploadPath += 'documents/';
+-        break;
+-      default:
+-        uploadPath += 'others/';
++// Logo storage
++const logoStorage = new CloudinaryStorage({
++  cloudinary,
++  params: {
++    folder: 'syncro1/logos',
++    resource_type: 'image',
++    allowed_formats: ['jpg', 'jpeg', 'png', 'svg', 'webp'],
++    transformation: [
++      { width: 500, height: 500, crop: 'limit', quality: 'auto' }
++    ],
++    public_id: (req, file) => {
++      const uniqueName = `logo_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
++      return uniqueName;
+     }
+-    
+-    cb(null, uploadPath);
+-  },
+-  filename: function(req, file, cb) {
+-    const uniqueName = `${uuidv4()}${path.extname(file.originalname)}`;
+-    cb(null, uniqueName);
+   }
+ });
+ 
+-// File filter
+-const fileFilter = (req, file, cb) => {
+-  // Define allowed types per field
+-  const allowedTypes = {
+-    resume: {
+-      mimes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+-      extensions: ['.pdf', '.doc', '.docx']
+-    },
+-    logo: {
+-      mimes: ['image/jpeg', 'image/png', 'image/svg+xml', 'image/webp'],
+-      extensions: ['.jpg', '.jpeg', '.png', '.svg', '.webp']
+-    },
+-    document: {
+-      mimes: ['application/pdf', 'image/jpeg', 'image/png'],
+-      extensions: ['.pdf', '.jpg', '.jpeg', '.png']
++// Document storage (KYC, certificates etc.)
++const documentStorage = new CloudinaryStorage({
++  cloudinary,
++  params: {
++    folder: 'syncro1/documents',
++    resource_type: 'auto',
++    allowed_formats: ['pdf', 'jpg', 'jpeg', 'png'],
++    public_id: (req, file) => {
++      const fieldName = file.fieldname || 'doc';
++      const uniqueName = `${fieldName}_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
++      return uniqueName;
+     }
+-  };
++  }
++});
++
++// ==================== FILE FILTERS ====================
+ 
+-  const fieldName = file.fieldname;
+-  let typeConfig;
++const resumeFilter = (req, file, cb) => {
++  const allowedMimes = [
++    'application/pdf',
++    'application/msword',
++    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
++  ];
++  const ext = path.extname(file.originalname).toLowerCase();
++  const allowedExts = ['.pdf', '.doc', '.docx'];
+ 
+-  if (fieldName === 'resume') {
+-    typeConfig = allowedTypes.resume;
+-  } else if (fieldName === 'logo') {
+-    typeConfig = allowedTypes.logo;
++  if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
++    cb(null, true);
+   } else {
+-    typeConfig = allowedTypes.document;
++    cb(new Error('Invalid file type for resume. Allowed: PDF, DOC, DOCX'), false);
+   }
++};
+ 
++const logoFilter = (req, file, cb) => {
++  const allowedMimes = [
++    'image/jpeg',
++    'image/png',
++    'image/svg+xml',
++    'image/webp'
++  ];
+   const ext = path.extname(file.originalname).toLowerCase();
+-  
+-  if (typeConfig.mimes.includes(file.mimetype) || typeConfig.extensions.includes(ext)) {
++  const allowedExts = ['.jpg', '.jpeg', '.png', '.svg', '.webp'];
++
++  if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+     cb(null, true);
+   } else {
+-    cb(new Error(`Invalid file type for ${fieldName}. Allowed: ${typeConfig.extensions.join(', ')}`), false);
++    cb(new Error('Invalid file type for logo. Allowed: JPG, PNG, SVG, WEBP'), false);
+   }
+ };
+ 
+-// Create multer instance
+-const upload = multer({
+-  storage,
+-  fileFilter,
+-  limits: {
+-    fileSize: 10 * 1024 * 1024 // 10MB max
++const documentFilter = (req, file, cb) => {
++  const allowedMimes = [
++    'application/pdf',
++    'image/jpeg',
++    'image/png'
++  ];
++  const ext = path.extname(file.originalname).toLowerCase();
++  const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png'];
++
++  if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
++    cb(null, true);
++  } else {
++    cb(new Error(`Invalid file type for ${file.fieldname}. Allowed: PDF, JPG, PNG`), false);
+   }
+-});
++};
+ 
+-// Export different upload configurations
+-module.exports = {
+-  // Single file uploads
+-  uploadResume: upload.single('resume'),
+-  uploadLogo: upload.single('logo'),
+-  uploadDocument: upload.single('document'),
++// ==================== MULTER INSTANCES ====================
++
++const uploadResume = multer({
++  storage: resumeStorage,
++  fileFilter: resumeFilter,
++  limits: { fileSize: 10 * 1024 * 1024 }
++}).single('resume');
+ 
+-  // Multiple document uploads for KYC
+-uploadPartnerDocuments: upload.fields([
++const uploadLogo = multer({
++  storage: logoStorage,
++  fileFilter: logoFilter,
++  limits: { fileSize: 5 * 1024 * 1024 }
++}).single('logo');
++
++const uploadDocument = multer({
++  storage: documentStorage,
++  fileFilter: documentFilter,
++  limits: { fileSize: 10 * 1024 * 1024 }
++}).single('document');
++
++// 👇 ADD THIS RIGHT BELOW
++const uploadAdditionalDocument = multer({
++  storage: documentStorage,
++  fileFilter: documentFilter,
++  limits: { fileSize: 10 * 1024 * 1024 }
++}).single('additionalDocument');
++
++const uploadPartnerDocuments = multer({
++  storage: documentStorage,
++  fileFilter: documentFilter,
++  limits: { fileSize: 10 * 1024 * 1024 }
++}).fields([
+   { name: 'panCard', maxCount: 1 },
+   { name: 'gstCertificate', maxCount: 1 },
+-  { name: 'incorporationCertificate', maxCount: 1 },     
+-  { name: 'authorizedSignatoryProof', maxCount: 1 },     
++  { name: 'incorporationCertificate', maxCount: 1 },
++  { name: 'authorizedSignatoryProof', maxCount: 1 },
+   { name: 'addressProof', maxCount: 1 },
+   { name: 'cancelledCheque', maxCount: 1 }
+-]),
+-
+-  uploadCompanyDocuments: upload.fields([
+-    { name: 'incorporationCertificate', maxCount: 1 },
+-    { name: 'gstCertificate', maxCount: 1 },
+-    { name: 'panCard', maxCount: 1 },
+-    { name: 'addressProof', maxCount: 1 },
+-    { name: 'authorizedSignatoryProof', maxCount: 1 }
+-  ]),
+-
+-  // Generic upload for any file
+-  uploadAny: upload.any(),
+-
+-  // Error handler middleware
+-  handleUploadError: (err, req, res, next) => {
+-    if (err instanceof multer.MulterError) {
+-      if (err.code === 'LIMIT_FILE_SIZE') {
+-        return res.status(400).json({
+-          success: false,
+-          message: 'File too large. Maximum size is 10MB'
+-        });
+-      }
+-      return res.status(400).json({
+-        success: false,
+-        message: err.message
+-      });
+-    } else if (err) {
++]);
++
++const uploadCompanyDocuments = multer({
++  storage: documentStorage,
++  fileFilter: documentFilter,
++  limits: { fileSize: 10 * 1024 * 1024 }
++}).fields([
++  { name: 'incorporationCertificate', maxCount: 1 },
++  { name: 'gstCertificate', maxCount: 1 },
++  { name: 'panCard', maxCount: 1 },
++  { name: 'addressProof', maxCount: 1 },
++  { name: 'authorizedSignatoryProof', maxCount: 1 }
++]);
++
++const uploadAny = multer({
++  storage: documentStorage,
++  fileFilter: documentFilter,
++  limits: { fileSize: 10 * 1024 * 1024 }
++}).any();
++
++// ==================== ERROR HANDLER ====================
++
++const handleUploadError = (err, req, res, next) => {
++  if (err instanceof multer.MulterError) {
++    if (err.code === 'LIMIT_FILE_SIZE') {
+       return res.status(400).json({
+         success: false,
+-        message: err.message
++        message: 'File too large. Maximum size is 10MB'
+       });
+     }
+-    next();
++    return res.status(400).json({
++      success: false,
++      message: err.message
++    });
++  } else if (err) {
++    return res.status(400).json({
++      success: false,
++      message: err.message
++    });
++  }
++  next();
++};
++
++// ==================== HELPER: DELETE FROM CLOUDINARY ====================
++
++const deleteFromCloudinary = async (publicIdOrUrl) => {
++  try {
++    if (!publicIdOrUrl) return;
++
++    let publicId = publicIdOrUrl;
++
++    // If it's a full URL, extract public_id
++    if (publicIdOrUrl.startsWith('http')) {
++      // Extract public_id from Cloudinary URL
++      const urlParts = publicIdOrUrl.split('/');
++      const uploadIndex = urlParts.indexOf('upload');
++      if (uploadIndex !== -1) {
++        // Get everything after version number
++        const pathAfterUpload = urlParts.slice(uploadIndex + 2).join('/');
++        // Remove file extension
++        publicId = pathAfterUpload.replace(/\.[^/.]+$/, '');
++      }
++    }
++
++    const result = await cloudinary.uploader.destroy(publicId);
++    console.log(`[CLOUDINARY] Deleted: ${publicId} — ${result.result}`);
++    return result;
++  } catch (error) {
++    console.error(`[CLOUDINARY] Delete failed: ${error.message}`);
++    return null;
+   }
++};
++
++// ==================== EXPORTS ====================
++
++module.exports = {
++  uploadResume,
++  uploadLogo,
++  uploadDocument,
++  uploadAdditionalDocument,
++  uploadPartnerDocuments,
++  uploadCompanyDocuments,
++  uploadAny,
++  handleUploadError,
++  deleteFromCloudinary
+ };
+\ No newline at end of file
 diff --git a/models/Job.js b/models/Job.js
-index b3cde39..fae22a8 100644
+index fae22a8..b44abb9 100644
 --- a/models/Job.js
 +++ b/models/Job.js
-@@ -31,7 +31,7 @@ const jobSchema = new mongoose.Schema({
+@@ -90,7 +90,8 @@ const jobSchema = new mongoose.Schema({
+     state: { type: String, required: true },
+     country: { type: String, default: 'India' },
+     isRemote: { type: Boolean, default: false },
+-    isHybrid: { type: Boolean, default: false }
++    isHybrid: { type: Boolean, default: false },
++    isOnSite: { type: Boolean, default: false }
    },
-   requirements: [String],
-   responsibilities: [String],
--  
-+
-   // ==================== JOB DETAILS ====================
-   category: {
-     type: String,
-@@ -70,7 +70,7 @@ const jobSchema = new mongoose.Schema({
-       default: false
-     }
-   },
--  
-+
-   commission: {
-     type: {
-       type: String,
-@@ -251,21 +251,21 @@ jobSchema.index({ 'location.city': 1, status: 1 });
- jobSchema.index({ company: 1, status: 1, createdAt: -1 });
  
- // ==================== VIRTUAL FIELDS ====================
--jobSchema.virtual('isPendingReview').get(function() {
-+jobSchema.virtual('isPendingReview').get(function () {
-   return this.approvalStatus === 'PENDING_APPROVAL' || this.approvalStatus === 'EDIT_REQUESTED';
- });
- 
--jobSchema.virtual('canBeEdited').get(function() {
-+jobSchema.virtual('canBeEdited').get(function () {
-   return ['DRAFT', 'REJECTED'].includes(this.approvalStatus);
- });
- 
--jobSchema.virtual('requiresApproval').get(function() {
-+jobSchema.virtual('requiresApproval').get(function () {
-   return this.approvalStatus === 'EDIT_REQUESTED';
- });
- 
+   // ==================== SKILLS & EDUCATION ====================
+@@ -244,7 +245,7 @@ const jobSchema = new mongoose.Schema({
+ jobSchema.index({ company: 1, approvalStatus: 1 });
+ jobSchema.index({ approvalStatus: 1, createdAt: -1 });
+ jobSchema.index({ status: 1, eligiblePlans: 1 });
+-jobSchema.index({ slug: 1 });
++// jobSchema.index({ slug: 1 });
+ jobSchema.index({ category: 1, status: 1 });
+ jobSchema.index({ 'location.city': 1, status: 1 });
+ // ✅ FIX #8: Added missing index
+@@ -266,12 +267,27 @@ jobSchema.virtual('requiresApproval').get(function () {
  // ==================== MIDDLEWARE ====================
  
--jobSchema.pre('save', function(next) {
-+jobSchema.pre('save', function (next) {
+ jobSchema.pre('save', function (next) {
++  // Auto-generate slug
    if (this.isModified('title') && !this.slug) {
      this.slug = this.title
        .toLowerCase()
-@@ -275,21 +275,21 @@ jobSchema.pre('save', function(next) {
-   next();
- });
- 
--jobSchema.pre('save', function(next) {
-+jobSchema.pre('save', function (next) {
-   if (!this.shareableLink && this.slug) {
-     this.shareableLink = `${process.env.FRONTEND_URL}/jobs/${this.slug}`;
+       .replace(/[^a-z0-9]+/g, '-')
+       .replace(/(^-|-$)/g, '') + '-' + Date.now();
    }
-   next();
- });
- 
--jobSchema.pre('save', function(next) {
-+jobSchema.pre('save', function (next) {
-   if (this.experienceRange && this.experienceRange.min > this.experienceRange.max) {
-     next(new Error('Experience range min cannot be greater than max'));
-   }
-   next();
- });
- 
--jobSchema.pre('save', function(next) {
-+jobSchema.pre('save', function (next) {
-   if (this.salary && this.salary.min && this.salary.max && this.salary.min > this.salary.max) {
-     next(new Error('Salary min cannot be greater than max'));
-   }
-@@ -298,7 +298,7 @@ jobSchema.pre('save', function(next) {
- 
- // ==================== METHODS ====================
- 
--jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, notes = '') {
-+jobSchema.methods.addToHistory = function (changeType, changedBy, changes = {}, notes = '') {
-   this.changeHistory.push({
-     changedAt: new Date(),
-     changedBy,
-@@ -309,7 +309,7 @@ jobSchema.methods.addToHistory = function(changeType, changedBy, changes = {}, n
- };
- 
- // ✅ FIX #1: Proper markModified with actual field names
--jobSchema.methods.applyEditChanges = function(appliedChanges) {
-+jobSchema.methods.applyEditChanges = function (appliedChanges) {
-   Object.keys(appliedChanges).forEach(field => {
-     const keys = field.split('.');
-     let obj = this;
-@@ -321,10 +321,10 @@ jobSchema.methods.applyEditChanges = function(appliedChanges) {
-   });
- };
- 
--jobSchema.methods.canAcceptEditRequest = function() {
-+jobSchema.methods.canAcceptEditRequest = function () {
-   if (this.approvalStatus !== 'ACTIVE') return false;
-   if (this.rejectedEditCount >= 5) return false;
--  
 +
-   const JobEditRequest = mongoose.model('JobEditRequest');
-   return JobEditRequest.countDocuments({
-     job: this._id,
-@@ -332,14 +332,14 @@ jobSchema.methods.canAcceptEditRequest = function() {
-   }).then(count => count === 0);
- };
++  // Auto-generate uniqueId: YYYY-DD-MM-HHmmss-random
++  if (!this.uniqueId) {
++    const now = new Date();
++    const year = now.getFullYear();
++    const date = String(now.getDate()).padStart(2, '0');
++    const month = String(now.getMonth() + 1).padStart(2, '0');
++    const hours = String(now.getHours()).padStart(2, '0');
++    const minutes = String(now.getMinutes()).padStart(2, '0');
++    const seconds = String(now.getSeconds()).padStart(2, '0');
++    const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
++    this.uniqueId = `JOB-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
++  }
++
+   next();
+ });
  
--jobSchema.methods.getEditStats = function() {
-+jobSchema.methods.getEditStats = function () {
-   return {
-     total: this.editRequestCount,
-     approved: this.approvedEditCount,
-     rejected: this.rejectedEditCount,
-     pending: this.editRequestCount - this.approvedEditCount - this.rejectedEditCount,
--    rejectionRate: this.editRequestCount > 0 
--      ? Math.round((this.rejectedEditCount / this.editRequestCount) * 100) 
-+    rejectionRate: this.editRequestCount > 0
-+      ? Math.round((this.rejectedEditCount / this.editRequestCount) * 100)
-       : 0
-   };
- };
+diff --git a/models/Notification.js b/models/Notification.js
+index 61dea21..0d557a0 100644
+--- a/models/Notification.js
++++ b/models/Notification.js
+@@ -1,4 +1,6 @@
+-// backend/models/Notification.js — NEW FILE
++/**
++ * backend/models/Notification.js — UPDATED
++ */
+ 
+ const mongoose = require('mongoose');
+ 
+@@ -27,11 +29,23 @@ const notificationSchema = new mongoose.Schema({
+       // Candidate submission — sent to COMPANY
+       'NEW_CANDIDATE_SUBMITTED',
+ 
++      // ✅ NEW: Candidate
++      'CANDIDATE_WITHDRAWN',
++
+       // Job notifications — sent to PARTNER
+       'NEW_JOB_MATCHED',
+       'JOB_CLOSING_SOON',
+       'JOB_CLOSED',
+ 
++      // ✅ NEW: Job approval workflow
++      'JOB_SUBMITTED_FOR_APPROVAL',
++      'JOB_APPROVED',
++      'JOB_REJECTED',
++      'JOB_EDIT_REQUESTED',
++      'JOB_EDIT_APPROVED',
++      'JOB_EDIT_REJECTED',
++      'JOB_DISCONTINUED',
++
+       // Account — sent to PARTNER or COMPANY
+       'PROFILE_VERIFIED',
+       'PROFILE_REJECTED',
+@@ -39,11 +53,11 @@ const notificationSchema = new mongoose.Schema({
+       'SUBSCRIPTION_EXPIRED',
+ 
+       // ✅ NEW: Payout notifications
+-      'PAYOUT_ELIGIBLE',      // 90 days completed
+-      'PAYOUT_APPROVED',      // Admin approved payout
+-      'PAYOUT_PAID',          // Money transferred
+-      'PAYOUT_FORFEITED',     // Candidate left early
+-      'PAYOUT_ON_HOLD',       // Payout held for review
++      'PAYOUT_ELIGIBLE',
++      'PAYOUT_APPROVED',
++      'PAYOUT_PAID',
++      'PAYOUT_FORFEITED',
++      'PAYOUT_ON_HOLD',
+ 
+       // ✅ NEW: Invoice notifications
+       'INVOICE_GENERATED',
+@@ -67,9 +81,9 @@ const notificationSchema = new mongoose.Schema({
+     maxlength: 2000
+   },
+   data: {
+-    entityType: String,    // 'Candidate', 'Job', 'Payout', etc.
++    entityType: String,
+     entityId: mongoose.Schema.Types.ObjectId,
+-    actionUrl: String,     // Frontend route to navigate to
++    actionUrl: String,
+     metadata: mongoose.Schema.Types.Mixed
+   },
+   channels: {
 diff --git a/models/User.js b/models/User.js
-index 6909d34..d288e7b 100644
+index d288e7b..0b975ef 100644
 --- a/models/User.js
 +++ b/models/User.js
-@@ -21,6 +21,11 @@ const userSchema = new mongoose.Schema({
+@@ -21,16 +21,19 @@ const userSchema = new mongoose.Schema({
      minlength: 8,
      select: false
    },
-+  otpAttempts: {
-+    email: { type: Number, default: 0 },
-+    mobile: { type: Number, default: 0 },
-+    lastAttempt: Date
-+  },
++
+   otpAttempts: {
+     email: { type: Number, default: 0 },
+     mobile: { type: Number, default: 0 },
+     lastAttempt: Date
+   },
++
    role: {
      type: String,
-     enum: ['staffing_partner', 'company', 'admin', 'candidate'],
-@@ -82,7 +87,7 @@ const userSchema = new mongoose.Schema({
- });
+-    enum: ['staffing_partner', 'company', 'admin', 'candidate'],
++    enum: ['staffing_partner', 'company', 'admin', 'sub_admin', 'candidate'],
+     required: true
+   },
++
+   status: {
+     type: String,
+     enum: [
+@@ -48,6 +51,28 @@ const userSchema = new mongoose.Schema({
+     ],
+     default: 'PENDING_EMAIL_VERIFICATION'
+   },
++
++  // Admin/Sub-admin permissions
++  permissions: [{
++    type: String,
++    trim: true
++  }],
++
++  // Who created this user (mainly useful for sub-admin creation audit)
++  createdBy: {
++    type: mongoose.Schema.Types.ObjectId,
++    ref: 'User',
++    default: null
++  },
++
++  // Optional suspension tracking
++  suspendedBy: {
++    type: mongoose.Schema.Types.ObjectId,
++    ref: 'User',
++    default: null
++  },
++  suspendedAt: Date,
++
+   emailVerified: {
+     type: Boolean,
+     default: false
+@@ -60,6 +85,7 @@ const userSchema = new mongoose.Schema({
+     type: Boolean,
+     default: false
+   },
++
+   emailOTP: {
+     code: String,
+     expiresAt: Date
+@@ -68,12 +94,14 @@ const userSchema = new mongoose.Schema({
+     code: String,
+     expiresAt: Date
+   },
++
+   emailVerificationToken: String,
+   emailVerificationExpires: Date,
  
- // Hash password before saving
--userSchema.pre('save', async function(next) {
-+userSchema.pre('save', async function (next) {
+   passwordResetToken: String,
+   passwordResetExpires: Date,
+   lastLogin: Date,
++
+   createdAt: {
+     type: Date,
+     default: Date.now
+@@ -91,6 +119,7 @@ userSchema.pre('save', async function (next) {
    if (!this.isModified('password')) {
      return next();
    }
-@@ -92,40 +97,40 @@ userSchema.pre('save', async function(next) {
- });
- 
- // Compare password method
--userSchema.methods.comparePassword = async function(enteredPassword) {
-+userSchema.methods.comparePassword = async function (enteredPassword) {
-   return await bcrypt.compare(enteredPassword, this.password);
- };
- 
- // Generate OTP
--userSchema.methods.generateOTP = function(type) {
-+userSchema.methods.generateOTP = function (type) {
-   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-   const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
--  
 +
-   if (type === 'email') {
-     this.emailOTP = { code: otp, expiresAt };
-   } else if (type === 'mobile') {
-     this.mobileOTP = { code: otp, expiresAt };
-   }
--  
-+
-   return otp;
- };
- 
- // Verify OTP
--userSchema.methods.verifyOTP = function(type, code) {
-+userSchema.methods.verifyOTP = function (type, code) {
-   const otpData = type === 'email' ? this.emailOTP : this.mobileOTP;
--  
-+
-   if (!otpData || !otpData.code) {
-     return { valid: false, message: 'OTP not found' };
-   }
--  
-+
-   if (new Date() > otpData.expiresAt) {
-     return { valid: false, message: 'OTP expired' };
-   }
--  
-+
-   if (otpData.code !== code) {
-     return { valid: false, message: 'Invalid OTP' };
-   }
--  
-+
-   return { valid: true };
- };
- 
-diff --git a/routes/authRoutes.js b/routes/authRoutes.js
-index b8d80bf..5224a0b 100644
---- a/routes/authRoutes.js
-+++ b/routes/authRoutes.js
-@@ -1,42 +1,60 @@
- // backend/routes/authRoutes.js
+   const salt = await bcrypt.genSalt(10);
+   this.password = await bcrypt.hash(this.password, salt);
+   next();
+diff --git a/package-lock.json b/package-lock.json
+index 2efde2b..98f6edb 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -11,6 +11,7 @@
+       "dependencies": {
+         "bcrypt": "^6.0.0",
+         "bcryptjs": "^2.4.3",
++        "cloudinary": "^1.41.3",
+         "cookie-parser": "^1.4.7",
+         "cors": "^2.8.5",
+         "dotenv": "^16.6.1",
+@@ -21,6 +22,7 @@
+         "jsonwebtoken": "^9.0.2",
+         "mongoose": "^8.0.3",
+         "multer": "^1.4.5-lts.1",
++        "multer-storage-cloudinary": "^4.0.0",
+         "nodemailer": "^6.9.7",
+         "uuid": "^9.0.0"
+       },
+@@ -277,6 +279,30 @@
+         "fsevents": "~2.3.2"
+       }
+     },
++    "node_modules/cloudinary": {
++      "version": "1.41.3",
++      "resolved": "https://registry.npmjs.org/cloudinary/-/cloudinary-1.41.3.tgz",
++      "integrity": "sha512-4o84y+E7dbif3lMns+p3UW6w6hLHEifbX/7zBJvaih1E9QNMZITENQ14GPYJC4JmhygYXsuuBb9bRA3xWEoOfg==",
++      "license": "MIT",
++      "dependencies": {
++        "cloudinary-core": "^2.13.0",
++        "core-js": "^3.30.1",
++        "lodash": "^4.17.21",
++        "q": "^1.5.1"
++      },
++      "engines": {
++        "node": ">=0.6"
++      }
++    },
++    "node_modules/cloudinary-core": {
++      "version": "2.14.1",
++      "resolved": "https://registry.npmjs.org/cloudinary-core/-/cloudinary-core-2.14.1.tgz",
++      "integrity": "sha512-57rgZSQD2cJsz1rga6M7jIDQuEAzkwvq63vTvs3/I8rNpGLyHMoKoIvBkNS0Guv5RZ9KDReJhI2LmElk4D9U1g==",
++      "license": "MIT",
++      "peerDependencies": {
++        "lodash": ">=4.0"
++      }
++    },
+     "node_modules/concat-map": {
+       "version": "0.0.1",
+       "resolved": "https://registry.npmjs.org/concat-map/-/concat-map-0.0.1.tgz",
+@@ -348,6 +374,17 @@
+       "integrity": "sha512-QADzlaHc8icV8I7vbaJXJwod9HWYp8uCqf1xa4OfNu1T7JVxQIrUgOWtHdNDtPiywmFbiS12VjotIXLrKM3orQ==",
+       "license": "MIT"
+     },
++    "node_modules/core-js": {
++      "version": "3.49.0",
++      "resolved": "https://registry.npmjs.org/core-js/-/core-js-3.49.0.tgz",
++      "integrity": "sha512-es1U2+YTtzpwkxVLwAFdSpaIMyQaq0PBgm3YD1W3Qpsn1NAmO3KSgZfu+oGSWVu6NvLHoHCV/aYcsE5wiB7ALg==",
++      "hasInstallScript": true,
++      "license": "MIT",
++      "funding": {
++        "type": "opencollective",
++        "url": "https://opencollective.com/core-js"
++      }
++    },
+     "node_modules/core-util-is": {
+       "version": "1.0.3",
+       "resolved": "https://registry.npmjs.org/core-util-is/-/core-util-is-1.0.3.tgz",
+@@ -1220,6 +1257,15 @@
+         "node": ">= 6.0.0"
+       }
+     },
++    "node_modules/multer-storage-cloudinary": {
++      "version": "4.0.0",
++      "resolved": "https://registry.npmjs.org/multer-storage-cloudinary/-/multer-storage-cloudinary-4.0.0.tgz",
++      "integrity": "sha512-25lm9R6o5dWrHLqLvygNX+kBOxprzpmZdnVKH4+r68WcfCt8XV6xfQaMuAg+kUE5Xmr8mJNA4gE0AcBj9FJyWA==",
++      "license": "MIT",
++      "peerDependencies": {
++        "cloudinary": "^1.21.0"
++      }
++    },
+     "node_modules/negotiator": {
+       "version": "0.6.3",
+       "resolved": "https://registry.npmjs.org/negotiator/-/negotiator-0.6.3.tgz",
+@@ -1418,6 +1464,17 @@
+         "node": ">=6"
+       }
+     },
++    "node_modules/q": {
++      "version": "1.5.1",
++      "resolved": "https://registry.npmjs.org/q/-/q-1.5.1.tgz",
++      "integrity": "sha512-kV/CThkXo6xyFEZUugw/+pIOywXcDbFYgSct5cT3gqlbkBE1SJdwy6UQoZvodiWF/ckQLZyDE/Bu1M6gVu5lVw==",
++      "deprecated": "You or someone you depend on is using Q, the JavaScript Promise library that gave JavaScript developers strong feelings about promises. They can almost certainly migrate to the native JavaScript promise now. Thank you literally everyone for joining me in this bet against the odds. Be excellent to each other.\n\n(For a CapTP with native promises, see @endo/eventual-send and @endo/captp)",
++      "license": "MIT",
++      "engines": {
++        "node": ">=0.6.0",
++        "teleport": ">=0.2.0"
++      }
++    },
+     "node_modules/qs": {
+       "version": "6.14.1",
+       "resolved": "https://registry.npmjs.org/qs/-/qs-6.14.1.tgz",
+diff --git a/package.json b/package.json
+index 23296f1..66fecd8 100644
+--- a/package.json
++++ b/package.json
+@@ -14,6 +14,7 @@
+   "dependencies": {
+     "bcrypt": "^6.0.0",
+     "bcryptjs": "^2.4.3",
++    "cloudinary": "^1.41.3",
+     "cookie-parser": "^1.4.7",
+     "cors": "^2.8.5",
+     "dotenv": "^16.6.1",
+@@ -24,6 +25,7 @@
+     "jsonwebtoken": "^9.0.2",
+     "mongoose": "^8.0.3",
+     "multer": "^1.4.5-lts.1",
++    "multer-storage-cloudinary": "^4.0.0",
+     "nodemailer": "^6.9.7",
+     "uuid": "^9.0.0"
+   },
+diff --git a/routes/adminRoutes.js b/routes/adminRoutes.js
+index f199abc..88596ea 100644
+--- a/routes/adminRoutes.js
++++ b/routes/adminRoutes.js
+@@ -1,14 +1,13 @@
+ // backend/routes/adminRoutes.js
  const express = require('express');
  const router = express.Router();
 +
  const {
-   initStaffingPartnerRegistration,
-   initCompanyRegistration,
--  verifyEmailByToken,
-+  verifyEmailByToken,     // Legacy GET support
-+  verifyEmail,            // Recommended POST
-+  getVerificationStatus,
-   verifyMobileOTP,
-+  resendOTP,              // Legacy combined resend
-+  resendEmailVerification,
-+  resendMobileOTP,
-   login,
-   changePassword,
--  resendOTP,
--  resendEmailVerification,
-   getMe,
-   forgotPassword,
-   resetPassword,
--  logout,
-+  logout
- } = require('../controllers/authController');
+   // Dashboard & Analytics
+   getDashboard,
+   getPendingVerifications,
+   verifyPartner,
+   verifyCompany,
+-  // getPayouts,      // ❌ DISABLED - Payout system inactive
+-  // processPayout,   // ❌ DISABLED - Payout system inactive
+   getUsers,
+   updateUserStatus,
+   getAnalytics,
+@@ -23,7 +22,8 @@ const {
+   rejectEditRequest,
+   discontinueJob,
+   getJobEditHistory,
+-  // ✅ NEW: Payout management
 +
- const { protect } = require('../middleware/auth');
- 
--// Registration routes
-+// ==================== REGISTRATION ====================
- router.post('/register/staffing-partner/init', initStaffingPartnerRegistration);
- router.post('/register/company/init', initCompanyRegistration);
- 
--// Verification routes
-+// ==================== VERIFICATION ====================
-+
-+// Legacy GET route for email verification from link
- router.get('/verify-email', verifyEmailByToken);
-+
-+// Recommended POST route for frontend-driven verification
-+router.post('/verify-email', verifyEmail);
-+
-+// Mobile OTP verify
- router.post('/verify/mobile', verifyMobileOTP);
--router.post('/resend-otp', resendOTP);
-+
-+// Verification status
-+router.get('/verification-status/:userId', getVerificationStatus);
-+
-+// Resend routes
-+router.post('/resend-otp', resendOTP); // legacy
- router.post('/resend-email-verification', resendEmailVerification);
-+router.post('/resend-mobile-otp', resendMobileOTP);
- 
--// Login & Password
-+// ==================== AUTH ====================
- router.post('/login', login);
-+router.post('/logout', protect, logout);
-+
-+// ==================== PASSWORD ====================
- router.post('/change-password', protect, changePassword);
- router.post('/forgot-password', forgotPassword);
- router.post('/reset-password', resetPassword);
- 
--// User
-+// ==================== USER ====================
- router.get('/me', protect, getMe);
- 
--// Logout route
--router.post('/logout', protect, logout);
++  // Payout management
+   getPayouts,
+   getPayout,
+   approvePayout,
+@@ -32,52 +32,171 @@ const {
+   releasePayout,
+   forfeitPayout,
+   checkPayoutEligibility
 -
+-
+ } = require('../controllers/adminController');
+ 
+-const { protect, authorize } = require('../middleware/auth');
++const {
++  protect,
++  authorizeAdminAccess,
++  checkPermission
++} = require('../middleware/auth');
++
++const { PERMISSIONS } = require('../utils/permissions');
+ 
+-// Apply admin auth middleware
++// Apply protection for admin CMS access
+ router.use(protect);
+-router.use(authorize('admin'));
++router.use(authorizeAdminAccess);
+ 
+ // ==================== DASHBOARD & ANALYTICS ====================
+-router.get('/dashboard', getDashboard);
+-router.get('/analytics', getAnalytics);
++router.get(
++  '/dashboard',
++  checkPermission(PERMISSIONS.VIEW_ADMIN_DASHBOARD),
++  getDashboard
++);
++
++router.get(
++  '/analytics',
++  checkPermission(PERMISSIONS.VIEW_ANALYTICS),
++  getAnalytics
++);
+ 
+ // ==================== VERIFICATIONS ====================
+-router.get('/verifications', getPendingVerifications);
+-router.put('/verify/partner/:id', verifyPartner);
+-router.put('/verify/company/:id', verifyCompany);
+-
+-// ==================== PAYOUT MANAGEMENT  ====================
+-router.get('/payouts', getPayouts);
+-router.get('/payouts/:id', getPayout);
+-router.put('/payouts/:id/approve', approvePayout);
+-router.put('/payouts/:id/process', processPayout);
+-router.put('/payouts/:id/hold', holdPayout);
+-router.put('/payouts/:id/release', releasePayout);
+-router.post('/payouts/:id/forfeit', forfeitPayout);
+-router.post('/payouts/check-eligibility', checkPayoutEligibility);
++router.get(
++  '/verifications',
++  checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
++  getPendingVerifications
++);
++
++// NOTE:
++// verifyPartner / verifyCompany currently use action in req.body (approve/reject)
++// We will add action-based permission checks inside controller in next step if needed.
++router.put(
++  '/verify/partner/:id',
++  checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
++  verifyPartner
++);
++
++router.put(
++  '/verify/company/:id',
++  checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
++  verifyCompany
++);
+ 
+ // ==================== USER MANAGEMENT ====================
+-router.get('/users', getUsers);
+-router.put('/users/:id/status', updateUserStatus);
++router.get(
++  '/users',
++  checkPermission(PERMISSIONS.VIEW_USERS),
++  getUsers
++);
++
++router.put(
++  '/users/:id/status',
++  checkPermission(PERMISSIONS.UPDATE_USER_STATUS),
++  updateUserStatus
++);
+ 
+ // ==================== JOB APPROVAL ====================
+-router.get('/jobs/pending', getPendingJobs);
+-router.put('/jobs/:id/approve', approveJob);
+-router.put('/jobs/:id/reject', rejectJob);
+-router.get('/jobs/:id/edit-history', getJobEditHistory);
++router.get(
++  '/jobs/pending',
++  checkPermission(PERMISSIONS.VIEW_PENDING_JOBS),
++  getPendingJobs
++);
++
++router.put(
++  '/jobs/:id/approve',
++  checkPermission(PERMISSIONS.APPROVE_JOB),
++  approveJob
++);
++
++router.put(
++  '/jobs/:id/reject',
++  checkPermission(PERMISSIONS.REJECT_JOB),
++  rejectJob
++);
++
++router.get(
++  '/jobs/:id/edit-history',
++  checkPermission(PERMISSIONS.VIEW_JOB_EDIT_HISTORY),
++  getJobEditHistory
++);
++
++router.post(
++  '/jobs/:id/discontinue',
++  checkPermission(PERMISSIONS.DISCONTINUE_JOB),
++  discontinueJob
++);
+ 
+ // ==================== EDIT REQUESTS ====================
+-router.get('/edit-requests/pending', getPendingEditRequests);
+-router.get('/edit-requests/:id', getEditRequest);
+-router.put('/edit-requests/:id/approve', approveEditRequest);
+-router.put('/edit-requests/:id/reject', rejectEditRequest);
++router.get(
++  '/edit-requests/pending',
++  checkPermission(PERMISSIONS.VIEW_EDIT_REQUESTS),
++  getPendingEditRequests
++);
++
++router.get(
++  '/edit-requests/:id',
++  checkPermission(PERMISSIONS.VIEW_EDIT_REQUEST_DETAILS),
++  getEditRequest
++);
++
++router.put(
++  '/edit-requests/:id/approve',
++  checkPermission(PERMISSIONS.APPROVE_EDIT_REQUEST),
++  approveEditRequest
++);
++
++router.put(
++  '/edit-requests/:id/reject',
++  checkPermission(PERMISSIONS.REJECT_EDIT_REQUEST),
++  rejectEditRequest
++);
++
++// ==================== PAYOUT MANAGEMENT ====================
++router.get(
++  '/payouts',
++  checkPermission(PERMISSIONS.VIEW_PAYOUTS),
++  getPayouts
++);
++
++router.get(
++  '/payouts/:id',
++  checkPermission(PERMISSIONS.VIEW_PAYOUT_DETAILS),
++  getPayout
++);
+ 
+-// ==================== JOB DISCONTINUATION ====================
+-router.post('/jobs/:id/discontinue', discontinueJob);
++router.put(
++  '/payouts/:id/approve',
++  checkPermission(PERMISSIONS.APPROVE_PAYOUT),
++  approvePayout
++);
++
++router.put(
++  '/payouts/:id/process',
++  checkPermission(PERMISSIONS.PROCESS_PAYOUT),
++  processPayout
++);
++
++router.put(
++  '/payouts/:id/hold',
++  checkPermission(PERMISSIONS.HOLD_PAYOUT),
++  holdPayout
++);
++
++router.put(
++  '/payouts/:id/release',
++  checkPermission(PERMISSIONS.RELEASE_PAYOUT),
++  releasePayout
++);
++
++router.post(
++  '/payouts/:id/forfeit',
++  checkPermission(PERMISSIONS.FORFEIT_PAYOUT),
++  forfeitPayout
++);
++
++router.post(
++  '/payouts/check-eligibility',
++  checkPermission(PERMISSIONS.RUN_PAYOUT_ELIGIBILITY),
++  checkPayoutEligibility
++);
+ 
  module.exports = router;
 \ No newline at end of file
+diff --git a/routes/companyRoutes.js b/routes/companyRoutes.js
+index e87e962..5692f0a 100644
+--- a/routes/companyRoutes.js
++++ b/routes/companyRoutes.js
+@@ -95,7 +95,7 @@ router.post(
+ 
+       // Save logo path in KYC
+       company.kyc = company.kyc || {};
+-      company.kyc.logo = `/uploads/logos/${req.file.filename}`;
++      company.kyc.logo = req.file.path; // Cloudinary URL
+       await company.save();
+ 
+       res.json({
+@@ -155,7 +155,7 @@ router.post(
+       if (req.files) {
+         Object.keys(req.files).forEach((fieldName) => {
+           const file = req.files[fieldName][0];
+-          documents[fieldName] = `/uploads/documents/${file.filename}`;
++          documents[fieldName] = file.path; // Cloudinary URL
+         });
+       }
+ 
+@@ -179,6 +179,70 @@ router.post(
+   }
+ );
+ 
++// Upload additional document (from dropdown)
++router.post(
++  '/profile/documents/additional',
++  checkStatus('VERIFIED', 'ACTIVE'),
++  require('../middleware/upload').uploadAdditionalDocument,
++  require('../middleware/upload').handleUploadError,
++  async (req, res) => {
++    try {
++      const Company = require('../models/Company');
++      const company = await Company.findOne({ user: req.user._id });
++
++      if (!company) {
++        return res.status(404).json({
++          success: false,
++          message: 'Company not found'
++        });
++      }
++
++      if (!req.file) {
++        return res.status(400).json({
++          success: false,
++          message: 'No file uploaded'
++        });
++      }
++
++      const { documentType } = req.body;
++
++      if (!documentType) {
++        return res.status(400).json({
++          success: false,
++          message: 'Document type is required'
++        });
++      }
++
++      if (!company.documents.additionalDocuments) {
++        company.documents.additionalDocuments = [];
++      }
++
++      company.documents.additionalDocuments.push({
++        documentType,
++        documentUrl: req.file.path,
++        documentName: req.file.originalname,
++        uploadedAt: new Date()
++      });
++
++      await company.save();
++
++      res.json({
++        success: true,
++        message: 'Additional document uploaded successfully',
++        data: company.documents
++      });
++    } catch (error) {
++      console.error('[COMPANY] Additional document upload error:', error);
++      res.status(500).json({
++        success: false,
++        message: 'Upload failed',
++        error: error.message
++      });
++    }
++  }
++);
++
++
+ // Submit for Verification
+ router.post('/profile/submit', submitProfile);
+ 
+diff --git a/routes/staffingPartnerRoutes.js b/routes/staffingPartnerRoutes.js
+index 776b892..8f82d8c 100644
+--- a/routes/staffingPartnerRoutes.js
++++ b/routes/staffingPartnerRoutes.js
+@@ -86,10 +86,11 @@ router.post(
+       }
+ 
+       const documents = {};
++
+       if (req.files) {
+         Object.keys(req.files).forEach((fieldName) => {
+           const file = req.files[fieldName][0];
+-          documents[fieldName] = `/uploads/documents/${file.filename}`;
++          documents[fieldName] = file.path; // Cloudinary URL
+         });
+       }
+ 
+@@ -113,6 +114,69 @@ router.post(
+   }
+ );
+ 
++
++// Upload additional document (from dropdown)
++router.post(
++  '/profile/documents/additional',
++  require('../middleware/upload').uploadAdditionalDocument,
++  require('../middleware/upload').handleUploadError,
++  async (req, res) => {
++    try {
++      const partner = await StaffingPartner.findOne({ user: req.user._id });
++
++      if (!partner) {
++        return res.status(404).json({
++          success: false,
++          message: 'Profile not found'
++        });
++      }
++
++      if (!req.file) {
++        return res.status(400).json({
++          success: false,
++          message: 'No file uploaded'
++        });
++      }
++
++      const { documentType } = req.body;
++
++      if (!documentType) {
++        return res.status(400).json({
++          success: false,
++          message: 'Document type is required'
++        });
++      }
++
++      if (!partner.documents.additionalDocuments) {
++        partner.documents.additionalDocuments = [];
++      }
++
++      partner.documents.additionalDocuments.push({
++        documentType,
++        documentUrl: req.file.path,
++        documentName: req.file.originalname,
++        uploadedAt: new Date()
++      });
++
++      await partner.save();
++
++      res.json({
++        success: true,
++        message: 'Additional document uploaded successfully',
++        data: partner.documents
++      });
++    } catch (error) {
++      console.error('[PARTNER] Additional document upload error:', error);
++      res.status(500).json({
++        success: false,
++        message: 'Upload failed',
++        error: error.message
++      });
++    }
++  }
++);
++
++
+ // Section 8: Team Access (After Verification Only)
+ router.put(
+   '/profile/team-access',
+diff --git a/seeders/seed.js b/seeders/seed.js
+index e2e81af..31b5cf7 100644
+--- a/seeders/seed.js
++++ b/seeders/seed.js
+@@ -43,6 +43,45 @@ const seedDatabase = async () => {
+       console.log("ℹ️  Admin user already exists");
+     }
+ 
++    // 1b. Create Test Sub-Admin
++    const subAdminExists = await User.findOne({ email: 'subadmin@syncro1.com' });
++    if (!subAdminExists) {
++      const salt = await bcrypt.genSalt(10);
++      const hashedPassword = await bcrypt.hash('SubAdmin@123', salt);
++
++      await User.create({
++        email: 'subadmin@syncro1.com',
++        mobile: '9999999998',
++        password: hashedPassword,
++        role: 'sub_admin',
++        status: 'ACTIVE',
++        emailVerified: true,
++        mobileVerified: true,
++        isPasswordChanged: true,
++        permissions: [
++          'VIEW_ADMIN_DASHBOARD',
++          'VIEW_VERIFICATIONS',
++          'APPROVE_PARTNER',
++          'REJECT_PARTNER',
++          'APPROVE_COMPANY',
++          'REJECT_COMPANY',
++          'VIEW_PENDING_JOBS',
++          'APPROVE_JOB',
++          'REJECT_JOB',
++          'VIEW_NOTIFICATIONS'
++        ],
++        createdBy: null // Will be null for seeded sub-admin
++      });
++
++      console.log('✅ Test sub-admin created');
++      console.log('   📧 Email: subadmin@syncro1.com');
++      console.log('   🔑 Password: SubAdmin@123');
++      console.log('   🔐 Permissions: verification + job review');
++    } else {
++      console.log('ℹ️  Test sub-admin already exists');
++    }
++
++
+     // 2. Create Subscription Plans
+     const plans = [
+       {
+@@ -278,19 +317,16 @@ const seedDatabase = async () => {
+           agreementSignedAt: now
+         },
+ 
+-        financeDetails: {
++        commercialDetails: {
++          payoutEntityName: "Test Recruiters Private Limited",
++          gstRegistration: "Regular",
++          tdsApplicable: true,
+           bankAccountHolderName: "Test Recruiters Pvt Ltd",
+           bankName: "HDFC Bank",
+           accountNumber: "1234567890",
+           ifscCode: "HDFC0001234",
+         },
+ 
+-        payoutPreferences: {
+-          payoutEntityName: "Test Recruiters Private Limited",
+-          gstRegistration: "Regular",
+-          tdsApplicable: true,
+-        },
+-
+         subscription: {
+           plan: "PROFESSIONAL",
+           startDate: now,
+@@ -307,9 +343,8 @@ const seedDatabase = async () => {
+           Syncro1Competency: true,
+           geographicReach: true,
+           compliance: true,
+-          financeDetails: true,
+-          payoutPreferences: true,
+-          documents: false,
++          commercialDetails: true,
++          documents: true,
+         },
+       });
+ 
+@@ -511,11 +546,12 @@ const seedDatabase = async () => {
+ 
+     console.log("\n🎉 Database seeding completed!");
+     console.log("\n📝 Test Credentials:");
+-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+-    console.log("Admin:    admin@Syncro1.com / Admin@123");
+-    console.log("Partner:  partner@test.com / Partner@123");
+-    console.log("Company:  company@test.com / Company@123");
+-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
++    console.log('━━━��━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
++    console.log('Admin:      admin@Syncro1.com / Admin@123');
++    console.log('Sub-Admin:  subadmin@syncro1.com / SubAdmin@123');
++    console.log('Partner:    partner@test.com / Partner@123');
++    console.log('Company:    company@test.com / Company@123');
++    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+ 
+     process.exit(0);
+   } catch (error) {
 diff --git a/server.js b/server.js
-index 5d57461..b86fc88 100644
+index 0ca5c4a..2443afc 100644
 --- a/server.js
 +++ b/server.js
-@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
- const path = require('path');
- const dotenv = require('dotenv');
- const connectDB = require('./config/db');
-+const onboardingRoutes = require('./routes/onboardingRoutes');
+@@ -15,6 +15,11 @@ dotenv.config();
+ // Connect to database
+ connectDB();
  
- // Load env vars
- dotenv.config();
-@@ -122,6 +123,8 @@ app.use('/api/jobs', require('./routes/jobRoutes'));
++// Test Cloudinary connection
++const { testConnection: testCloudinary } = require('./config/cloudinary');
++testCloudinary();
++
++
+ // ✅ Register Notification model BEFORE routes
+ require('./models/Notification');
+ 
+@@ -144,6 +149,7 @@ app.use('/api/companies', require('./routes/companyRoutes'));
+ app.use('/api/jobs', require('./routes/jobRoutes'));
  app.use('/api/candidates', require('./routes/candidateRoutes'));
  app.use('/api/admin', require('./routes/adminRoutes'));
++app.use('/api/admin/sub-admins', require('./routes/adminSubAdminRoutes'));
  app.use('/api/payments', require('./routes/paymentRoutes'));
-+// Register routes
-+app.use('/api/onboarding', onboardingRoutes);
+ // Register routes
+ app.use('/api/onboarding', onboardingRoutes);
+@@ -238,11 +244,22 @@ const server = app.listen(PORT, () => {
+       ? '✅ Enabled'
+       : '⏸️  Disabled (Mock)')
+   );
++  console.log(
++    '   Cloudinary: ' +
++    (cloudinaryConfigured
++      ? '☁️ Configured'
++      : '⚠️ Not configured (check .env)')
++  );
+   console.log('═══════════════════════════════════════════════════════');
+   console.log('');
+ });
  
- // ✅ Newly added routes
- app.use('/api/notifications', require('./routes/notificationRoutes'));
-diff --git a/utils/validators.js b/utils/validators.js
-index e69de29..d645685 100644
---- a/utils/validators.js
-+++ b/utils/validators.js
-@@ -0,0 +1,25 @@
-+// utils/validators.js
-+const validateEmail = (email) => {
-+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-+    return re.test(email);
-+};
+-/* =========================================================
++const cloudinaryConfigured =
++  !!process.env.CLOUDINARY_CLOUD_NAME &&
++  !!process.env.CLOUDINARY_API_KEY &&
++  !!process.env.CLOUDINARY_API_SECRET;
 +
-+const validateMobile = (mobile) => {
-+    const cleaned = mobile.replace(/\D/g, '');
-+    return cleaned.length === 10;
-+};
-+
-+const validateGST = (gst) => {
-+    const re = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
-+    return re.test(gst);
-+};
-+
-+const validatePAN = (pan) => {
-+    const re = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
-+    return re.test(pan);
-+};
-+
-+module.exports = { validateEmail, validateMobile, validateGST, validatePAN };
-+
-+
-+
++/* ==================================== =====================
+    PROCESS ERROR HANDLING
+ ========================================================= */
+ 

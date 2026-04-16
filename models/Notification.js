@@ -1,4 +1,6 @@
-// backend/models/Notification.js — NEW FILE
+/**
+ * backend/models/Notification.js — UPDATED
+ */
 
 const mongoose = require('mongoose');
 
@@ -27,10 +29,22 @@ const notificationSchema = new mongoose.Schema({
       // Candidate submission — sent to COMPANY
       'NEW_CANDIDATE_SUBMITTED',
 
+      // ✅ NEW: Candidate
+      'CANDIDATE_WITHDRAWN',
+
       // Job notifications — sent to PARTNER
       'NEW_JOB_MATCHED',
       'JOB_CLOSING_SOON',
       'JOB_CLOSED',
+
+      // ✅ NEW: Job approval workflow
+      'JOB_SUBMITTED_FOR_APPROVAL',
+      'JOB_APPROVED',
+      'JOB_REJECTED',
+      'JOB_EDIT_REQUESTED',
+      'JOB_EDIT_APPROVED',
+      'JOB_EDIT_REJECTED',
+      'JOB_DISCONTINUED',
 
       // Account — sent to PARTNER or COMPANY
       'PROFILE_VERIFIED',
@@ -39,11 +53,11 @@ const notificationSchema = new mongoose.Schema({
       'SUBSCRIPTION_EXPIRED',
 
       // ✅ NEW: Payout notifications
-      'PAYOUT_ELIGIBLE',      // 90 days completed
-      'PAYOUT_APPROVED',      // Admin approved payout
-      'PAYOUT_PAID',          // Money transferred
-      'PAYOUT_FORFEITED',     // Candidate left early
-      'PAYOUT_ON_HOLD',       // Payout held for review
+      'PAYOUT_ELIGIBLE',
+      'PAYOUT_APPROVED',
+      'PAYOUT_PAID',
+      'PAYOUT_FORFEITED',
+      'PAYOUT_ON_HOLD',
 
       // ✅ NEW: Invoice notifications
       'INVOICE_GENERATED',
@@ -67,9 +81,9 @@ const notificationSchema = new mongoose.Schema({
     maxlength: 2000
   },
   data: {
-    entityType: String,    // 'Candidate', 'Job', 'Payout', etc.
+    entityType: String,
     entityId: mongoose.Schema.Types.ObjectId,
-    actionUrl: String,     // Frontend route to navigate to
+    actionUrl: String,
     metadata: mongoose.Schema.Types.Mixed
   },
   channels: {

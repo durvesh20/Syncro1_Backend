@@ -1,150 +1,230 @@
 // backend/middleware/upload.js
 const multer = require('multer');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const { cloudinary } = require('../config/cloudinary');
 const path = require('path');
-const fs = require('fs');
-const { v4: uuidv4 } = require('uuid');
 
-// Ensure upload directories exist
-const uploadDirs = [
-  'uploads',
-  'uploads/resumes',
-  'uploads/documents',
-  'uploads/logos',
-  'uploads/others'
-];
+// ==================== CLOUDINARY STORAGE CONFIGS ====================
 
-uploadDirs.forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+// Resume storage
+const resumeStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'syncro1/resumes',
+    resource_type: 'raw',
+    allowed_formats: ['pdf', 'doc', 'docx'],
+    transformation: [],
+    public_id: (req, file) => {
+      const uniqueName = `resume_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
+      return uniqueName;
+    }
   }
 });
 
-// Configure storage
-const storage = multer.diskStorage({
-  destination: function(req, file, cb) {
-    let uploadPath = 'uploads/';
-    
-    switch (file.fieldname) {
-      case 'resume':
-        uploadPath += 'resumes/';
-        break;
-      case 'logo':
-        uploadPath += 'logos/';
-        break;
-      case 'panCard':
-      case 'gstCertificate':
-      case 'incorporationCertificate':
-      case 'authorizedSignatoryProof':
-      case 'addressProof':
-      case 'cancelledCheque':
-        uploadPath += 'documents/';
-        break;
-      default:
-        uploadPath += 'others/';
+// Logo storage
+const logoStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'syncro1/logos',
+    resource_type: 'image',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'svg', 'webp'],
+    transformation: [
+      { width: 500, height: 500, crop: 'limit', quality: 'auto' }
+    ],
+    public_id: (req, file) => {
+      const uniqueName = `logo_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
+      return uniqueName;
     }
-    
-    cb(null, uploadPath);
-  },
-  filename: function(req, file, cb) {
-    const uniqueName = `${uuidv4()}${path.extname(file.originalname)}`;
-    cb(null, uniqueName);
   }
 });
 
-// File filter
-const fileFilter = (req, file, cb) => {
-  // Define allowed types per field
-  const allowedTypes = {
-    resume: {
-      mimes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-      extensions: ['.pdf', '.doc', '.docx']
-    },
-    logo: {
-      mimes: ['image/jpeg', 'image/png', 'image/svg+xml', 'image/webp'],
-      extensions: ['.jpg', '.jpeg', '.png', '.svg', '.webp']
-    },
-    document: {
-      mimes: ['application/pdf', 'image/jpeg', 'image/png'],
-      extensions: ['.pdf', '.jpg', '.jpeg', '.png']
+// Document storage (KYC, certificates etc.)
+const documentStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'syncro1/documents',
+    resource_type: 'auto',
+    allowed_formats: ['pdf', 'jpg', 'jpeg', 'png'],
+    public_id: (req, file) => {
+      const fieldName = file.fieldname || 'doc';
+      const uniqueName = `${fieldName}_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
+      return uniqueName;
     }
-  };
-
-  const fieldName = file.fieldname;
-  let typeConfig;
-
-  if (fieldName === 'resume') {
-    typeConfig = allowedTypes.resume;
-  } else if (fieldName === 'logo') {
-    typeConfig = allowedTypes.logo;
-  } else {
-    typeConfig = allowedTypes.document;
   }
+});
 
+// ==================== FILE FILTERS ====================
+
+const resumeFilter = (req, file, cb) => {
+  const allowedMimes = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ];
   const ext = path.extname(file.originalname).toLowerCase();
-  
-  if (typeConfig.mimes.includes(file.mimetype) || typeConfig.extensions.includes(ext)) {
+  const allowedExts = ['.pdf', '.doc', '.docx'];
+
+  if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error(`Invalid file type for ${fieldName}. Allowed: ${typeConfig.extensions.join(', ')}`), false);
+    cb(new Error('Invalid file type for resume. Allowed: PDF, DOC, DOCX'), false);
   }
 };
 
-// Create multer instance
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB max
+const logoFilter = (req, file, cb) => {
+  const allowedMimes = [
+    'image/jpeg',
+    'image/png',
+    'image/svg+xml',
+    'image/webp'
+  ];
+  const ext = path.extname(file.originalname).toLowerCase();
+  const allowedExts = ['.jpg', '.jpeg', '.png', '.svg', '.webp'];
+
+  if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type for logo. Allowed: JPG, PNG, SVG, WEBP'), false);
   }
-});
+};
 
-// Export different upload configurations
-module.exports = {
-  // Single file uploads
-  uploadResume: upload.single('resume'),
-  uploadLogo: upload.single('logo'),
-  uploadDocument: upload.single('document'),
+const documentFilter = (req, file, cb) => {
+  const allowedMimes = [
+    'application/pdf',
+    'image/jpeg',
+    'image/png'
+  ];
+  const ext = path.extname(file.originalname).toLowerCase();
+  const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png'];
 
-  // Multiple document uploads for KYC
-uploadPartnerDocuments: upload.fields([
+  if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`Invalid file type for ${file.fieldname}. Allowed: PDF, JPG, PNG`), false);
+  }
+};
+
+// ==================== MULTER INSTANCES ====================
+
+const uploadResume = multer({
+  storage: resumeStorage,
+  fileFilter: resumeFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }
+}).single('resume');
+
+const uploadLogo = multer({
+  storage: logoStorage,
+  fileFilter: logoFilter,
+  limits: { fileSize: 5 * 1024 * 1024 }
+}).single('logo');
+
+const uploadDocument = multer({
+  storage: documentStorage,
+  fileFilter: documentFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }
+}).single('document');
+
+// 👇 ADD THIS RIGHT BELOW
+const uploadAdditionalDocument = multer({
+  storage: documentStorage,
+  fileFilter: documentFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }
+}).single('additionalDocument');
+
+const uploadPartnerDocuments = multer({
+  storage: documentStorage,
+  fileFilter: documentFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }
+}).fields([
   { name: 'panCard', maxCount: 1 },
   { name: 'gstCertificate', maxCount: 1 },
-  { name: 'incorporationCertificate', maxCount: 1 },     
-  { name: 'authorizedSignatoryProof', maxCount: 1 },     
+  { name: 'incorporationCertificate', maxCount: 1 },
+  { name: 'authorizedSignatoryProof', maxCount: 1 },
   { name: 'addressProof', maxCount: 1 },
   { name: 'cancelledCheque', maxCount: 1 }
-]),
+]);
 
-  uploadCompanyDocuments: upload.fields([
-    { name: 'incorporationCertificate', maxCount: 1 },
-    { name: 'gstCertificate', maxCount: 1 },
-    { name: 'panCard', maxCount: 1 },
-    { name: 'addressProof', maxCount: 1 },
-    { name: 'authorizedSignatoryProof', maxCount: 1 }
-  ]),
+const uploadCompanyDocuments = multer({
+  storage: documentStorage,
+  fileFilter: documentFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }
+}).fields([
+  { name: 'incorporationCertificate', maxCount: 1 },
+  { name: 'gstCertificate', maxCount: 1 },
+  { name: 'panCard', maxCount: 1 },
+  { name: 'addressProof', maxCount: 1 },
+  { name: 'authorizedSignatoryProof', maxCount: 1 }
+]);
 
-  // Generic upload for any file
-  uploadAny: upload.any(),
+const uploadAny = multer({
+  storage: documentStorage,
+  fileFilter: documentFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }
+}).any();
 
-  // Error handler middleware
-  handleUploadError: (err, req, res, next) => {
-    if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({
-          success: false,
-          message: 'File too large. Maximum size is 10MB'
-        });
-      }
+// ==================== ERROR HANDLER ====================
+
+const handleUploadError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
-        message: err.message
-      });
-    } else if (err) {
-      return res.status(400).json({
-        success: false,
-        message: err.message
+        message: 'File too large. Maximum size is 10MB'
       });
     }
-    next();
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  } else if (err) {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
   }
+  next();
+};
+
+// ==================== HELPER: DELETE FROM CLOUDINARY ====================
+
+const deleteFromCloudinary = async (publicIdOrUrl) => {
+  try {
+    if (!publicIdOrUrl) return;
+
+    let publicId = publicIdOrUrl;
+
+    // If it's a full URL, extract public_id
+    if (publicIdOrUrl.startsWith('http')) {
+      // Extract public_id from Cloudinary URL
+      const urlParts = publicIdOrUrl.split('/');
+      const uploadIndex = urlParts.indexOf('upload');
+      if (uploadIndex !== -1) {
+        // Get everything after version number
+        const pathAfterUpload = urlParts.slice(uploadIndex + 2).join('/');
+        // Remove file extension
+        publicId = pathAfterUpload.replace(/\.[^/.]+$/, '');
+      }
+    }
+
+    const result = await cloudinary.uploader.destroy(publicId);
+    console.log(`[CLOUDINARY] Deleted: ${publicId} — ${result.result}`);
+    return result;
+  } catch (error) {
+    console.error(`[CLOUDINARY] Delete failed: ${error.message}`);
+    return null;
+  }
+};
+
+// ==================== EXPORTS ====================
+
+module.exports = {
+  uploadResume,
+  uploadLogo,
+  uploadDocument,
+  uploadAdditionalDocument,
+  uploadPartnerDocuments,
+  uploadCompanyDocuments,
+  uploadAny,
+  handleUploadError,
+  deleteFromCloudinary
 };

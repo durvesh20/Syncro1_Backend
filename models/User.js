@@ -21,16 +21,19 @@ const userSchema = new mongoose.Schema({
     minlength: 8,
     select: false
   },
+
   otpAttempts: {
     email: { type: Number, default: 0 },
     mobile: { type: Number, default: 0 },
     lastAttempt: Date
   },
+
   role: {
     type: String,
-    enum: ['staffing_partner', 'company', 'admin', 'candidate'],
+    enum: ['staffing_partner', 'company', 'admin', 'sub_admin', 'candidate'],
     required: true
   },
+
   status: {
     type: String,
     enum: [
@@ -48,6 +51,28 @@ const userSchema = new mongoose.Schema({
     ],
     default: 'PENDING_EMAIL_VERIFICATION'
   },
+
+  // Admin/Sub-admin permissions
+  permissions: [{
+    type: String,
+    trim: true
+  }],
+
+  // Who created this user (mainly useful for sub-admin creation audit)
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+
+  // Optional suspension tracking
+  suspendedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  suspendedAt: Date,
+
   emailVerified: {
     type: Boolean,
     default: false
@@ -60,6 +85,7 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+
   emailOTP: {
     code: String,
     expiresAt: Date
@@ -68,12 +94,14 @@ const userSchema = new mongoose.Schema({
     code: String,
     expiresAt: Date
   },
+
   emailVerificationToken: String,
   emailVerificationExpires: Date,
 
   passwordResetToken: String,
   passwordResetExpires: Date,
   lastLogin: Date,
+
   createdAt: {
     type: Date,
     default: Date.now
@@ -91,6 +119,7 @@ userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) {
     return next();
   }
+
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();

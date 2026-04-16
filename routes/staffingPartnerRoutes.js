@@ -86,10 +86,11 @@ router.post(
       }
 
       const documents = {};
+
       if (req.files) {
         Object.keys(req.files).forEach((fieldName) => {
           const file = req.files[fieldName][0];
-          documents[fieldName] = `/uploads/documents/${file.filename}`;
+          documents[fieldName] = file.path; // Cloudinary URL
         });
       }
 
@@ -112,6 +113,69 @@ router.post(
     }
   }
 );
+
+
+// Upload additional document (from dropdown)
+router.post(
+  '/profile/documents/additional',
+  require('../middleware/upload').uploadAdditionalDocument,
+  require('../middleware/upload').handleUploadError,
+  async (req, res) => {
+    try {
+      const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+      if (!partner) {
+        return res.status(404).json({
+          success: false,
+          message: 'Profile not found'
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: 'No file uploaded'
+        });
+      }
+
+      const { documentType } = req.body;
+
+      if (!documentType) {
+        return res.status(400).json({
+          success: false,
+          message: 'Document type is required'
+        });
+      }
+
+      if (!partner.documents.additionalDocuments) {
+        partner.documents.additionalDocuments = [];
+      }
+
+      partner.documents.additionalDocuments.push({
+        documentType,
+        documentUrl: req.file.path,
+        documentName: req.file.originalname,
+        uploadedAt: new Date()
+      });
+
+      await partner.save();
+
+      res.json({
+        success: true,
+        message: 'Additional document uploaded successfully',
+        data: partner.documents
+      });
+    } catch (error) {
+      console.error('[PARTNER] Additional document upload error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Upload failed',
+        error: error.message
+      });
+    }
+  }
+);
+
 
 // Section 8: Team Access (After Verification Only)
 router.put(

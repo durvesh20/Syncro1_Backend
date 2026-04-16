@@ -73,6 +73,18 @@ const syncUserStatusAfterVerification = (user) => {
  * Helper: get onboarding next step after successful login
  */
 const getPostLoginNextStep = async (user) => {
+  // Admin and sub_admin go straight to dashboard
+  if (user.role === 'admin' || user.role === 'sub_admin') {
+    return {
+      profile: null,
+      profileMeta: {
+        completionPercentage: 100,
+        verificationStatus: 'APPROVED'
+      },
+      nextStep: 'GO_TO_DASHBOARD'
+    };
+  }
+
   let profile = null;
 
   if (user.role === 'staffing_partner') {
@@ -818,6 +830,7 @@ exports.login = async (req, res) => {
       email: user.email,
       role: user.role,
       status: user.status,
+      permissions: user.permissions || [],
       emailVerified: user.emailVerified,
       mobileVerified: user.mobileVerified,
       isPasswordChanged: user.isPasswordChanged
@@ -1152,6 +1165,7 @@ exports.getMe = async (req, res) => {
           mobile: user.mobile,
           role: user.role,
           status: user.status,
+          permissions: user.permissions || [],
           emailVerified: user.emailVerified,
           mobileVerified: user.mobileVerified,
           isPasswordChanged: user.isPasswordChanged,

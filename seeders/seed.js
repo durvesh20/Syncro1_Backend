@@ -43,6 +43,45 @@ const seedDatabase = async () => {
       console.log("ℹ️  Admin user already exists");
     }
 
+    // 1b. Create Test Sub-Admin
+    const subAdminExists = await User.findOne({ email: 'subadmin@syncro1.com' });
+    if (!subAdminExists) {
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash('SubAdmin@123', salt);
+
+      await User.create({
+        email: 'subadmin@syncro1.com',
+        mobile: '9999999998',
+        password: hashedPassword,
+        role: 'sub_admin',
+        status: 'ACTIVE',
+        emailVerified: true,
+        mobileVerified: true,
+        isPasswordChanged: true,
+        permissions: [
+          'VIEW_ADMIN_DASHBOARD',
+          'VIEW_VERIFICATIONS',
+          'APPROVE_PARTNER',
+          'REJECT_PARTNER',
+          'APPROVE_COMPANY',
+          'REJECT_COMPANY',
+          'VIEW_PENDING_JOBS',
+          'APPROVE_JOB',
+          'REJECT_JOB',
+          'VIEW_NOTIFICATIONS'
+        ],
+        createdBy: null // Will be null for seeded sub-admin
+      });
+
+      console.log('✅ Test sub-admin created');
+      console.log('   📧 Email: subadmin@syncro1.com');
+      console.log('   🔑 Password: SubAdmin@123');
+      console.log('   🔐 Permissions: verification + job review');
+    } else {
+      console.log('ℹ️  Test sub-admin already exists');
+    }
+
+
     // 2. Create Subscription Plans
     const plans = [
       {
@@ -278,17 +317,14 @@ const seedDatabase = async () => {
           agreementSignedAt: now
         },
 
-        financeDetails: {
+        commercialDetails: {
+          payoutEntityName: "Test Recruiters Private Limited",
+          gstRegistration: "Regular",
+          tdsApplicable: true,
           bankAccountHolderName: "Test Recruiters Pvt Ltd",
           bankName: "HDFC Bank",
           accountNumber: "1234567890",
           ifscCode: "HDFC0001234",
-        },
-
-        payoutPreferences: {
-          payoutEntityName: "Test Recruiters Private Limited",
-          gstRegistration: "Regular",
-          tdsApplicable: true,
         },
 
         subscription: {
@@ -307,9 +343,8 @@ const seedDatabase = async () => {
           Syncro1Competency: true,
           geographicReach: true,
           compliance: true,
-          financeDetails: true,
-          payoutPreferences: true,
-          documents: false,
+          commercialDetails: true,
+          documents: true,
         },
       });
 
@@ -511,11 +546,12 @@ const seedDatabase = async () => {
 
     console.log("\n🎉 Database seeding completed!");
     console.log("\n📝 Test Credentials:");
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("Admin:    admin@Syncro1.com / Admin@123");
-    console.log("Partner:  partner@test.com / Partner@123");
-    console.log("Company:  company@test.com / Company@123");
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    console.log('━━━��━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('Admin:      admin@Syncro1.com / Admin@123');
+    console.log('Sub-Admin:  subadmin@syncro1.com / SubAdmin@123');
+    console.log('Partner:    partner@test.com / Partner@123');
+    console.log('Company:    company@test.com / Company@123');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
     process.exit(0);
   } catch (error) {
