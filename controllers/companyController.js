@@ -458,6 +458,7 @@ exports.updateLegalConsents = async (req, res) => {
     const {
       termsAccepted,
       privacyPolicyAccepted,
+      dataProcessingAgreementAccepted,
       cookiePolicyAccepted,
       dataStorageConsent,
       vendorSharingConsent,
@@ -492,6 +493,14 @@ exports.updateLegalConsents = async (req, res) => {
       dataProcessingAgreementAcceptedIp: dataProcessingAgreementAccepted
         ? ipAddress
         : company.legalConsents?.dataProcessingAgreementAcceptedIp,
+
+      cookiePolicyAccepted,
+      cookiePolicyAcceptedAt: cookiePolicyAccepted
+        ? timestamp
+        : company.legalConsents?.cookiePolicyAcceptedAt,
+      cookiePolicyAcceptedIp: cookiePolicyAccepted
+        ? ipAddress
+        : company.legalConsents?.cookiePolicyAcceptedIp,
 
       dataStorageConsent,
       dataStorageConsentAt: dataStorageConsent

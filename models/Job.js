@@ -118,7 +118,11 @@ const jobSchema = new mongoose.Schema({
 
   // ==================== DATES ====================
   applicationDeadline: Date,
-  expectedJoiningDate: Date,
+  expectedJoiningDate: {
+    type: String,
+    enum: ['0-15 days', '0-30 days', '0-60 days', '0-90 days'],
+    default: '0-15 days'
+  },
 
   // ==================== JOB STATUS (for partner visibility) ====================
   status: {
