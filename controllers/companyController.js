@@ -458,7 +458,7 @@ exports.updateLegalConsents = async (req, res) => {
     const {
       termsAccepted,
       privacyPolicyAccepted,
-      dataProcessingAgreementAccepted,
+      cookiePolicyAccepted,
       dataStorageConsent,
       vendorSharingConsent,
       communicationConsent,

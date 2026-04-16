@@ -165,10 +165,10 @@ const companySchema = new mongoose.Schema({
     privacyPolicyAcceptedAt: Date,
     privacyPolicyAcceptedIp: String,
 
-    // Data Processing Agreement
-    dataProcessingAgreementAccepted: { type: Boolean, default: false },
-    dataProcessingAgreementAcceptedAt: Date,
-    dataProcessingAgreementAcceptedIp: String,
+    // Cookie Policy
+    cookiePolicyAccepted: { type: Boolean, default: false },
+    cookiePolicyAcceptedAt: Date,
+    cookiePolicyAcceptedIp: String,
 
     // Data Storage Consent
     dataStorageConsent: { type: Boolean, default: false },
