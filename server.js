@@ -27,6 +27,11 @@ initializeAI();
 // ✅ Register Notification model BEFORE routes
 require('./models/Notification');
 
+// ✅ Register AgreementQuery model  
+require('./models/AgreementQuery');
+
+
+
 const app = express();
 
 /* =========================================================

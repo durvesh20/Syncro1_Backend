@@ -1,9 +1,10 @@
 // backend/controllers/agreementController.js
 const StaffingPartner = require('../models/StaffingPartner');
 const User = require('../models/User');
+const AgreementQuery = require('../models/AgreementQuery');
 const agreementPdfService = require('../services/agreementPdfService');
 
-const buildPartnerData = (partner, user, ip) => {
+const buildPartnerData = (partner, user, ip, timestamp) => {
     return {
         firmName: partner.firmName,
         registeredName: partner.firmDetails?.registeredName || partner.firmName,
@@ -18,15 +19,20 @@ const buildPartnerData = (partner, user, ip) => {
         city: partner.city,
         state: partner.state,
         documents: partner.documents,
-        agreementDate: new Date(),
-        agreedAt: new Date(),
+        agreementDate: timestamp || new Date(),
+        agreedAt: timestamp || new Date(),
         agreedIp: ip || 'N/A',
         email: user?.email
     };
 };
 
-// @desc    Get agreement status
+// ================================================================
+// PARTNER ROUTES
+// ================================================================
+
+// @desc    Get agreement status + queries
 // @route   GET /api/agreements/status
+// @access  Staffing Partner
 exports.getAgreementStatus = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -38,12 +44,29 @@ exports.getAgreementStatus = async (req, res) => {
             });
         }
 
+        // Get partner's queries
+        const queries = await AgreementQuery.find({ partner: partner._id })
+            .populate('respondedBy', 'email role')
+            .sort({ createdAt: -1 });
+
+        const pendingQueries = queries.filter(q => q.status === 'PENDING').length;
+        const unrepliedCount = pendingQueries;
+
         res.json({
             success: true,
             data: {
                 hasAgreed: !!partner.agreement?.agreed,
                 agreedAt: partner.agreement?.agreedAt || null,
-                pdfUrl: partner.agreement?.pdfUrl || null
+                pdfUrl: partner.agreement?.pdfUrl || null,
+                queries: {
+                    total: queries.length,
+                    pending: pendingQueries,
+                    responded: queries.filter(q => q.status === 'RESPONDED').length,
+                    list: queries
+                },
+                canAccept: unrepliedCount === 0
+                // Partner can accept only when no pending (unresponded) queries exist
+                // They can still accept even if they have queries — we don't force them to wait
             }
         });
     } catch (error) {
@@ -55,8 +78,133 @@ exports.getAgreementStatus = async (req, res) => {
     }
 };
 
-// @desc    Accept agreement — generates PDF, no signature required
+// @desc    Partner submits a query about a clause
+// @route   POST /api/agreements/query
+// @access  Staffing Partner
+exports.submitQuery = async (req, res) => {
+    try {
+        const { clauseReference, query } = req.body;
+
+        if (!clauseReference || !clauseReference.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Clause reference is required (e.g. Clause 9.1, Article 5)'
+            });
+        }
+
+        if (!query || query.trim().length < 10) {
+            return res.status(400).json({
+                success: false,
+                message: 'Query must be at least 10 characters'
+            });
+        }
+
+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+        if (!partner) {
+            return res.status(404).json({
+                success: false,
+                message: 'Partner profile not found'
+            });
+        }
+
+        // Cannot submit query after agreement is accepted
+        if (partner.agreement?.agreed) {
+            return res.status(400).json({
+                success: false,
+                message: 'Agreement already accepted. Cannot submit queries after acceptance.'
+            });
+        }
+
+        const agreementQuery = await AgreementQuery.create({
+            partner: partner._id,
+            user: req.user._id,
+            clauseReference: clauseReference.trim(),
+            query: query.trim(),
+            status: 'PENDING'
+        });
+
+        // Notify admin — fire and forget
+        const notifyAdmin = async () => {
+            try {
+                const notificationEngine = require('../services/notificationEngine');
+                const adminUsers = await User.find({ role: 'admin' });
+                for (const admin of adminUsers) {
+                    await notificationEngine.send({
+                        recipientId: admin._id,
+                        type: 'SYSTEM_ANNOUNCEMENT',
+                        title: `Agreement query from ${partner.firmName}`,
+                        message: `${partner.firstName} ${partner.lastName} (${partner.firmName}) has raised a query on ${clauseReference}: "${query.trim().substring(0, 100)}..."`,
+                        data: {
+                            entityType: 'AgreementQuery',
+                            entityId: agreementQuery._id,
+                            actionUrl: `/admin/agreement-queries/${agreementQuery._id}`
+                        },
+                        channels: { inApp: true, email: false },
+                        priority: 'medium'
+                    });
+                }
+            } catch (err) {
+                console.error('[AGREEMENT QUERY] Admin notification failed:', err.message);
+            }
+        };
+
+        notifyAdmin();
+
+        res.status(201).json({
+            success: true,
+            message: 'Query submitted successfully. Admin will respond within 24 hours.',
+            data: agreementQuery
+        });
+    } catch (error) {
+        console.error('[AGREEMENT QUERY] Submit error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to submit query',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Partner gets their own queries
+// @route   GET /api/agreements/queries
+// @access  Staffing Partner
+exports.getMyQueries = async (req, res) => {
+    try {
+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+        if (!partner) {
+            return res.status(404).json({
+                success: false,
+                message: 'Partner profile not found'
+            });
+        }
+
+        const queries = await AgreementQuery.find({ partner: partner._id })
+            .populate('respondedBy', 'email role')
+            .sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            data: {
+                queries,
+                total: queries.length,
+                pending: queries.filter(q => q.status === 'PENDING').length,
+                responded: queries.filter(q => q.status === 'RESPONDED').length
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch queries',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Accept agreement — generates PDF
 // @route   POST /api/agreements/accept
+// @access  Staffing Partner
 exports.acceptAgreement = async (req, res) => {
     try {
         const { agreed } = req.body;
@@ -110,10 +258,7 @@ exports.acceptAgreement = async (req, res) => {
         const user = await User.findById(req.user._id);
 
         // Generate PDF
-        const partnerData = buildPartnerData(partner, user, ipAddress);
-        partnerData.agreementDate = timestamp;
-        partnerData.agreedAt = timestamp;
-
+        const partnerData = buildPartnerData(partner, user, ipAddress, timestamp);
         const pdfResult = await agreementPdfService.generatePartnerAgreement(partnerData);
 
         // Save agreement
@@ -128,9 +273,17 @@ exports.acceptAgreement = async (req, res) => {
 
         await partner.save();
 
+        // Close all open queries on acceptance
+        await AgreementQuery.updateMany(
+            { partner: partner._id, status: { $in: ['PENDING', 'RESPONDED'] } },
+            { status: 'CLOSED' }
+        );
+
+        console.log(`[AGREEMENT] ✅ Accepted by: ${partner.firstName} ${partner.lastName}`);
+
         res.json({
             success: true,
-            message: 'Agreement accepted and PDF generated',
+            message: 'Agreement accepted and PDF generated successfully',
             data: {
                 agreed: true,
                 agreedAt: timestamp,
@@ -147,14 +300,204 @@ exports.acceptAgreement = async (req, res) => {
     }
 };
 
+// ================================================================
+// ADMIN ROUTES
+// ================================================================
+
+// @desc    Admin gets all pending agreement queries
+// @route   GET /api/agreements/admin/queries
+// @access  Admin / Sub-Admin
+exports.getAllQueries = async (req, res) => {
+    try {
+        const { status, page = 1, limit = 20 } = req.query;
+
+        const query = {};
+        if (status) query.status = status;
+
+        const sanitizedPage = Math.max(1, parseInt(page));
+        const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
+        const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+        const [queries, total] = await Promise.all([
+            AgreementQuery.find(query)
+                .populate({
+                    path: 'partner',
+                    select: 'firstName lastName firmName city state verificationStatus'
+                })
+                .populate('user', 'email mobile')
+                .populate('respondedBy', 'email role')
+                .sort({ createdAt: 1 })
+                .skip(skip)
+                .limit(sanitizedLimit),
+            AgreementQuery.countDocuments(query)
+        ]);
+
+        // Summary
+        const summary = await AgreementQuery.aggregate([
+            {
+                $group: {
+                    _id: '$status',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                queries,
+                summary: summary.reduce((acc, item) => {
+                    acc[item._id] = item.count;
+                    return acc;
+                }, {}),
+                pagination: {
+                    current: sanitizedPage,
+                    pages: Math.ceil(total / sanitizedLimit),
+                    total
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch queries',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Admin gets single query
+// @route   GET /api/agreements/admin/queries/:id
+// @access  Admin / Sub-Admin
+exports.getQuery = async (req, res) => {
+    try {
+        const query = await AgreementQuery.findById(req.params.id)
+            .populate({
+                path: 'partner',
+                select: 'firstName lastName firmName city state verificationStatus profileCompletion agreement'
+            })
+            .populate('user', 'email mobile')
+            .populate('respondedBy', 'email role');
+
+        if (!query) {
+            return res.status(404).json({
+                success: false,
+                message: 'Query not found'
+            });
+        }
+
+        // Get all queries from same partner for context
+        const partnerQueries = await AgreementQuery.find({
+            partner: query.partner._id
+        }).sort({ createdAt: -1 });
+
+        res.json({
+            success: true,
+            data: {
+                query,
+                partnerAllQueries: partnerQueries
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch query',
+            error: error.message
+        });
+    }
+};
+
+// @desc    Admin responds to a query
+// @route   PUT /api/agreements/admin/queries/:id/respond
+// @access  Admin / Sub-Admin
+exports.respondToQuery = async (req, res) => {
+    try {
+        const { response } = req.body;
+
+        if (!response || response.trim().length < 5) {
+            return res.status(400).json({
+                success: false,
+                message: 'Response is required (minimum 5 characters)'
+            });
+        }
+
+        const agreementQuery = await AgreementQuery.findById(req.params.id)
+            .populate('partner', 'firstName lastName firmName')
+            .populate('user', 'email');
+
+        if (!agreementQuery) {
+            return res.status(404).json({
+                success: false,
+                message: 'Query not found'
+            });
+        }
+
+        if (agreementQuery.status === 'CLOSED') {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot respond to a closed query'
+            });
+        }
+
+        agreementQuery.response = response.trim();
+        agreementQuery.respondedBy = req.user._id;
+        agreementQuery.respondedAt = new Date();
+        agreementQuery.status = 'RESPONDED';
+
+        await agreementQuery.save();
+
+        // Notify partner — fire and forget
+        const notifyPartner = async () => {
+            try {
+                const notificationEngine = require('../services/notificationEngine');
+
+                await notificationEngine.send({
+                    recipientId: agreementQuery.user._id || agreementQuery.user,
+                    type: 'SYSTEM_ANNOUNCEMENT',
+                    title: 'Your agreement query has been answered',
+                    message: `Your query on "${agreementQuery.clauseReference}" has been responded to. Please review the response and accept the agreement when ready.`,
+                    data: {
+                        entityType: 'AgreementQuery',
+                        entityId: agreementQuery._id,
+                        actionUrl: '/partner/agreement'
+                    },
+                    channels: { inApp: true, email: true },
+                    priority: 'high'
+                });
+            } catch (err) {
+                console.error('[AGREEMENT QUERY] Partner notification failed:', err.message);
+            }
+        };
+
+        notifyPartner();
+
+        res.json({
+            success: true,
+            message: 'Response submitted successfully. Partner has been notified.',
+            data: agreementQuery
+        });
+    } catch (error) {
+        console.error('[AGREEMENT QUERY] Respond error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to respond to query',
+            error: error.message
+        });
+    }
+};
+
 // @desc    Admin regenerates PDF with updated design
 // @route   POST /api/agreements/regenerate/:partnerId
+// @access  Admin
 exports.regenerateAgreementPdf = async (req, res) => {
     try {
         const partner = await StaffingPartner.findById(req.params.partnerId);
 
         if (!partner) {
-            return res.status(404).json({ success: false, message: 'Partner not found' });
+            return res.status(404).json({
+                success: false,
+                message: 'Partner not found'
+            });
         }
 
         if (!partner.agreement?.agreed) {
@@ -165,12 +508,12 @@ exports.regenerateAgreementPdf = async (req, res) => {
         }
 
         const user = await User.findById(partner.user);
-        const ipAddress = partner.agreement.agreedIp;
-        const timestamp = partner.agreement.agreedAt;
-
-        const partnerData = buildPartnerData(partner, user, ipAddress);
-        partnerData.agreementDate = timestamp;
-        partnerData.agreedAt = timestamp;
+        const partnerData = buildPartnerData(
+            partner,
+            user,
+            partner.agreement.agreedIp,
+            partner.agreement.agreedAt
+        );
 
         const pdfResult = await agreementPdfService.generatePartnerAgreement(partnerData);
 

@@ -3,22 +3,82 @@ const express = require('express');
 const router = express.Router();
 
 const {
-    acceptAgreement,
     getAgreementStatus,
+    submitQuery,
+    getMyQueries,
+    acceptAgreement,
+    getAllQueries,
+    getQuery,
+    respondToQuery,
     regenerateAgreementPdf
 } = require('../controllers/agreementController');
 
-const { protect, authorize } = require('../middleware/auth');
+const {
+    protect,
+    authorize,
+    authorizeAdminAccess,
+    checkPermission
+} = require('../middleware/auth');
 
-// Partner routes
-router.use(protect);
+const { PERMISSIONS } = require('../utils/permissions');
 
-router.get('/status', authorize('staffing_partner'), getAgreementStatus);
-router.post('/accept', authorize('staffing_partner'), acceptAgreement);
+// ==================== PARTNER ROUTES ====================
+router.get(
+    '/status',
+    protect,
+    authorize('staffing_partner'),
+    getAgreementStatus
+);
 
-// Admin only - regenerate PDF with new design
+router.get(
+    '/queries',
+    protect,
+    authorize('staffing_partner'),
+    getMyQueries
+);
+
+router.post(
+    '/query',
+    protect,
+    authorize('staffing_partner'),
+    submitQuery
+);
+
+router.post(
+    '/accept',
+    protect,
+    authorize('staffing_partner'),
+    acceptAgreement
+);
+
+// ==================== ADMIN ROUTES ====================
+router.get(
+    '/admin/queries',
+    protect,
+    authorizeAdminAccess,
+    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+    getAllQueries
+);
+
+router.get(
+    '/admin/queries/:id',
+    protect,
+    authorizeAdminAccess,
+    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+    getQuery
+);
+
+router.put(
+    '/admin/queries/:id/respond',
+    protect,
+    authorizeAdminAccess,
+    checkPermission(PERMISSIONS.APPROVE_PARTNER),
+    respondToQuery
+);
+
 router.post(
     '/regenerate/:partnerId',
+    protect,
     authorize('admin'),
     regenerateAgreementPdf
 );
