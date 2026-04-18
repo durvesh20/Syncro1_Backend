@@ -14,7 +14,7 @@ module.exports = function sendTokenResponse(res, token, user, extra = {}) {
   return res.json({
     success: true,
     data: {
-      token,      
+      token,
       user,
       ...extra
     }

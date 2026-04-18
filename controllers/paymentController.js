@@ -57,9 +57,9 @@ exports.createOrder = async (req, res) => {
       return res.json({
         success: true,
         message: 'Free plan activated successfully',
-        data: { 
+        data: {
           plan: 'FREE',
-          subscription: partner.subscription 
+          subscription: partner.subscription
         }
       });
     }
@@ -285,7 +285,7 @@ exports.verifyPayment = async (req, res) => {
 exports.getSubscriptions = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
-    
+
     if (!partner) {
       return res.status(404).json({
         success: false,
@@ -318,7 +318,7 @@ exports.getSubscriptions = async (req, res) => {
 exports.getCurrentSubscription = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
-    
+
     if (!partner) {
       return res.status(404).json({
         success: false,
@@ -336,7 +336,7 @@ exports.getCurrentSubscription = async (req, res) => {
         subscription: partner.subscription,
         planDetails,
         isActive: partner.subscription?.isActive || false,
-        daysRemaining: partner.subscription?.endDate 
+        daysRemaining: partner.subscription?.endDate
           ? Math.max(0, Math.ceil((new Date(partner.subscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)))
           : 0
       }

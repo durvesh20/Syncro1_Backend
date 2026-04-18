@@ -171,8 +171,6 @@ const staffingPartnerSchema = new mongoose.Schema({
     digitalSignature: String,
     termsAccepted: { type: Boolean, default: false },
     ndaSigned: { type: Boolean, default: false },
-    agreementSigned: { type: Boolean, default: false },
-    agreementSignedAt: Date
   },
 
   // ==================== 6. COMMERCIAL & PAYOUT PREFERENCES (MERGED) ====================
@@ -275,9 +273,17 @@ const staffingPartnerSchema = new mongoose.Schema({
     documents: { type: Boolean, default: false }
   },
 
-  isActive: { type: Boolean, default: true }
-}, {
-  timestamps: true
+  // ==================== AGREEMENT ====================
+  agreement: {
+    agreed: { type: Boolean, default: false },
+    agreedAt: Date,
+    agreedIp: String,
+    digitalSignature: String,
+    pdfUrl: String,
+    pdfPublicId: String,
+    generatedAt: Date,
+    regeneratedAt: Date
+  },
 });
 
 staffingPartnerSchema.virtual('fullName').get(function () {

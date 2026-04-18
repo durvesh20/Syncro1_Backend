@@ -20,6 +20,10 @@ const { testConnection: testCloudinary } = require('./config/cloudinary');
 testCloudinary();
 
 
+// Initialize AI
+const { initializeAI } = require('./config/ai');
+initializeAI();
+
 // ✅ Register Notification model BEFORE routes
 require('./models/Notification');
 
@@ -157,6 +161,11 @@ app.use('/api/onboarding', onboardingRoutes);
 // ✅ Newly added routes
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/invoices', require('./routes/invoiceRoutes'));
+app.use('/api/ai', require('./routes/aiRoutes'));
+
+app.use('/api/agreements', require('./routes/agreementRoutes'));
+
+
 /* =========================================================
    ERROR HANDLER
 ========================================================= */
@@ -250,6 +259,13 @@ const server = app.listen(PORT, () => {
       ? '☁️ Configured'
       : '⚠️ Not configured (check .env)')
   );
+  console.log(
+    '   AI:         ' +
+    (process.env.AI_ENABLED === 'true' && process.env.GEMINI_API_KEY
+      ? '🤖 Enabled (' + (process.env.GEMINI_MODEL || 'gemini-1.5-flash') + ')'
+      : '⏸️  Disabled')
+  );
+
   console.log('═══════════════════════════════════════════════════════');
   console.log('');
 });

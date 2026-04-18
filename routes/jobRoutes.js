@@ -8,9 +8,9 @@ const Company = require('../models/Company');
 // @route   GET /api/jobs/:slug
 router.get('/:slug', async (req, res) => {
   try {
-    const job = await Job.findOne({ 
-      slug: req.params.slug, 
-      status: 'ACTIVE' 
+    const job = await Job.findOne({
+      slug: req.params.slug,
+      status: 'ACTIVE'
     }).populate('company', 'companyName kyc.logo kyc.industry kyc.companyType kyc.website kyc.description');
 
     if (!job) {

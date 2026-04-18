@@ -185,9 +185,6 @@ router.post(
   }
 );
 
-
-
-
 // Submit for Verification
 router.post('/profile/submit', submitProfile);
 
