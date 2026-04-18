@@ -3,10 +3,7 @@ const StaffingPartner = require('../models/StaffingPartner');
 const User = require('../models/User');
 const agreementPdfService = require('../services/agreementPdfService');
 
-/**
- * Build partner data for agreement template
- */
-const buildPartnerData = (partner, user, signature, ip) => {
+const buildPartnerData = (partner, user, ip) => {
     return {
         firmName: partner.firmName,
         registeredName: partner.firmDetails?.registeredName || partner.firmName,
@@ -22,16 +19,14 @@ const buildPartnerData = (partner, user, signature, ip) => {
         state: partner.state,
         documents: partner.documents,
         agreementDate: new Date(),
-        digitalSignature: signature || `${partner.firstName} ${partner.lastName}`,
-        signedAt: new Date(),
-        signedIp: ip || 'N/A',
+        agreedAt: new Date(),
+        agreedIp: ip || 'N/A',
         email: user?.email
     };
 };
 
 // @desc    Get agreement status
 // @route   GET /api/agreements/status
-// @access  Staffing Partner
 exports.getAgreementStatus = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -48,8 +43,7 @@ exports.getAgreementStatus = async (req, res) => {
             data: {
                 hasAgreed: !!partner.agreement?.agreed,
                 agreedAt: partner.agreement?.agreedAt || null,
-                pdfUrl: partner.agreement?.pdfUrl || null,
-                digitalSignature: partner.agreement?.digitalSignature || null
+                pdfUrl: partner.agreement?.pdfUrl || null
             }
         });
     } catch (error) {
@@ -61,24 +55,16 @@ exports.getAgreementStatus = async (req, res) => {
     }
 };
 
-// @desc    Accept agreement — generates ONE PDF, saves, done
+// @desc    Accept agreement — generates PDF, no signature required
 // @route   POST /api/agreements/accept
-// @access  Staffing Partner
 exports.acceptAgreement = async (req, res) => {
     try {
-        const { digitalSignature, agreed } = req.body;
+        const { agreed } = req.body;
 
         if (!agreed) {
             return res.status(400).json({
                 success: false,
                 message: 'You must agree to the terms'
-            });
-        }
-
-        if (!digitalSignature || digitalSignature.trim().length < 2) {
-            return res.status(400).json({
-                success: false,
-                message: 'Digital signature is required (type your full name)'
             });
         }
 
@@ -91,43 +77,50 @@ exports.acceptAgreement = async (req, res) => {
             });
         }
 
-        if (partner.agreement?.agreed) {
+        // Already accepted
+        if (partner.agreement?.agreed && partner.agreement?.pdfUrl) {
             return res.json({
                 success: true,
                 message: 'Agreement already accepted',
                 data: {
                     agreed: true,
                     agreedAt: partner.agreement.agreedAt,
-                    pdfUrl: partner.agreement.pdfUrl,
-                    digitalSignature: partner.agreement.digitalSignature
+                    pdfUrl: partner.agreement.pdfUrl
                 }
             });
         }
 
-        const ipAddress =
-            req.ip ||
-            req.headers['x-forwarded-for'] ||
-            req.connection.remoteAddress;
-        const timestamp = new Date();
+        // Check profile completion
+        const required = [
+            'basicInfo', 'firmDetails', 'Syncro1Competency',
+            'geographicReach', 'compliance', 'commercialDetails', 'documents'
+        ];
+        const incomplete = required.filter(s => !partner.profileCompletion[s]);
 
+        if (incomplete.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Complete all profile sections before accepting the agreement',
+                incompleteSections: incomplete
+            });
+        }
+
+        const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+        const timestamp = new Date();
         const user = await User.findById(req.user._id);
 
-        // Build data and generate ONE PDF
-        const partnerData = buildPartnerData(
-            partner,
-            user,
-            digitalSignature.trim(),
-            ipAddress
-        );
+        // Generate PDF
+        const partnerData = buildPartnerData(partner, user, ipAddress);
+        partnerData.agreementDate = timestamp;
+        partnerData.agreedAt = timestamp;
 
         const pdfResult = await agreementPdfService.generatePartnerAgreement(partnerData);
 
-        // Save agreement — ONE record, ONE PDF
+        // Save agreement
         partner.agreement = {
             agreed: true,
             agreedAt: timestamp,
             agreedIp: ipAddress,
-            digitalSignature: digitalSignature.trim(),
             pdfUrl: pdfResult.url,
             pdfPublicId: pdfResult.publicId,
             generatedAt: pdfResult.generatedAt
@@ -141,8 +134,7 @@ exports.acceptAgreement = async (req, res) => {
             data: {
                 agreed: true,
                 agreedAt: timestamp,
-                pdfUrl: pdfResult.url,
-                digitalSignature: digitalSignature.trim()
+                pdfUrl: pdfResult.url
             }
         });
     } catch (error) {
@@ -154,22 +146,15 @@ exports.acceptAgreement = async (req, res) => {
         });
     }
 };
-// @desc    Admin regenerates agreement PDF for a partner (design update)
+
+// @desc    Admin regenerates PDF with updated design
 // @route   POST /api/agreements/regenerate/:partnerId
-// @access  Admin only
 exports.regenerateAgreementPdf = async (req, res) => {
     try {
-        const StaffingPartner = require('../models/StaffingPartner');
-        const User = require('../models/User');
-        const agreementPdfService = require('../services/agreementPdfService');
-
         const partner = await StaffingPartner.findById(req.params.partnerId);
 
         if (!partner) {
-            return res.status(404).json({
-                success: false,
-                message: 'Partner not found'
-            });
+            return res.status(404).json({ success: false, message: 'Partner not found' });
         }
 
         if (!partner.agreement?.agreed) {
@@ -180,56 +165,33 @@ exports.regenerateAgreementPdf = async (req, res) => {
         }
 
         const user = await User.findById(partner.user);
+        const ipAddress = partner.agreement.agreedIp;
+        const timestamp = partner.agreement.agreedAt;
 
-        // Use original agreement details (not new ones)
-        const partnerData = {
-            firmName: partner.firmName,
-            registeredName: partner.firmDetails?.registeredName || partner.firmName,
-            entityType: partner.firmDetails?.entityType,
-            registeredAddress: partner.firmDetails?.registeredOfficeAddress,
-            firstName: partner.firstName,
-            lastName: partner.lastName,
-            designation: partner.designation,
-            panNumber: partner.firmDetails?.panNumber,
-            gstNumber: partner.firmDetails?.gstNumber,
-            cinNumber: partner.firmDetails?.cinNumber,
-            city: partner.city,
-            state: partner.state,
-            documents: partner.documents,
-            // Keep original signing details
-            agreementDate: partner.agreement.agreedAt,
-            digitalSignature: partner.agreement.digitalSignature,
-            signedAt: partner.agreement.agreedAt,
-            signedIp: partner.agreement.agreedIp,
-            email: user?.email
-        };
+        const partnerData = buildPartnerData(partner, user, ipAddress);
+        partnerData.agreementDate = timestamp;
+        partnerData.agreedAt = timestamp;
 
-        console.log(`[AGREEMENT] Regenerating PDF for: ${partner.firmName}`);
         const pdfResult = await agreementPdfService.generatePartnerAgreement(partnerData);
 
-        // Update only the PDF URL — keep all agreement acceptance details unchanged
         partner.agreement.pdfUrl = pdfResult.url;
         partner.agreement.pdfPublicId = pdfResult.publicId;
         partner.agreement.regeneratedAt = new Date();
         await partner.save();
 
-        console.log(`[AGREEMENT] ✅ PDF regenerated: ${pdfResult.url}`);
-
         res.json({
             success: true,
-            message: 'Agreement PDF regenerated successfully',
+            message: 'Agreement PDF regenerated',
             data: {
                 pdfUrl: pdfResult.url,
-                regeneratedAt: partner.agreement.regeneratedAt,
-                originalAgreedAt: partner.agreement.agreedAt,
-                digitalSignature: partner.agreement.digitalSignature
+                regeneratedAt: partner.agreement.regeneratedAt
             }
         });
     } catch (error) {
         console.error('[AGREEMENT] Regenerate error:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to regenerate agreement PDF',
+            message: 'Failed to regenerate',
             error: error.message
         });
     }

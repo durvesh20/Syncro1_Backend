@@ -278,7 +278,6 @@ const staffingPartnerSchema = new mongoose.Schema({
     agreed: { type: Boolean, default: false },
     agreedAt: Date,
     agreedIp: String,
-    digitalSignature: String,
     pdfUrl: String,
     pdfPublicId: String,
     generatedAt: Date,
