@@ -8,7 +8,7 @@ const duplicateDetection = require("../services/duplicateDetectionService");
 const notificationEngine = require("../services/notificationEngine");
 const jobAccessService = require("../services/jobAccessService");
 const candidateScoringService = require("../services/candidateScoringService");
-
+const JobInterest = require('../models/JobInterest');
 // @desc    Get Staffing Partner Profile
 // @route   GET /api/staffing-partners/profile
 exports.getProfile = async (req, res) => {
@@ -1031,6 +1031,34 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
+    // Check if partner has shown interest in this job
+    const interest = await JobInterest.findOne({
+      partner: partner._id,
+      job: job._id,
+      status: 'ACTIVE'
+    });
+
+    if (!interest) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please show interest in this job before submitting candidates',
+        action: 'SHOW_INTEREST_FIRST'
+      });
+    }
+
+    // Check submission limit
+    if (interest.submissionCount >= interest.submissionLimit) {
+      return res.status(403).json({
+        success: false,
+        message: `You have reached your submission limit of ${interest.submissionLimit} for this job. Request a limit extension from admin.`,
+        data: {
+          submissionCount: interest.submissionCount,
+          submissionLimit: interest.submissionLimit,
+          action: 'REQUEST_EXTENSION'
+        }
+      });
+    }
+
     const partnerPlan = partner.subscription?.plan || "FREE";
     if (
       job.eligiblePlans &&
@@ -1130,12 +1158,65 @@ exports.submitCandidate = async (req, res) => {
       ],
     });
 
+    // Increment interest submission count
+    await JobInterest.findByIdAndUpdate(interest._id, {
+      $inc: { submissionCount: 1 }
+    });
+
     await Job.findByIdAndUpdate(job._id, {
       $inc: { "metrics.applications": 1 },
     });
     await StaffingPartner.findByIdAndUpdate(partner._id, {
       $inc: { "metrics.totalSubmissions": 1 },
     });
+
+
+    // ================================
+    // Candidate Consent Notification
+    // ================================
+    const sendCandidateConsent = async () => {
+      try {
+        const emailService = require('../services/emailService');
+        const whatsappService = require('../services/whatsappService');
+
+        await emailService.sendEmail({
+          to: email.toLowerCase(),
+          subject: `Your profile has been submitted for ${job.title} — Syncro1`,
+          html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Syncro1</h2>
+          <p>Dear ${firstName} ${lastName},</p>
+
+          <p>Your profile has been submitted for:</p>
+
+          <div style="padding:10px; background:#eef; border-left:4px solid #3b82f6;">
+            <p><strong>Position:</strong> ${job.title}</p>
+            <p><strong>Submitted by:</strong> ${partner.firmName}</p>
+          </div>
+
+          <p>If you did not consent, contact support@syncro1.com</p>
+        </div>
+      `
+        });
+
+        console.log(`[CONSENT] Email sent to ${email}`);
+
+        if (mobile) {
+          await whatsappService.sendMessage(
+            mobile,
+            `Hi ${firstName}, your profile was submitted for ${job.title} via Syncro1 by ${partner.firmName}. If this was not authorized, contact support@syncro1.com`
+          );
+        }
+
+        console.log(`[CONSENT] WhatsApp sent to ${mobile}`);
+      } catch (err) {
+        console.error('[CONSENT] Failed:', err.message);
+      }
+    };
+
+    // fire-and-forget
+    sendCandidateConsent();
+
 
     const company = await Company.findById(job.company).populate("user", "_id");
 

@@ -67,7 +67,7 @@ class JobAccessService {
     if (filters.salaryMax) query['salary.min'] = { $lte: Number(filters.salaryMax) };
 
     // Sorting
-    let sort = { isFeatured: -1, isUrgent: -1, createdAt: -1 }; // Default
+    let sort = { 'metrics.interestedPartners': -1, isFeatured: -1, isUrgent: -1, createdAt: -1 };
     switch (filters.sortBy) {
       case 'newest': sort = { createdAt: -1 }; break;
       case 'oldest': sort = { createdAt: 1 }; break;
