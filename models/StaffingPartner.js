@@ -240,13 +240,15 @@ const staffingPartnerSchema = new mongoose.Schema({
   metrics: {
     totalSubmissions: { type: Number, default: 0 },
     totalPlacements: { type: Number, default: 0 },
-    // Commission tracking
-    totalEarnings: { type: Number, default: 0 },      // Lifetime earnings (sum of all paid commissions)
-    pendingPayouts: { type: Number, default: 0 },     // Commissions waiting for 90-day period
-    eligiblePayouts: { type: Number, default: 0 },    // Ready for withdrawal
-    paidOut: { type: Number, default: 0 },            // Already paid to bank
-    forfeitedAmount: { type: Number, default: 0 },    // Lost due to early exits
-    // Rating
+    totalJobsInterested: { type: Number, default: 0 },
+    totalShortlisted: { type: Number, default: 0 },
+    totalInterviewed: { type: Number, default: 0 },
+    totalOffered: { type: Number, default: 0 },
+    totalEarnings: { type: Number, default: 0 },
+    pendingPayouts: { type: Number, default: 0 },
+    eligiblePayouts: { type: Number, default: 0 },
+    paidOut: { type: Number, default: 0 },
+    forfeitedAmount: { type: Number, default: 0 },
     rating: { type: Number, default: 0, min: 0, max: 5 },
     totalRatings: { type: Number, default: 0 }
   },

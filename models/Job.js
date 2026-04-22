@@ -227,7 +227,8 @@ const jobSchema = new mongoose.Schema({
     shortlisted: { type: Number, default: 0 },
     interviewed: { type: Number, default: 0 },
     offered: { type: Number, default: 0 },
-    joined: { type: Number, default: 0 }
+    joined: { type: Number, default: 0 },
+    interestedPartners: { type: Number, default: 0 }
   },
 
   // ==================== MISC ====================

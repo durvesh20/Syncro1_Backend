@@ -30,8 +30,11 @@ require('./models/Notification');
 // ✅ Register AgreementQuery model  
 require('./models/AgreementQuery');
 
+require('./models/JobInterest');
+require('./models/LimitExtensionRequest');
 
-
+app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
+app.use('/api/agreements', require('./routes/agreementRoutes'));
 const app = express();
 
 /* =========================================================
