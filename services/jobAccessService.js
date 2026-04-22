@@ -84,8 +84,12 @@ class JobAccessService {
 
     // ✅ FIX #7: Single aggregation with $lookup (optimized N+1)
     // Convert partnerId to ObjectId for $lookup matching
-    const partnerObjectId = mongoose.Types.ObjectId(partnerId);
-
+    let partnerObjectId;
+    try {
+      partnerObjectId = new mongoose.Types.ObjectId(partnerId.toString());
+    } catch (err) {
+      partnerObjectId = partnerId; // fallback (handles string IDs safely in some cases)
+    }
     const jobs = await Job.aggregate([
       { $match: query },
       { $sort: sort },
@@ -106,15 +110,25 @@ class JobAccessService {
                 }
               }
             },
-            { $group: { _id: null, count: { $sum: 1 }, latestStatus: { $last: '$status' } } }
+            {
+              $group: {
+                _id: null,
+                count: { $sum: 1 },
+                latestStatus: { $last: '$status' }
+              }
+            }
           ],
           as: 'mySubmissions'
         }
       },
       {
         $addFields: {
-          '_meta.mySubmissions': { $ifNull: [{ $arrayElemAt: ['$mySubmissions.count', 0] }, 0] },
-          '_meta.myLatestStatus': { $arrayElemAt: ['$mySubmissions.latestStatus', 0] }
+          '_meta.mySubmissions': {
+            $ifNull: [{ $arrayElemAt: ['$mySubmissions.count', 0] }, 0]
+          },
+          '_meta.myLatestStatus': {
+            $arrayElemAt: ['$mySubmissions.latestStatus', 0]
+          }
         }
       }
     ]);

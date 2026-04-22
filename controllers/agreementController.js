@@ -44,13 +44,13 @@ exports.getAgreementStatus = async (req, res) => {
             });
         }
 
-        // Get partner's queries
+        // Get queries
         const queries = await AgreementQuery.find({ partner: partner._id })
             .populate('respondedBy', 'email role')
             .sort({ createdAt: -1 });
 
         const pendingQueries = queries.filter(q => q.status === 'PENDING').length;
-        const unrepliedCount = pendingQueries;
+        const respondedQueries = queries.filter(q => q.status === 'RESPONDED').length;
 
         res.json({
             success: true,
@@ -58,15 +58,19 @@ exports.getAgreementStatus = async (req, res) => {
                 hasAgreed: !!partner.agreement?.agreed,
                 agreedAt: partner.agreement?.agreedAt || null,
                 pdfUrl: partner.agreement?.pdfUrl || null,
-                queries: {
+
+                // Review and discuss fields
+                isReviewAndDiscuss: queries.length > 0,
+                hasOpenQueries: pendingQueries > 0,
+                hasPendingQueries: pendingQueries > 0,
+                hasRespondedQueries: respondedQueries > 0,
+                querySummary: {
                     total: queries.length,
                     pending: pendingQueries,
-                    responded: queries.filter(q => q.status === 'RESPONDED').length,
-                    list: queries
+                    responded: respondedQueries,
+                    closed: queries.filter(q => q.status === 'CLOSED').length
                 },
-                canAccept: unrepliedCount === 0
-                // Partner can accept only when no pending (unresponded) queries exist
-                // They can still accept even if they have queries — we don't force them to wait
+                queries: queries
             }
         });
     } catch (error) {

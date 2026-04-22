@@ -1246,26 +1246,37 @@ exports.approveEditRequest = async (req, res) => {
     for (const [field, change] of Object.entries(changes)) {
       try {
         const keys = field.split('.');
-        let target = job;
 
+        // Navigate and set the value
+        let target = job;
         for (let i = 0; i < keys.length - 1; i++) {
-          if (!target[keys[i]]) target[keys[i]] = {};
+          if (target[keys[i]] === undefined || target[keys[i]] === null) {
+            target[keys[i]] = {};
+          }
           target = target[keys[i]];
         }
 
         const lastKey = keys[keys.length - 1];
-        const oldValue = target[lastKey];
+        const oldValue = JSON.parse(JSON.stringify(target[lastKey] ?? null));
+        target[lastKey] = change.new;
 
         appliedChanges[field] = {
           old: oldValue,
           new: change.new
         };
 
-        target[lastKey] = change.new;
+        // Mark nested fields as modified for Mongoose
+        const topLevelKey = keys[0];
+        job.markModified(topLevelKey);
+
       } catch (err) {
-        console.error(`Failed to apply change for field ${field}:`, err);
+        console.error(`[EDIT REQUEST] Failed to apply field ${field}:`, err.message);
       }
     }
+
+    // Also mark all top level keys as modified
+    const topLevelKeys = [...new Set(Object.keys(changes).map(f => f.split('.')[0]))];
+    topLevelKeys.forEach(key => job.markModified(key));
 
     job.applyEditChanges(appliedChanges);
     job.approvalStatus = 'ACTIVE';

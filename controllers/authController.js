@@ -810,13 +810,7 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (user.status === 'REJECTED') {
-      return res.status(403).json({
-        success: false,
-        message: 'Your account has been rejected.',
-        code: 'ACCOUNT_REJECTED'
-      });
-    }
+
 
     user.lastLogin = new Date();
     await user.save();
