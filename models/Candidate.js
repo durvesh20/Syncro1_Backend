@@ -40,7 +40,6 @@ const candidateSchema = new mongoose.Schema({
     required: true
   },
 
-  // Consent
   consent: {
     given: {
       type: Boolean,
@@ -48,10 +47,23 @@ const candidateSchema = new mongoose.Schema({
       default: false
     },
     givenAt: Date,
-    consentDocument: String,
-    ipAddress: String
-  },
+    ipAddress: String,
 
+    // Candidate's own consent confirmation
+    consentToken: {
+      type: String,
+      index: true,
+      sparse: true
+    },
+    consentStatus: {
+      type: String,
+      enum: ['PENDING_CONFIRMATION', 'CONFIRMED', 'DENIED'],
+      default: 'PENDING_CONFIRMATION'
+    },
+    consentConfirmedAt: Date,
+    consentDeniedAt: Date,
+    consentIp: String
+  },
   // Resume
   resume: {
     url: String,

@@ -21,6 +21,7 @@ testCloudinary();
 
 
 // Initialize AI
+// Initialize AI
 const { initializeAI } = require('./config/ai');
 initializeAI();
 
@@ -30,12 +31,21 @@ require('./models/Notification');
 // ✅ Register AgreementQuery model  
 require('./models/AgreementQuery');
 
+// ===================== PART 10 FIX =====================
+// Register new models
+require('./models/AdminActionLog');
 require('./models/JobInterest');
 require('./models/LimitExtensionRequest');
 
+// =======================================================
+
+// (IMPORTANT: app must exist before using app.use)
+const app = express();
+
+// Mount new routes
 app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
 app.use('/api/agreements', require('./routes/agreementRoutes'));
-const app = express();
+app.use('/api/ai', require('./routes/aiRoutes'));
 
 /* =========================================================
    SECURITY MIDDLEWARE

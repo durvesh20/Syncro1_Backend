@@ -25,19 +25,17 @@ const notificationSchema = new mongoose.Schema({
       'CANDIDATE_JOINED',
       'CANDIDATE_REJECTED',
       'CANDIDATE_ON_HOLD',
+      'CANDIDATE_WITHDRAWN',
 
       // Candidate submission — sent to COMPANY
       'NEW_CANDIDATE_SUBMITTED',
-
-      // ✅ NEW: Candidate
-      'CANDIDATE_WITHDRAWN',
 
       // Job notifications — sent to PARTNER
       'NEW_JOB_MATCHED',
       'JOB_CLOSING_SOON',
       'JOB_CLOSED',
 
-      // ✅ NEW: Job approval workflow
+      // Job approval workflow
       'JOB_SUBMITTED_FOR_APPROVAL',
       'JOB_APPROVED',
       'JOB_REJECTED',
@@ -52,18 +50,31 @@ const notificationSchema = new mongoose.Schema({
       'SUBSCRIPTION_EXPIRING',
       'SUBSCRIPTION_EXPIRED',
 
-      // ✅ NEW: Payout notifications
+      // Payout notifications
       'PAYOUT_ELIGIBLE',
       'PAYOUT_APPROVED',
       'PAYOUT_PAID',
       'PAYOUT_FORFEITED',
       'PAYOUT_ON_HOLD',
 
-      // ✅ NEW: Invoice notifications
+      // Invoice notifications
       'INVOICE_GENERATED',
       'INVOICE_SENT',
       'INVOICE_PAID',
       'INVOICE_OVERDUE',
+
+      // Job interest and extension
+      'LIMIT_EXTENSION_REQUESTED',
+      'LIMIT_EXTENSION_APPROVED',
+      'LIMIT_EXTENSION_REJECTED',
+
+      // Agreement
+      'AGREEMENT_QUERY_SUBMITTED',
+      'AGREEMENT_QUERY_RESPONDED',
+
+      // Candidate consent
+      'CANDIDATE_CONSENT_CONFIRMED',
+      'CANDIDATE_CONSENT_DENIED',
 
       // System
       'SYSTEM_ANNOUNCEMENT'

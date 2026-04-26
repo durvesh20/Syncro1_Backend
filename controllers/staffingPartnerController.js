@@ -972,37 +972,84 @@ exports.getAvailableJobs = async (req, res) => {
 // @route   GET /api/staffing-partners/jobs/:id
 exports.getJobDetails = async (req, res) => {
   try {
-    const job = await Job.findById(req.params.id).populate(
-      "company",
-      "companyName kyc.logo kyc.industry kyc.companyType kyc.website",
-    );
+    const job = await Job.findById(req.params.id)
+      .populate(
+        'company',
+        [
+          'companyName',
+          'kyc.logo',
+          'kyc.industry',
+          'kyc.companyType',
+          'kyc.yearEstablished',
+          'kyc.employeeCount',
+          'kyc.description',
+          'kyc.website',
+          'city',
+          'state',
+          'hiringPreferences.workModePreference',
+          'hiringPreferences.typicalCtcBand',
+          'hiringPreferences.avgMonthlyHiringVolume',
+          'metrics.totalHires',
+          'metrics.totalJobsPosted'
+        ].join(' ')
+      );
 
     if (!job) {
       return res.status(404).json({
         success: false,
-        message: "Job not found",
+        message: 'Job not found'
       });
     }
 
     job.metrics.views += 1;
     await job.save();
 
+    // Build safe company profile for vendor
+    const company = job.company;
+    const safeCompanyInfo = company ? {
+      companyName: company.companyName,
+      logo: company.kyc?.logo || null,
+      industry: company.kyc?.industry || null,
+      companyType: company.kyc?.companyType || null,
+      yearEstablished: company.kyc?.yearEstablished || null,
+      employeeCount: company.kyc?.employeeCount || null,
+      description: company.kyc?.description || null,
+      website: company.kyc?.website || null,
+      location: {
+        city: company.city || null,
+        state: company.state || null
+      },
+      workMode: company.hiringPreferences?.workModePreference || null,
+      typicalCtcBand: company.hiringPreferences?.typicalCtcBand || null,
+      hiringVolume: company.hiringPreferences?.avgMonthlyHiringVolume || null,
+      platformStats: {
+        totalHires: company.metrics?.totalHires || 0,
+        totalJobsPosted: company.metrics?.totalJobsPosted || 0
+      }
+    } : null;
+
+    // Build clean job response
+    const jobData = job.toObject();
+    delete jobData.company; // remove full company object
+
     res.json({
       success: true,
       data: {
-        job,
-        shareableLink: job.shareableLink,
-      },
+        job: {
+          ...jobData,
+          company: safeCompanyInfo // replace with safe version
+        },
+        shareableLink: job.shareableLink
+      }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to fetch job",
-      error: error.message,
+      message: 'Failed to fetch job',
+      error: error.message
     });
   }
 };
-
 // @desc    Submit Candidate for a Job
 // @route   POST /api/staffing-partners/jobs/:jobId/candidates
 exports.submitCandidate = async (req, res) => {
@@ -1176,43 +1223,66 @@ exports.submitCandidate = async (req, res) => {
     // ================================
     const sendCandidateConsent = async () => {
       try {
+        const crypto = require('crypto');
         const emailService = require('../services/emailService');
-        const whatsappService = require('../services/whatsappService');
+
+        // Generate secure consent token
+        const consentToken = crypto.randomBytes(32).toString('hex');
+        const consentExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+        // Save token to candidate
+        await Candidate.findByIdAndUpdate(candidate._id, {
+          'consent.consentToken': consentToken,
+          'consent.consentStatus': 'PENDING_CONFIRMATION'
+        });
+
+        const confirmUrl = `${process.env.FRONTEND_URL}/consent/confirm?token=${consentToken}`;
+        const denyUrl = `${process.env.FRONTEND_URL}/consent/deny?token=${consentToken}`;
 
         await emailService.sendEmail({
           to: email.toLowerCase(),
-          subject: `Your profile has been submitted for ${job.title} — Syncro1`,
+          subject: `Your profile has been submitted for ${job.title} — Action Required`,
           html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Syncro1</h2>
-          <p>Dear ${firstName} ${lastName},</p>
-
-          <p>Your profile has been submitted for:</p>
-
-          <div style="padding:10px; background:#eef; border-left:4px solid #3b82f6;">
-            <p><strong>Position:</strong> ${job.title}</p>
-            <p><strong>Submitted by:</strong> ${partner.firmName}</p>
+          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px 10px 0 0;">
+            <h1 style="margin: 0; font-size: 20px;">Syncro1</h1>
+            <p style="margin: 5px 0 0 0; opacity: 0.9;">Profile Submission — Your Action Required</p>
           </div>
-
-          <p>If you did not consent, contact support@syncro1.com</p>
+          <div style="padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb;">
+            <p>Dear ${firstName} ${lastName},</p>
+            <p>Your profile has been submitted for the following opportunity through Syncro1 platform:</p>
+            <div style="background: #dbeafe; border-left: 4px solid #3b82f6; padding: 15px; margin: 20px 0; border-radius: 4px;">
+              <p><strong>Position:</strong> ${job.title}</p>
+              <p><strong>Submitted by:</strong> ${partner.firmName}</p>
+              <p><strong>Platform:</strong> Syncro1 Private Limited</p>
+            </div>
+            <p>Please confirm whether you consent to this submission:</p>
+            <div style="text-align: center; margin: 30px 0;">
+              <a href="${confirmUrl}"
+                 style="background: #10b981; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-right: 15px;">
+                ✅ Yes, I Consent
+              </a>
+              <a href="${denyUrl}"
+                 style="background: #ef4444; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+                ❌ No, I Do Not Consent
+              </a>
+            </div>
+            <p style="font-size: 12px; color: #666;">This link expires in 7 days. If you did not authorise this submission, please click "No, I Do Not Consent" immediately.</p>
+          </div>
+          <div style="text-align: center; padding: 15px; color: #6b7280; font-size: 11px;">
+            © ${new Date().getFullYear()} Syncro1 Private Limited
+          </div>
         </div>
       `
         });
 
-        console.log(`[CONSENT] Email sent to ${email}`);
-
-        if (mobile) {
-          await whatsappService.sendMessage(
-            mobile,
-            `Hi ${firstName}, your profile was submitted for ${job.title} via Syncro1 by ${partner.firmName}. If this was not authorized, contact support@syncro1.com`
-          );
-        }
-
-        console.log(`[CONSENT] WhatsApp sent to ${mobile}`);
+        console.log(`[CONSENT] ✅ Consent email sent to: ${email}`);
       } catch (err) {
         console.error('[CONSENT] Failed:', err.message);
       }
     };
+
+    sendCandidateConsent();
 
     // fire-and-forget
     sendCandidateConsent();

@@ -1,0 +1,3836 @@
+diff --git a/agreement-changes.diff b/agreement-changes.diff
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/all_changes.patch b/all_changes.patch
+deleted file mode 100644
+index 818eab4..0000000
+--- a/all_changes.patch
++++ /dev/null
+@@ -1,1338 +0,0 @@
+-diff --git a/controllers/jobInterestController.js b/controllers/jobInterestController.js
+-new file mode 100644
+-index 0000000..fe0a180
+---- /dev/null
+-+++ b/controllers/jobInterestController.js
+-@@ -0,0 +1,927 @@
+-+// backend/controllers/jobInterestController.js
+-+const JobInterest = require('../models/JobInterest');
+-+const LimitExtensionRequest = require('../models/LimitExtensionRequest');
+-+const StaffingPartner = require('../models/StaffingPartner');
+-+const Job = require('../models/Job');
+-+const User = require('../models/User');
+-+
+-+// ================================================================
+-+// PARTNER ROUTES
+-+// ================================================================
+-+
+-+// @desc    Partner shows interest in a job
+-+// @route   POST /api/job-interests/:jobId/interest
+-+// @access  Staffing Partner
+-+exports.showInterest = async (req, res) => {
+-+    try {
+-+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+-+
+-+        if (!partner) {
+-+            return res.status(404).json({
+-+                success: false,
+-+                message: 'Partner profile not found'
+-+            });
+-+        }
+-+
+-+        const job = await Job.findById(req.params.jobId);
+-+
+-+        if (!job) {
+-+            return res.status(404).json({
+-+                success: false,
+-+                message: 'Job not found'
+-+            });
+-+        }
+-+
+-+        if (job.status !== 'ACTIVE' || job.approvalStatus !== 'ACTIVE') {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: 'This job is not active'
+-+            });
+-+        }
+-+
+-+        // Check if already interested
+-+        const existing = await JobInterest.findOne({
+-+            partner: partner._id,
+-+            job: job._id
+-+        });
+-+
+-+        if (existing) {
+-+            if (existing.status === 'ACTIVE') {
+-+                return res.status(400).json({
+-+                    success: false,
+-+                    message: 'You have already shown interest in this job',
+-+                    data: existing
+-+                });
+-+            }
+-+
+-+            // Reactivate if withdrawn
+-+            existing.status = 'ACTIVE';
+-+            await existing.save();
+-+
+-+            return res.json({
+-+                success: true,
+-+                message: 'Interest reactivated for this job',
+-+                data: existing
+-+            });
+-+        }
+-+
+-+        // Create new interest
+-+        const interest = await JobInterest.create({
+-+            partner: partner._id,
+-+            job: job._id,
+-+            user: req.user._id,
+-+            status: 'ACTIVE',
+-+            submissionCount: 0,
+-+            submissionLimit: 5
+-+        });
+-+
+-+        // Update job interest count
+-+        await Job.findByIdAndUpdate(job._id, {
+-+            $inc: { 'metrics.interestedPartners': 1 }
+-+        });
+-+
+-+        // Update partner metrics
+-+        await StaffingPartner.findByIdAndUpdate(partner._id, {
+-+            $inc: { 'metrics.totalJobsInterested': 1 }
+-+        });
+-+
+-+        console.log(`[INTEREST] ✅ ${partner.firmName} interested in: ${job.title}`);
+-+
+-+        res.status(201).json({
+-+            success: true,
+-+            message: 'Interest registered successfully. You can now submit up to 5 candidates.',
+-+            data: {
+-+                interestId: interest._id,
+-+                jobId: job._id,
+-+                jobTitle: job.title,
+-+                submissionLimit: interest.submissionLimit,
+-+                submissionCount: interest.submissionCount,
+-+                remainingSlots: interest.submissionLimit - interest.submissionCount
+-+            }
+-+        });
+-+    } catch (error) {
+-+        if (error.code === 11000) {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: 'You have already shown interest in this job'
+-+            });
+-+        }
+-+        console.error('[INTEREST] Show interest error:', error);
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to register interest',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Partner withdraws interest from a job
+-+// @route   DELETE /api/job-interests/:jobId/interest
+-+// @access  Staffing Partner
+-+exports.withdrawInterest = async (req, res) => {
+-+    try {
+-+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+-+
+-+        const interest = await JobInterest.findOne({
+-+            partner: partner._id,
+-+            job: req.params.jobId,
+-+            status: 'ACTIVE'
+-+        });
+-+
+-+        if (!interest) {
+-+            return res.status(404).json({
+-+                success: false,
+-+                message: 'No active interest found for this job'
+-+            });
+-+        }
+-+
+-+        if (interest.submissionCount > 0) {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: 'Cannot withdraw interest after submitting candidates'
+-+            });
+-+        }
+-+
+-+        interest.status = 'WITHDRAWN';
+-+        await interest.save();
+-+
+-+        await Job.findByIdAndUpdate(req.params.jobId, {
+-+            $inc: { 'metrics.interestedPartners': -1 }
+-+        });
+-+
+-+        res.json({
+-+            success: true,
+-+            message: 'Interest withdrawn successfully'
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to withdraw interest',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Get partner's interested jobs
+-+// @route   GET /api/job-interests/my-jobs
+-+// @access  Staffing Partner
+-+exports.getMyInterestedJobs = async (req, res) => {
+-+    try {
+-+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+-+
+-+        const { page = 1, limit = 20 } = req.query;
+-+        const sanitizedPage = Math.max(1, parseInt(page));
+-+        const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
+-+        const skip = (sanitizedPage - 1) * sanitizedLimit;
+-+
+-+        const [interests, total] = await Promise.all([
+-+            JobInterest.find({
+-+                partner: partner._id,
+-+                status: 'ACTIVE'
+-+            })
+-+                .populate({
+-+                    path: 'job',
+-+                    select: 'title category location salary experienceLevel vacancies status approvalStatus metrics eligiblePlans isUrgent'
+-+                })
+-+                .sort({ createdAt: -1 })
+-+                .skip(skip)
+-+                .limit(sanitizedLimit),
+-+            JobInterest.countDocuments({ partner: partner._id, status: 'ACTIVE' })
+-+        ]);
+-+
+-+        const enriched = interests.map(i => ({
+-+            interestId: i._id,
+-+            job: i.job,
+-+            submissionCount: i.submissionCount,
+-+            submissionLimit: i.submissionLimit,
+-+            remainingSlots: i.submissionLimit - i.submissionCount,
+-+            limitExtended: i.limitExtended,
+-+            canSubmit: i.submissionCount < i.submissionLimit,
+-+            registeredAt: i.createdAt
+-+        }));
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                jobs: enriched,
+-+                pagination: {
+-+                    current: sanitizedPage,
+-+                    pages: Math.ceil(total / sanitizedLimit),
+-+                    total
+-+                }
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch interested jobs',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Get interest status for a specific job
+-+// @route   GET /api/job-interests/:jobId/status
+-+// @access  Staffing Partner
+-+exports.getInterestStatus = async (req, res) => {
+-+    try {
+-+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+-+
+-+        const interest = await JobInterest.findOne({
+-+            partner: partner._id,
+-+            job: req.params.jobId
+-+        });
+-+
+-+        if (!interest) {
+-+            return res.json({
+-+                success: true,
+-+                data: {
+-+                    hasInterest: false,
+-+                    canSubmit: false,
+-+                    submissionCount: 0,
+-+                    submissionLimit: 5,
+-+                    remainingSlots: 0
+-+                }
+-+            });
+-+        }
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                hasInterest: interest.status === 'ACTIVE',
+-+                interestId: interest._id,
+-+                status: interest.status,
+-+                submissionCount: interest.submissionCount,
+-+                submissionLimit: interest.submissionLimit,
+-+                remainingSlots: Math.max(0, interest.submissionLimit - interest.submissionCount),
+-+                canSubmit: interest.status === 'ACTIVE' && interest.submissionCount < interest.submissionLimit,
+-+                limitExtended: interest.limitExtended
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch interest status',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Partner requests limit extension
+-+// @route   POST /api/job-interests/:jobId/request-extension
+-+// @access  Staffing Partner
+-+exports.requestLimitExtension = async (req, res) => {
+-+    try {
+-+        const { requestedAdditional, reason } = req.body;
+-+
+-+        if (!requestedAdditional || requestedAdditional < 1 || requestedAdditional > 10) {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: 'Please specify how many additional submissions you need (1-10)'
+-+            });
+-+        }
+-+
+-+        if (!reason || reason.trim().length < 10) {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: 'Please provide a reason (minimum 10 characters)'
+-+            });
+-+        }
+-+
+-+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+-+
+-+        const interest = await JobInterest.findOne({
+-+            partner: partner._id,
+-+            job: req.params.jobId,
+-+            status: 'ACTIVE'
+-+        }).populate('job', 'title');
+-+
+-+        if (!interest) {
+-+            return res.status(404).json({
+-+                success: false,
+-+                message: 'You have not shown interest in this job. Please show interest first.'
+-+            });
+-+        }
+-+
+-+        if (interest.submissionCount < interest.submissionLimit) {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: `You still have ${interest.submissionLimit - interest.submissionCount} submission slots remaining. Use them first.`
+-+            });
+-+        }
+-+
+-+        // Check if already has pending request
+-+        const existingRequest = await LimitExtensionRequest.findOne({
+-+            partner: partner._id,
+-+            job: req.params.jobId,
+-+            status: 'PENDING'
+-+        });
+-+
+-+        if (existingRequest) {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: 'You already have a pending extension request for this job',
+-+                data: existingRequest
+-+            });
+-+        }
+-+
+-+        const request = await LimitExtensionRequest.create({
+-+            partner: partner._id,
+-+            job: req.params.jobId,
+-+            jobInterest: interest._id,
+-+            user: req.user._id,
+-+            requestedAdditional: parseInt(requestedAdditional),
+-+            reason: reason.trim()
+-+        });
+-+
+-+        // Notify admin
+-+        const notifyAdmin = async () => {
+-+            try {
+-+                const notificationEngine = require('../services/notificationEngine');
+-+                const adminUsers = await User.find({ role: 'admin' });
+-+                for (const admin of adminUsers) {
+-+                    await notificationEngine.send({
+-+                        recipientId: admin._id,
+-+                        type: 'SYSTEM_ANNOUNCEMENT',
+-+                        title: `Limit extension request from ${partner.firmName}`,
+-+                        message: `${partner.firmName} is requesting ${requestedAdditional} additional submissions for job "${interest.job?.title}". Reason: ${reason.trim().substring(0, 100)}`,
+-+                        data: {
+-+                            entityType: 'LimitExtensionRequest',
+-+                            entityId: request._id,
+-+                            actionUrl: `/admin/extension-requests/${request._id}`
+-+                        },
+-+                        channels: { inApp: true, email: false },
+-+                        priority: 'medium'
+-+                    });
+-+                }
+-+            } catch (err) {
+-+                console.error('[INTEREST] Admin notification failed:', err.message);
+-+            }
+-+        };
+-+
+-+        notifyAdmin();
+-+
+-+        res.status(201).json({
+-+            success: true,
+-+            message: 'Extension request submitted. Admin will review and respond.',
+-+            data: {
+-+                requestId: request._id,
+-+                requestedAdditional,
+-+                currentLimit: interest.submissionLimit,
+-+                status: 'PENDING'
+-+            }
+-+        });
+-+    } catch (error) {
+-+        console.error('[INTEREST] Extension request error:', error);
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to submit extension request',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Get partner's extension requests
+-+// @route   GET /api/job-interests/extension-requests
+-+// @access  Staffing Partner
+-+exports.getMyExtensionRequests = async (req, res) => {
+-+    try {
+-+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+-+
+-+        const requests = await LimitExtensionRequest.find({
+-+            partner: partner._id
+-+        })
+-+            .populate('job', 'title category location')
+-+            .populate('reviewedBy', 'email role')
+-+            .sort({ createdAt: -1 });
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                requests,
+-+                total: requests.length,
+-+                pending: requests.filter(r => r.status === 'PENDING').length
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch extension requests',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// ================================================================
+-+// ADMIN ROUTES
+-+// ================================================================
+-+
+-+// @desc    Admin gets all extension requests
+-+// @route   GET /api/job-interests/admin/extension-requests
+-+// @access  Admin
+-+exports.getAllExtensionRequests = async (req, res) => {
+-+    try {
+-+        const { status, page = 1, limit = 20 } = req.query;
+-+        const query = {};
+-+        if (status) query.status = status;
+-+
+-+        const sanitizedPage = Math.max(1, parseInt(page));
+-+        const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
+-+        const skip = (sanitizedPage - 1) * sanitizedLimit;
+-+
+-+        const [requests, total] = await Promise.all([
+-+            LimitExtensionRequest.find(query)
+-+                .populate({
+-+                    path: 'partner',
+-+                    select: 'firstName lastName firmName metrics verificationStatus'
+-+                })
+-+                .populate('job', 'title category location metrics')
+-+                .populate('user', 'email mobile')
+-+                .populate('reviewedBy', 'email role')
+-+                .sort({ createdAt: -1 })
+-+                .skip(skip)
+-+                .limit(sanitizedLimit),
+-+            LimitExtensionRequest.countDocuments(query)
+-+        ]);
+-+
+-+        // Summary
+-+        const summary = await LimitExtensionRequest.aggregate([
+-+            { $group: { _id: '$status', count: { $sum: 1 } } }
+-+        ]);
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                requests,
+-+                summary: summary.reduce((acc, item) => {
+-+                    acc[item._id] = item.count;
+-+                    return acc;
+-+                }, {}),
+-+                pagination: {
+-+                    current: sanitizedPage,
+-+                    pages: Math.ceil(total / sanitizedLimit),
+-+                    total
+-+                }
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch extension requests',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Admin views single extension request with partner performance
+-+// @route   GET /api/job-interests/admin/extension-requests/:id
+-+// @access  Admin
+-+exports.getExtensionRequest = async (req, res) => {
+-+    try {
+-+        const request = await LimitExtensionRequest.findById(req.params.id)
+-+            .populate({
+-+                path: 'partner',
+-+                select: 'firstName lastName firmName metrics verificationStatus subscription'
+-+            })
+-+            .populate('job', 'title category location salary metrics')
+-+            .populate('jobInterest')
+-+            .populate('user', 'email mobile')
+-+            .populate('reviewedBy', 'email role');
+-+
+-+        if (!request) {
+-+            return res.status(404).json({
+-+                success: false,
+-+                message: 'Extension request not found'
+-+            });
+-+        }
+-+
+-+        // Get partner's performance on this specific job
+-+        const Candidate = require('../models/Candidate');
+-+        const partnerJobPerformance = await Candidate.aggregate([
+-+            {
+-+                $match: {
+-+                    submittedBy: request.partner._id,
+-+                    job: request.job._id
+-+                }
+-+            },
+-+            {
+-+                $group: {
+-+                    _id: '$status',
+-+                    count: { $sum: 1 }
+-+                }
+-+            }
+-+        ]);
+-+
+-+        // Get partner's overall performance
+-+        const overallPerformance = await Candidate.aggregate([
+-+            { $match: { submittedBy: request.partner._id } },
+-+            { $group: { _id: '$status', count: { $sum: 1 } } }
+-+        ]);
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                request,
+-+                partnerPerformance: {
+-+                    onThisJob: partnerJobPerformance.reduce((acc, item) => {
+-+                        acc[item._id] = item.count;
+-+                        return acc;
+-+                    }, {}),
+-+                    overall: overallPerformance.reduce((acc, item) => {
+-+                        acc[item._id] = item.count;
+-+                        return acc;
+-+                    }, {}),
+-+                    metrics: request.partner.metrics
+-+                }
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch extension request',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Admin approves or rejects extension request
+-+// @route   PUT /api/job-interests/admin/extension-requests/:id/review
+-+// @access  Admin
+-+exports.reviewExtensionRequest = async (req, res) => {
+-+    try {
+-+        const { action, approvedAdditional, adminNotes } = req.body;
+-+
+-+        if (!['approve', 'reject'].includes(action)) {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: 'Action must be approve or reject'
+-+            });
+-+        }
+-+
+-+        if (action === 'approve' && (!approvedAdditional || approvedAdditional < 1)) {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: 'Please specify how many additional submissions to approve'
+-+            });
+-+        }
+-+
+-+        const request = await LimitExtensionRequest.findById(req.params.id)
+-+            .populate('partner', 'firstName lastName firmName')
+-+            .populate('job', 'title')
+-+            .populate('user', 'email mobile');
+-+
+-+        if (!request) {
+-+            return res.status(404).json({
+-+                success: false,
+-+                message: 'Extension request not found'
+-+            });
+-+        }
+-+
+-+        if (request.status !== 'PENDING') {
+-+            return res.status(400).json({
+-+                success: false,
+-+                message: `Request already ${request.status.toLowerCase()}`
+-+            });
+-+        }
+-+
+-+        request.status = action === 'approve' ? 'APPROVED' : 'REJECTED';
+-+        request.reviewedBy = req.user._id;
+-+        request.reviewedAt = new Date();
+-+        request.adminNotes = adminNotes || null;
+-+
+-+        if (action === 'approve') {
+-+            request.approvedAdditional = parseInt(approvedAdditional);
+-+
+-+            // Update the job interest limit
+-+            const interest = await require('../models/JobInterest').findById(request.jobInterest);
+-+            if (interest) {
+-+                interest.submissionLimit += parseInt(approvedAdditional);
+-+                interest.limitExtended = true;
+-+                interest.limitExtendedBy = req.user._id;
+-+                interest.limitExtendedAt = new Date();
+-+                await interest.save();
+-+            }
+-+        }
+-+
+-+        await request.save();
+-+
+-+        // Notify partner
+-+        const notifyPartner = async () => {
+-+            try {
+-+                const notificationEngine = require('../services/notificationEngine');
+-+                const message = action === 'approve'
+-+                    ? `Your request to add ${approvedAdditional} more candidates to "${request.job?.title}" has been approved. Your new limit is now ${5 + parseInt(approvedAdditional)}.${adminNotes ? ` Note: ${adminNotes}` : ''}`
+-+                    : `Your extension request for "${request.job?.title}" was not approved.${adminNotes ? ` Reason: ${adminNotes}` : ''}`;
+-+
+-+                await notificationEngine.send({
+-+                    recipientId: request.user._id || request.user,
+-+                    type: 'SYSTEM_ANNOUNCEMENT',
+-+                    title: action === 'approve'
+-+                        ? '✅ Submission limit extended'
+-+                        : '❌ Extension request rejected',
+-+                    message,
+-+                    data: {
+-+                        entityType: 'LimitExtensionRequest',
+-+                        entityId: request._id,
+-+                        actionUrl: '/partner/jobs'
+-+                    },
+-+                    channels: { inApp: true, email: true },
+-+                    priority: 'high'
+-+                });
+-+            } catch (err) {
+-+                console.error('[INTEREST] Partner notification failed:', err.message);
+-+            }
+-+        };
+-+
+-+        notifyPartner();
+-+
+-+        res.json({
+-+            success: true,
+-+            message: `Extension request ${action}d successfully`,
+-+            data: {
+-+                requestId: request._id,
+-+                status: request.status,
+-+                approvedAdditional: request.approvedAdditional,
+-+                adminNotes: request.adminNotes
+-+            }
+-+        });
+-+    } catch (error) {
+-+        console.error('[INTEREST] Review extension error:', error);
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to review extension request',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Admin gets job interest analytics (hot jobs)
+-+// @route   GET /api/job-interests/admin/hot-jobs
+-+// @access  Admin
+-+exports.getHotJobs = async (req, res) => {
+-+    try {
+-+        const { limit = 20 } = req.query;
+-+
+-+        const hotJobs = await Job.find({
+-+            status: 'ACTIVE',
+-+            approvalStatus: 'ACTIVE'
+-+        })
+-+            .select('title category location salary metrics eligiblePlans isUrgent createdAt')
+-+            .sort({ 'metrics.interestedPartners': -1 })
+-+            .limit(Math.min(50, parseInt(limit)));
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                jobs: hotJobs.map(job => ({
+-+                    ...job.toObject(),
+-+                    hotScore: job.metrics.interestedPartners
+-+                }))
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch hot jobs',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Admin gets partners interested in a specific job
+-+// @route   GET /api/job-interests/admin/jobs/:jobId/interested-partners
+-+// @access  Admin
+-+exports.getInterestedPartners = async (req, res) => {
+-+    try {
+-+        const interests = await JobInterest.find({
+-+            job: req.params.jobId,
+-+            status: 'ACTIVE'
+-+        })
+-+            .populate({
+-+                path: 'partner',
+-+                select: 'firstName lastName firmName metrics verificationStatus subscription city state'
+-+            })
+-+            .sort({ submissionCount: -1, createdAt: 1 });
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                total: interests.length,
+-+                partners: interests.map(i => ({
+-+                    interestId: i._id,
+-+                    partner: i.partner,
+-+                    submissionCount: i.submissionCount,
+-+                    submissionLimit: i.submissionLimit,
+-+                    remainingSlots: i.submissionLimit - i.submissionCount,
+-+                    limitExtended: i.limitExtended,
+-+                    registeredAt: i.createdAt
+-+                }))
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch interested partners',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// ================================================================
+-+// PARTNER PERFORMANCE
+-+// ================================================================
+-+
+-+// @desc    Get partner performance analytics
+-+// @route   GET /api/job-interests/my-performance
+-+// @access  Staffing Partner
+-+exports.getMyPerformance = async (req, res) => {
+-+    try {
+-+        const partner = await StaffingPartner.findOne({ user: req.user._id });
+-+        const Candidate = require('../models/Candidate');
+-+
+-+        // Overall status breakdown
+-+        const statusBreakdown = await Candidate.aggregate([
+-+            { $match: { submittedBy: partner._id } },
+-+            { $group: { _id: '$status', count: { $sum: 1 } } }
+-+        ]);
+-+
+-+        const breakdown = statusBreakdown.reduce((acc, item) => {
+-+            acc[item._id] = item.count;
+-+            return acc;
+-+        }, {});
+-+
+-+        const totalSubmissions = Object.values(breakdown).reduce((a, b) => a + b, 0);
+-+        const shortlisted = (breakdown.SHORTLISTED || 0) + (breakdown.INTERVIEW_SCHEDULED || 0) +
+-+            (breakdown.INTERVIEWED || 0) + (breakdown.OFFERED || 0) +
+-+            (breakdown.OFFER_ACCEPTED || 0) + (breakdown.JOINED || 0);
+-+        const placed = breakdown.JOINED || 0;
+-+
+-+        // Job-wise performance
+-+        const jobPerformance = await Candidate.aggregate([
+-+            { $match: { submittedBy: partner._id } },
+-+            {
+-+                $group: {
+-+                    _id: '$job',
+-+                    total: { $sum: 1 },
+-+                    statuses: { $push: '$status' }
+-+                }
+-+            },
+-+            {
+-+                $lookup: {
+-+                    from: 'jobs',
+-+                    localField: '_id',
+-+                    foreignField: '_id',
+-+                    as: 'jobDetails'
+-+                }
+-+            },
+-+            { $unwind: { path: '$jobDetails', preserveNullAndEmpty: true } },
+-+            {
+-+                $project: {
+-+                    jobTitle: '$jobDetails.title',
+-+                    total: 1,
+-+                    statuses: 1
+-+                }
+-+            },
+-+            { $sort: { total: -1 } },
+-+            { $limit: 10 }
+-+        ]);
+-+
+-+        // Interest stats
+-+        const totalInterested = await JobInterest.countDocuments({
+-+            partner: partner._id,
+-+            status: 'ACTIVE'
+-+        });
+-+
+-+        // Conversion rates
+-+        const submissionToShortlist = totalSubmissions > 0
+-+            ? Math.round((shortlisted / totalSubmissions) * 100)
+-+            : 0;
+-+
+-+        const shortlistToPlacement = shortlisted > 0
+-+            ? Math.round((placed / shortlisted) * 100)
+-+            : 0;
+-+
+-+        const submissionToPlacement = totalSubmissions > 0
+-+            ? Math.round((placed / totalSubmissions) * 100)
+-+            : 0;
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                summary: {
+-+                    totalJobsInterested: totalInterested,
+-+                    totalSubmissions,
+-+                    shortlisted,
+-+                    placed,
+-+                    earnings: partner.metrics.totalEarnings || 0
+-+                },
+-+                conversionRates: {
+-+                    submissionToShortlist: `${submissionToShortlist}%`,
+-+                    shortlistToPlacement: `${shortlistToPlacement}%`,
+-+                    overallPlacementRate: `${submissionToPlacement}%`
+-+                },
+-+                statusBreakdown: breakdown,
+-+                jobWisePerformance: jobPerformance,
+-+                metrics: partner.metrics
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch performance data',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-+
+-+// @desc    Admin gets partner performance detail
+-+// @route   GET /api/job-interests/admin/partner-performance/:partnerId
+-+// @access  Admin
+-+exports.getPartnerPerformance = async (req, res) => {
+-+    try {
+-+        const partner = await StaffingPartner.findById(req.params.partnerId);
+-+
+-+        if (!partner) {
+-+            return res.status(404).json({
+-+                success: false,
+-+                message: 'Partner not found'
+-+            });
+-+        }
+-+
+-+        const Candidate = require('../models/Candidate');
+-+
+-+        const statusBreakdown = await Candidate.aggregate([
+-+            { $match: { submittedBy: partner._id } },
+-+            { $group: { _id: '$status', count: { $sum: 1 } } }
+-+        ]);
+-+
+-+        const breakdown = statusBreakdown.reduce((acc, item) => {
+-+            acc[item._id] = item.count;
+-+            return acc;
+-+        }, {});
+-+
+-+        const totalSubmissions = Object.values(breakdown).reduce((a, b) => a + b, 0);
+-+        const placed = breakdown.JOINED || 0;
+-+        const shortlisted = (breakdown.SHORTLISTED || 0) + (breakdown.INTERVIEW_SCHEDULED || 0) +
+-+            (breakdown.INTERVIEWED || 0) + (breakdown.OFFERED || 0) +
+-+            (breakdown.OFFER_ACCEPTED || 0) + (breakdown.JOINED || 0);
+-+
+-+        // Recent submissions
+-+        const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
+-+            .populate('job', 'title')
+-+            .populate('company', 'companyName')
+-+            .sort({ createdAt: -1 })
+-+            .limit(10)
+-+            .select('firstName lastName status job company createdAt');
+-+
+-+        // Extension requests history
+-+        const extensionRequests = await LimitExtensionRequest.find({
+-+            partner: partner._id
+-+        })
+-+            .populate('job', 'title')
+-+            .sort({ createdAt: -1 })
+-+            .limit(5);
+-+
+-+        const totalInterested = await JobInterest.countDocuments({
+-+            partner: partner._id,
+-+            status: 'ACTIVE'
+-+        });
+-+
+-+        res.json({
+-+            success: true,
+-+            data: {
+-+                partner: {
+-+                    _id: partner._id,
+-+                    name: `${partner.firstName} ${partner.lastName}`,
+-+                    firmName: partner.firmName,
+-+                    verificationStatus: partner.verificationStatus,
+-+                    subscription: partner.subscription,
+-+                    metrics: partner.metrics
+-+                },
+-+                performance: {
+-+                    totalJobsInterested: totalInterested,
+-+                    totalSubmissions,
+-+                    shortlisted,
+-+                    placed,
+-+                    conversionRates: {
+-+                        submissionToShortlist: totalSubmissions > 0
+-+                            ? `${Math.round((shortlisted / totalSubmissions) * 100)}%`
+-+                            : '0%',
+-+                        overallPlacementRate: totalSubmissions > 0
+-+                            ? `${Math.round((placed / totalSubmissions) * 100)}%`
+-+                            : '0%'
+-+                    },
+-+                    statusBreakdown: breakdown
+-+                },
+-+                recentSubmissions,
+-+                extensionRequests
+-+            }
+-+        });
+-+    } catch (error) {
+-+        res.status(500).json({
+-+            success: false,
+-+            message: 'Failed to fetch partner performance',
+-+            error: error.message
+-+        });
+-+    }
+-+};
+-\ No newline at end of file
+-diff --git a/controllers/staffingPartnerController.js b/controllers/staffingPartnerController.js
+-index 995774a..6101815 100644
+---- a/controllers/staffingPartnerController.js
+-+++ b/controllers/staffingPartnerController.js
+-@@ -8,7 +8,7 @@ const duplicateDetection = require("../services/duplicateDetectionService");
+- const notificationEngine = require("../services/notificationEngine");
+- const jobAccessService = require("../services/jobAccessService");
+- const candidateScoringService = require("../services/candidateScoringService");
+--
+-+const JobInterest = require('../models/JobInterest');
+- // @desc    Get Staffing Partner Profile
+- // @route   GET /api/staffing-partners/profile
+- exports.getProfile = async (req, res) => {
+-@@ -1031,6 +1031,34 @@ exports.submitCandidate = async (req, res) => {
+-       });
+-     }
+- 
+-+    // Check if partner has shown interest in this job
+-+    const interest = await JobInterest.findOne({
+-+      partner: partner._id,
+-+      job: job._id,
+-+      status: 'ACTIVE'
+-+    });
+-+
+-+    if (!interest) {
+-+      return res.status(403).json({
+-+        success: false,
+-+        message: 'Please show interest in this job before submitting candidates',
+-+        action: 'SHOW_INTEREST_FIRST'
+-+      });
+-+    }
+-+
+-+    // Check submission limit
+-+    if (interest.submissionCount >= interest.submissionLimit) {
+-+      return res.status(403).json({
+-+        success: false,
+-+        message: `You have reached your submission limit of ${interest.submissionLimit} for this job. Request a limit extension from admin.`,
+-+        data: {
+-+          submissionCount: interest.submissionCount,
+-+          submissionLimit: interest.submissionLimit,
+-+          action: 'REQUEST_EXTENSION'
+-+        }
+-+      });
+-+    }
+-+
+-     const partnerPlan = partner.subscription?.plan || "FREE";
+-     if (
+-       job.eligiblePlans &&
+-@@ -1130,6 +1158,11 @@ exports.submitCandidate = async (req, res) => {
+-       ],
+-     });
+- 
+-+    // Increment interest submission count
+-+    await JobInterest.findByIdAndUpdate(interest._id, {
+-+      $inc: { submissionCount: 1 }
+-+    });
+-+
+-     await Job.findByIdAndUpdate(job._id, {
+-       $inc: { "metrics.applications": 1 },
+-     });
+-@@ -1137,6 +1170,54 @@ exports.submitCandidate = async (req, res) => {
+-       $inc: { "metrics.totalSubmissions": 1 },
+-     });
+- 
+-+
+-+    // ================================
+-+    // Candidate Consent Notification
+-+    // ================================
+-+    const sendCandidateConsent = async () => {
+-+      try {
+-+        const emailService = require('../services/emailService');
+-+        const whatsappService = require('../services/whatsappService');
+-+
+-+        await emailService.sendEmail({
+-+          to: email.toLowerCase(),
+-+          subject: `Your profile has been submitted for ${job.title} — Syncro1`,
+-+          html: `
+-+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+-+          <h2>Syncro1</h2>
+-+          <p>Dear ${firstName} ${lastName},</p>
+-+
+-+          <p>Your profile has been submitted for:</p>
+-+
+-+          <div style="padding:10px; background:#eef; border-left:4px solid #3b82f6;">
+-+            <p><strong>Position:</strong> ${job.title}</p>
+-+            <p><strong>Submitted by:</strong> ${partner.firmName}</p>
+-+          </div>
+-+
+-+          <p>If you did not consent, contact support@syncro1.com</p>
+-+        </div>
+-+      `
+-+        });
+-+
+-+        console.log(`[CONSENT] Email sent to ${email}`);
+-+
+-+        if (mobile) {
+-+          await whatsappService.sendMessage(
+-+            mobile,
+-+            `Hi ${firstName}, your profile was submitted for ${job.title} via Syncro1 by ${partner.firmName}. If this was not authorized, contact support@syncro1.com`
+-+          );
+-+        }
+-+
+-+        console.log(`[CONSENT] WhatsApp sent to ${mobile}`);
+-+      } catch (err) {
+-+        console.error('[CONSENT] Failed:', err.message);
+-+      }
+-+    };
+-+
+-+    // fire-and-forget
+-+    sendCandidateConsent();
+-+
+-+
+-     const company = await Company.findById(job.company).populate("user", "_id");
+- 
+-     if (company?.user) {
+-diff --git a/models/JobInterest.js b/models/JobInterest.js
+-new file mode 100644
+-index 0000000..08a1b4c
+---- /dev/null
+-+++ b/models/JobInterest.js
+-@@ -0,0 +1,56 @@
+-+// backend/models/JobInterest.js
+-+const mongoose = require('mongoose');
+-+
+-+const jobInterestSchema = new mongoose.Schema({
+-+    partner: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'StaffingPartner',
+-+        required: true,
+-+        index: true
+-+    },
+-+    job: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'Job',
+-+        required: true,
+-+        index: true
+-+    },
+-+    user: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'User',
+-+        required: true
+-+    },
+-+    status: {
+-+        type: String,
+-+        enum: ['ACTIVE', 'WITHDRAWN'],
+-+        default: 'ACTIVE'
+-+    },
+-+    // Submission tracking for this partner on this job
+-+    submissionCount: {
+-+        type: Number,
+-+        default: 0
+-+    },
+-+    submissionLimit: {
+-+        type: Number,
+-+        default: 5
+-+    },
+-+    limitExtended: {
+-+        type: Boolean,
+-+        default: false
+-+    },
+-+    limitExtendedBy: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'User',
+-+        default: null
+-+    },
+-+    limitExtendedAt: {
+-+        type: Date,
+-+        default: null
+-+    }
+-+}, {
+-+    timestamps: true
+-+});
+-+
+-+// One partner can express interest in one job only once
+-+jobInterestSchema.index({ partner: 1, job: 1 }, { unique: true });
+-+
+-+module.exports = mongoose.model('JobInterest', jobInterestSchema);
+-\ No newline at end of file
+-diff --git a/models/LimitExtensionRequest.js b/models/LimitExtensionRequest.js
+-new file mode 100644
+-index 0000000..105cccb
+---- /dev/null
+-+++ b/models/LimitExtensionRequest.js
+-@@ -0,0 +1,70 @@
+-+// backend/models/LimitExtensionRequest.js
+-+const mongoose = require('mongoose');
+-+
+-+const limitExtensionRequestSchema = new mongoose.Schema({
+-+    partner: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'StaffingPartner',
+-+        required: true,
+-+        index: true
+-+    },
+-+    job: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'Job',
+-+        required: true
+-+    },
+-+    jobInterest: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'JobInterest',
+-+        required: true
+-+    },
+-+    user: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'User',
+-+        required: true
+-+    },
+-+    // How many additional submissions partner wants
+-+    requestedAdditional: {
+-+        type: Number,
+-+        required: true,
+-+        min: 1,
+-+        max: 10
+-+    },
+-+    reason: {
+-+        type: String,
+-+        required: true,
+-+        trim: true,
+-+        minlength: 10
+-+    },
+-+    status: {
+-+        type: String,
+-+        enum: ['PENDING', 'APPROVED', 'REJECTED'],
+-+        default: 'PENDING',
+-+        index: true
+-+    },
+-+    // Admin response
+-+    reviewedBy: {
+-+        type: mongoose.Schema.Types.ObjectId,
+-+        ref: 'User',
+-+        default: null
+-+    },
+-+    reviewedAt: {
+-+        type: Date,
+-+        default: null
+-+    },
+-+    adminNotes: {
+-+        type: String,
+-+        default: null
+-+    },
+-+    // If approved — how many were actually granted
+-+    approvedAdditional: {
+-+        type: Number,
+-+        default: null
+-+    }
+-+}, {
+-+    timestamps: true
+-+});
+-+
+-+limitExtensionRequestSchema.index({ partner: 1, job: 1, status: 1 });
+-+
+-+module.exports = mongoose.model('LimitExtensionRequest', limitExtensionRequestSchema);
+-\ No newline at end of file
+-diff --git a/routes/jobInterestRoutes.js b/routes/jobInterestRoutes.js
+-new file mode 100644
+-index 0000000..8b7f091
+---- /dev/null
+-+++ b/routes/jobInterestRoutes.js
+-@@ -0,0 +1,129 @@
+-+// backend/routes/jobInterestRoutes.js
+-+const express = require('express');
+-+const router = express.Router();
+-+
+-+const {
+-+    showInterest,
+-+    withdrawInterest,
+-+    getMyInterestedJobs,
+-+    getInterestStatus,
+-+    requestLimitExtension,
+-+    getMyExtensionRequests,
+-+    getMyPerformance,
+-+    getAllExtensionRequests,
+-+    getExtensionRequest,
+-+    reviewExtensionRequest,
+-+    getHotJobs,
+-+    getInterestedPartners,
+-+    getPartnerPerformance
+-+} = require('../controllers/jobInterestController');
+-+
+-+const {
+-+    protect,
+-+    authorize,
+-+    authorizeAdminAccess,
+-+    checkPermission
+-+} = require('../middleware/auth');
+-+
+-+const { PERMISSIONS } = require('../utils/permissions');
+-+
+-+// ==================== PARTNER ROUTES ====================
+-+router.post(
+-+    '/:jobId/interest',
+-+    protect,
+-+    authorize('staffing_partner'),
+-+    showInterest
+-+);
+-+
+-+router.delete(
+-+    '/:jobId/interest',
+-+    protect,
+-+    authorize('staffing_partner'),
+-+    withdrawInterest
+-+);
+-+
+-+router.get(
+-+    '/my-jobs',
+-+    protect,
+-+    authorize('staffing_partner'),
+-+    getMyInterestedJobs
+-+);
+-+
+-+router.get(
+-+    '/:jobId/status',
+-+    protect,
+-+    authorize('staffing_partner'),
+-+    getInterestStatus
+-+);
+-+
+-+router.post(
+-+    '/:jobId/request-extension',
+-+    protect,
+-+    authorize('staffing_partner'),
+-+    requestLimitExtension
+-+);
+-+
+-+router.get(
+-+    '/extension-requests',
+-+    protect,
+-+    authorize('staffing_partner'),
+-+    getMyExtensionRequests
+-+);
+-+
+-+router.get(
+-+    '/my-performance',
+-+    protect,
+-+    authorize('staffing_partner'),
+-+    getMyPerformance
+-+);
+-+
+-+// ==================== ADMIN ROUTES ====================
+-+router.get(
+-+    '/admin/hot-jobs',
+-+    protect,
+-+    authorizeAdminAccess,
+-+    checkPermission(PERMISSIONS.VIEW_PENDING_JOBS),
+-+    getHotJobs
+-+);
+-+
+-+router.get(
+-+    '/admin/extension-requests',
+-+    protect,
+-+    authorizeAdminAccess,
+-+    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+-+    getAllExtensionRequests
+-+);
+-+
+-+router.get(
+-+    '/admin/extension-requests/:id',
+-+    protect,
+-+    authorizeAdminAccess,
+-+    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+-+    getExtensionRequest
+-+);
+-+
+-+router.put(
+-+    '/admin/extension-requests/:id/review',
+-+    protect,
+-+    authorizeAdminAccess,
+-+    checkPermission(PERMISSIONS.APPROVE_PARTNER),
+-+    reviewExtensionRequest
+-+);
+-+
+-+router.get(
+-+    '/admin/jobs/:jobId/interested-partners',
+-+    protect,
+-+    authorizeAdminAccess,
+-+    checkPermission(PERMISSIONS.VIEW_PENDING_JOBS),
+-+    getInterestedPartners
+-+);
+-+
+-+router.get(
+-+    '/admin/partner-performance/:partnerId',
+-+    protect,
+-+    authorizeAdminAccess,
+-+    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+-+    getPartnerPerformance
+-+);
+-+
+-+module.exports = router;
+-\ No newline at end of file
+-diff --git a/services/jobAccessService.js b/services/jobAccessService.js
+-index bc363e1..ef5498f 100644
+---- a/services/jobAccessService.js
+-+++ b/services/jobAccessService.js
+-@@ -67,7 +67,7 @@ class JobAccessService {
+-     if (filters.salaryMax) query['salary.min'] = { $lte: Number(filters.salaryMax) };
+- 
+-     // Sorting
+--    let sort = { isFeatured: -1, isUrgent: -1, createdAt: -1 }; // Default
+-+    let sort = { 'metrics.interestedPartners': -1, isFeatured: -1, isUrgent: -1, createdAt: -1 };
+-     switch (filters.sortBy) {
+-       case 'newest': sort = { createdAt: -1 }; break;
+-       case 'oldest': sort = { createdAt: 1 }; break;
+diff --git a/controllers/adminController.js b/controllers/adminController.js
+index 1d19e94..0c57625 100644
+--- a/controllers/adminController.js
++++ b/controllers/adminController.js
+@@ -6,7 +6,7 @@ const Job = require('../models/Job');
+ const Candidate = require('../models/Candidate');
+ const { PERMISSIONS } = require('../utils/permissions');
+ const emailService = require('../services/emailService');
+-
++const auditService = require('../services/auditService');
+ const hasPermission = (user, permission) => {
+   if (!user) return false;
+   if (user.role === 'admin') return true;
+@@ -170,6 +170,19 @@ exports.verifyPartner = async (req, res) => {
+     await partner.save();
+     await user.save();
+ 
++    await auditService.log({
++      actor: req.user._id,
++      actorRole: req.user.role,
++      actorEmail: req.user.email,
++      action: action === 'approve' ? 'PARTNER_APPROVED' : 'PARTNER_REJECTED',
++      entityType: 'StaffingPartner',
++      entityId: partner._id,
++      description: `Partner ${action}d: ${partner.firmName}`,
++      notes: action === 'approve' ? notes : rejectionReason,
++      ipAddress: req.ip,
++      userAgent: req.headers['user-agent']
++    });
++
+     res.json({
+       success: true,
+       message: `Partner ${action}d successfully`,
+@@ -259,6 +272,18 @@ exports.verifyCompany = async (req, res) => {
+ 
+     await company.save();
+     await user.save();
++    await auditService.log({
++      actor: req.user._id,
++      actorRole: req.user.role,
++      actorEmail: req.user.email,
++      action: action === 'approve' ? 'COMPANY_APPROVED' : 'COMPANY_REJECTED',
++      entityType: 'Company',
++      entityId: company._id,
++      description: `Company ${action}d: ${company.companyName}`,
++      notes: action === 'approve' ? notes : rejectionReason,
++      ipAddress: req.ip,
++      userAgent: req.headers['user-agent']
++    });
+ 
+     res.json({
+       success: true,
+@@ -417,6 +442,19 @@ exports.approvePayout = async (req, res) => {
+ 
+     payout.approve(req.user._id, notes);
+     await payout.save();
++    await auditService.log({
++      actor: req.user._id,
++      actorRole: req.user.role,
++      actorEmail: req.user.email,
++      action: 'PAYOUT_APPROVED',
++      entityType: 'Payout',
++      entityId: payout._id,
++      description: `Payout approved: Rs.${payout.amount.netPayable}`,
++      notes,
++      ipAddress: req.ip,
++      userAgent: req.headers['user-agent']
++    });
++
+ 
+     const notificationEngine = require('../services/notificationEngine');
+     if (payout.staffingPartner.user) {
+@@ -768,6 +806,21 @@ exports.updateUserStatus = async (req, res) => {
+       { new: true }
+     );
+ 
++
++    await auditService.log({
++      actor: req.user._id,
++      actorRole: req.user.role,
++      actorEmail: req.user.email,
++      action: status === 'SUSPENDED' ? 'USER_SUSPENDED' : 'USER_ACTIVATED',
++      entityType: 'User',
++      entityId: req.params.id,
++      description: `User status changed to ${status}`,
++      after: { status },
++      ipAddress: req.ip,
++      userAgent: req.headers['user-agent']
++    });
++
++
+     res.json({
+       success: true,
+       message: 'User status updated',
+@@ -946,6 +999,19 @@ exports.approveJob = async (req, res) => {
+     job.addToHistory('APPROVED', req.user._id, {}, notes || 'Job approved by admin');
+     await job.save();
+ 
++    await auditService.log({
++      actor: req.user._id,
++      actorRole: req.user.role,
++      actorEmail: req.user.email,
++      action: 'JOB_APPROVED',
++      entityType: 'Job',
++      entityId: job._id,
++      description: `Job approved: ${job.title}`,
++      notes,
++      ipAddress: req.ip,
++      userAgent: req.headers['user-agent']
++    });
++
+     const notificationEngine = require('../services/notificationEngine');
+ 
+     if (job.company.user) {
+@@ -1035,6 +1101,19 @@ exports.rejectJob = async (req, res) => {
+     job.addToHistory('REJECTED', req.user._id, {}, reason);
+     await job.save();
+ 
++    await auditService.log({
++      actor: req.user._id,
++      actorRole: req.user.role,
++      actorEmail: req.user.email,
++      action: 'JOB_REJECTED',
++      entityType: 'Job',
++      entityId: job._id,
++      description: `Job rejected: ${job.title}`,
++      notes: reason,
++      ipAddress: req.ip,
++      userAgent: req.headers['user-agent']
++    });
++
+     const notificationEngine = require('../services/notificationEngine');
+ 
+     if (job.company.user) {
+@@ -1238,7 +1317,6 @@ exports.approveEditRequest = async (req, res) => {
+         currentStatus: editRequest.status
+       });
+     }
+-
+     const job = editRequest.job;
+     const changes = editRequest.requestedChanges;
+     const appliedChanges = {};
+@@ -1246,34 +1324,29 @@ exports.approveEditRequest = async (req, res) => {
+     for (const [field, change] of Object.entries(changes)) {
+       try {
+         const keys = field.split('.');
+-
+-        // Navigate and set the value
+         let target = job;
++
+         for (let i = 0; i < keys.length - 1; i++) {
+-          if (target[keys[i]] === undefined || target[keys[i]] === null) {
+-            target[keys[i]] = {};
+-          }
++          if (!target[keys[i]]) target[keys[i]] = {};
+           target = target[keys[i]];
+         }
+ 
+         const lastKey = keys[keys.length - 1];
+-        const oldValue = JSON.parse(JSON.stringify(target[lastKey] ?? null));
+-        target[lastKey] = change.new;
++        const oldValue = target[lastKey];
+ 
+         appliedChanges[field] = {
+           old: oldValue,
+           new: change.new
+         };
+ 
+-        // Mark nested fields as modified for Mongoose
+-        const topLevelKey = keys[0];
+-        job.markModified(topLevelKey);
+-
++        target[lastKey] = change.new;
+       } catch (err) {
+-        console.error(`[EDIT REQUEST] Failed to apply field ${field}:`, err.message);
++        console.error(`Failed to apply change for field ${field}:`, err);
+       }
+     }
+ 
++    job.applyEditChanges(appliedChanges);
++
+     // Also mark all top level keys as modified
+     const topLevelKeys = [...new Set(Object.keys(changes).map(f => f.split('.')[0]))];
+     topLevelKeys.forEach(key => job.markModified(key));
+@@ -1655,4 +1728,521 @@ exports._buildTimeline = (job, editRequests, changeHistory) => {
+   });
+ 
+   return events.sort((a, b) => b.timestamp - a.timestamp);
++};
++
++// ==================== ADMIN REGISTRY ENDPOINTS ====================
++
++// @desc    Get all jobs (admin full registry)
++// @route   GET /api/admin/jobs
++exports.getAllJobs = async (req, res) => {
++  try {
++    const {
++      status,
++      approvalStatus,
++      company,
++      page = 1,
++      limit = 20,
++      search
++    } = req.query;
++
++    const query = {};
++    if (status) query.status = status;
++    if (approvalStatus) query.approvalStatus = approvalStatus;
++    if (company) query.company = company;
++    if (search) {
++      query.$or = [
++        { title: new RegExp(search, 'i') },
++        { category: new RegExp(search, 'i') }
++      ];
++    }
++
++    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
++    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
++    const skip = (sanitizedPage - 1) * sanitizedLimit;
++
++    const [jobs, total] = await Promise.all([
++      Job.find(query)
++        .populate('company', 'companyName kyc.industry uniqueId')
++        .populate('postedBy', 'email')
++        .sort({ createdAt: -1 })
++        .skip(skip)
++        .limit(sanitizedLimit),
++      Job.countDocuments(query)
++    ]);
++
++    const statusSummary = await Job.aggregate([
++      { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
++    ]);
++
++    res.json({
++      success: true,
++      data: {
++        jobs,
++        summary: statusSummary.reduce((acc, item) => {
++          acc[item._id] = item.count;
++          return acc;
++        }, {}),
++        pagination: {
++          current: sanitizedPage,
++          pages: Math.ceil(total / sanitizedLimit),
++          total
++        }
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch jobs',
++      error: error.message
++    });
++  }
++};
++
++// @desc    Get single job full detail (admin)
++// @route   GET /api/admin/jobs/:id/detail
++exports.getJobDetail = async (req, res) => {
++  try {
++    const JobEditRequest = require('../models/JobEditRequest');
++
++    const job = await Job.findById(req.params.id)
++      .populate('company', 'companyName kyc billing uniqueId verificationStatus')
++      .populate('postedBy', 'email mobile')
++      .populate('approvedBy', 'email role')
++      .populate('discontinuedBy', 'email role');
++
++    if (!job) {
++      return res.status(404).json({
++        success: false,
++        message: 'Job not found'
++      });
++    }
++
++    const candidates = await Candidate.find({ job: job._id })
++      .populate('submittedBy', 'firmName firstName lastName')
++      .sort({ createdAt: -1 })
++      .select('firstName lastName status createdAt submittedBy');
++
++    const editRequests = await JobEditRequest.find({ job: job._id })
++      .populate('requestedBy', 'email')
++      .populate('reviewedBy', 'email')
++      .sort({ createdAt: -1 });
++
++    res.json({
++      success: true,
++      data: {
++        job,
++        candidates: {
++          total: candidates.length,
++          list: candidates
++        },
++        editRequests,
++        stats: job.getEditStats()
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch job detail',
++      error: error.message
++    });
++  }
++};
++
++// @desc    Get all candidates (admin registry)
++// @route   GET /api/admin/candidates
++exports.getAllCandidates = async (req, res) => {
++  try {
++    const {
++      status,
++      job,
++      company,
++      partner,
++      page = 1,
++      limit = 20,
++      search
++    } = req.query;
++
++    const query = {};
++    if (status) query.status = status;
++    if (job) query.job = job;
++    if (company) query.company = company;
++    if (partner) query.submittedBy = partner;
++    if (search) {
++      query.$or = [
++        { firstName: new RegExp(search, 'i') },
++        { lastName: new RegExp(search, 'i') },
++        { email: new RegExp(search, 'i') },
++        { mobile: new RegExp(search, 'i') }
++      ];
++    }
++
++    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
++    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
++    const skip = (sanitizedPage - 1) * sanitizedLimit;
++
++    const [candidates, total] = await Promise.all([
++      Candidate.find(query)
++        .populate('submittedBy', 'firmName firstName lastName uniqueId')
++        .populate('job', 'title uniqueId')
++        .populate('company', 'companyName uniqueId')
++        .sort({ createdAt: -1 })
++        .skip(skip)
++        .limit(sanitizedLimit)
++        .select('-statusHistory -notes -qualityCheck'),
++      Candidate.countDocuments(query)
++    ]);
++
++    const statusSummary = await Candidate.aggregate([
++      { $group: { _id: '$status', count: { $sum: 1 } } }
++    ]);
++
++    res.json({
++      success: true,
++      data: {
++        candidates,
++        summary: statusSummary.reduce((acc, item) => {
++          acc[item._id] = item.count;
++          return acc;
++        }, {}),
++        pagination: {
++          current: sanitizedPage,
++          pages: Math.ceil(total / sanitizedLimit),
++          total
++        }
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch candidates',
++      error: error.message
++    });
++  }
++};
++
++// @desc    Get single candidate full detail (admin)
++// @route   GET /api/admin/candidates/:id
++exports.getCandidateDetail = async (req, res) => {
++  try {
++    const candidate = await Candidate.findById(req.params.id)
++      .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
++      .populate('job', 'title uniqueId company')
++      .populate('company', 'companyName uniqueId')
++      .populate('statusHistory.changedBy', 'email role');
++
++    if (!candidate) {
++      return res.status(404).json({
++        success: false,
++        message: 'Candidate not found'
++      });
++    }
++
++    res.json({
++      success: true,
++      data: candidate
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch candidate',
++      error: error.message
++    });
++  }
++};
++
++// @desc    Get all partners (admin registry)
++// @route   GET /api/admin/partners
++exports.getAllPartners = async (req, res) => {
++  try {
++    const {
++      verificationStatus,
++      page = 1,
++      limit = 20,
++      search
++    } = req.query;
++
++    const query = {};
++    if (verificationStatus) query.verificationStatus = verificationStatus;
++    if (search) {
++      query.$or = [
++        { firmName: new RegExp(search, 'i') },
++        { firstName: new RegExp(search, 'i') },
++        { lastName: new RegExp(search, 'i') }
++      ];
++    }
++
++    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
++    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
++    const skip = (sanitizedPage - 1) * sanitizedLimit;
++
++    const [partners, total] = await Promise.all([
++      StaffingPartner.find(query)
++        .populate('user', 'email mobile status lastLogin')
++        .populate('verifiedBy', 'email role')
++        .sort({ createdAt: -1 })
++        .skip(skip)
++        .limit(sanitizedLimit)
++        .select('-documents -compliance'),
++      StaffingPartner.countDocuments(query)
++    ]);
++
++    const statusSummary = await StaffingPartner.aggregate([
++      { $group: { _id: '$verificationStatus', count: { $sum: 1 } } }
++    ]);
++
++    res.json({
++      success: true,
++      data: {
++        partners,
++        summary: statusSummary.reduce((acc, item) => {
++          acc[item._id] = item.count;
++          return acc;
++        }, {}),
++        pagination: {
++          current: sanitizedPage,
++          pages: Math.ceil(total / sanitizedLimit),
++          total
++        }
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch partners',
++      error: error.message
++    });
++  }
++};
++
++// @desc    Get single partner full detail (admin)
++// @route   GET /api/admin/partners/:id
++exports.getPartnerDetail = async (req, res) => {
++  try {
++    const partner = await StaffingPartner.findById(req.params.id)
++      .populate('user', 'email mobile status lastLogin createdAt')
++      .populate('verifiedBy', 'email role');
++
++    if (!partner) {
++      return res.status(404).json({
++        success: false,
++        message: 'Partner not found'
++      });
++    }
++
++    // Get submission and placement stats
++    const submissionStats = await Candidate.aggregate([
++      { $match: { submittedBy: partner._id } },
++      { $group: { _id: '$status', count: { $sum: 1 } } }
++    ]);
++
++    // Get recent submissions
++    const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
++      .populate('job', 'title')
++      .populate('company', 'companyName')
++      .sort({ createdAt: -1 })
++      .limit(10)
++      .select('firstName lastName status job company createdAt');
++
++    // Get payout info
++    const Payout = require('../models/Payout');
++    const payoutSummary = await Payout.aggregate([
++      { $match: { staffingPartner: partner._id } },
++      { $group: { _id: '$status', count: { $sum: 1 }, amount: { $sum: '$amount.netPayable' } } }
++    ]);
++
++    res.json({
++      success: true,
++      data: {
++        partner,
++        submissionStats: submissionStats.reduce((acc, item) => {
++          acc[item._id] = item.count;
++          return acc;
++        }, {}),
++        payoutSummary: payoutSummary.reduce((acc, item) => {
++          acc[item._id] = { count: item.count, amount: item.amount };
++          return acc;
++        }, {}),
++        recentSubmissions
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch partner detail',
++      error: error.message
++    });
++  }
++};
++
++// @desc    Get all companies (admin registry)
++// @route   GET /api/admin/companies
++exports.getAllCompanies = async (req, res) => {
++  try {
++    const {
++      verificationStatus,
++      page = 1,
++      limit = 20,
++      search
++    } = req.query;
++
++    const query = {};
++    if (verificationStatus) query.verificationStatus = verificationStatus;
++    if (search) {
++      query.$or = [
++        { companyName: new RegExp(search, 'i') },
++        { 'kyc.industry': new RegExp(search, 'i') }
++      ];
++    }
++
++    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
++    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
++    const skip = (sanitizedPage - 1) * sanitizedLimit;
++
++    const [companies, total] = await Promise.all([
++      Company.find(query)
++        .populate('user', 'email mobile status lastLogin')
++        .populate('verifiedBy', 'email role')
++        .sort({ createdAt: -1 })
++        .skip(skip)
++        .limit(sanitizedLimit)
++        .select('-documents -legalConsents -billing'),
++      Company.countDocuments(query)
++    ]);
++
++    const statusSummary = await Company.aggregate([
++      { $group: { _id: '$verificationStatus', count: { $sum: 1 } } }
++    ]);
++
++    res.json({
++      success: true,
++      data: {
++        companies,
++        summary: statusSummary.reduce((acc, item) => {
++          acc[item._id] = item.count;
++          return acc;
++        }, {}),
++        pagination: {
++          current: sanitizedPage,
++          pages: Math.ceil(total / sanitizedLimit),
++          total
++        }
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch companies',
++      error: error.message
++    });
++  }
++};
++
++// @desc    Get single company full detail (admin)
++// @route   GET /api/admin/companies/:id
++exports.getCompanyDetail = async (req, res) => {
++  try {
++    const company = await Company.findById(req.params.id)
++      .populate('user', 'email mobile status lastLogin createdAt')
++      .populate('verifiedBy', 'email role');
++
++    if (!company) {
++      return res.status(404).json({
++        success: false,
++        message: 'Company not found'
++      });
++    }
++
++    // Get job stats
++    const jobStats = await Job.aggregate([
++      { $match: { company: company._id } },
++      { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
++    ]);
++
++    // Get recent jobs
++    const recentJobs = await Job.find({ company: company._id })
++      .sort({ createdAt: -1 })
++      .limit(5)
++      .select('title approvalStatus status createdAt vacancies');
++
++    // Get candidate pipeline
++    const candidateStats = await Candidate.aggregate([
++      { $match: { company: company._id } },
++      { $group: { _id: '$status', count: { $sum: 1 } } }
++    ]);
++
++    res.json({
++      success: true,
++      data: {
++        company,
++        jobStats: jobStats.reduce((acc, item) => {
++          acc[item._id] = item.count;
++          return acc;
++        }, {}),
++        candidateStats: candidateStats.reduce((acc, item) => {
++          acc[item._id] = item.count;
++          return acc;
++        }, {}),
++        recentJobs
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch company detail',
++      error: error.message
++    });
++  }
++};
++
++// ==================== AUDIT LOG ====================
++
++// @desc    Get audit logs
++// @route   GET /api/admin/audit-logs
++exports.getAuditLogs = async (req, res) => {
++  try {
++    const AdminActionLog = require('../models/AdminActionLog');
++    const {
++      actor,
++      action,
++      entityType,
++      page = 1,
++      limit = 50
++    } = req.query;
++
++    const query = {};
++    if (actor) query.actor = actor;
++    if (action) query.action = action;
++    if (entityType) query.entityType = entityType;
++
++    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
++    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
++    const skip = (sanitizedPage - 1) * sanitizedLimit;
++
++    const [logs, total] = await Promise.all([
++      AdminActionLog.find(query)
++        .populate('actor', 'email role')
++        .sort({ createdAt: -1 })
++        .skip(skip)
++        .limit(sanitizedLimit),
++      AdminActionLog.countDocuments(query)
++    ]);
++
++    res.json({
++      success: true,
++      data: {
++        logs,
++        pagination: {
++          current: sanitizedPage,
++          pages: Math.ceil(total / sanitizedLimit),
++          total
++        }
++      }
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: 'Failed to fetch audit logs',
++      error: error.message
++    });
++  }
+ };
+\ No newline at end of file
+diff --git a/controllers/staffingPartnerController.js b/controllers/staffingPartnerController.js
+index 6101815..b00ce4a 100644
+--- a/controllers/staffingPartnerController.js
++++ b/controllers/staffingPartnerController.js
+@@ -972,37 +972,84 @@ exports.getAvailableJobs = async (req, res) => {
+ // @route   GET /api/staffing-partners/jobs/:id
+ exports.getJobDetails = async (req, res) => {
+   try {
+-    const job = await Job.findById(req.params.id).populate(
+-      "company",
+-      "companyName kyc.logo kyc.industry kyc.companyType kyc.website",
+-    );
++    const job = await Job.findById(req.params.id)
++      .populate(
++        'company',
++        [
++          'companyName',
++          'kyc.logo',
++          'kyc.industry',
++          'kyc.companyType',
++          'kyc.yearEstablished',
++          'kyc.employeeCount',
++          'kyc.description',
++          'kyc.website',
++          'city',
++          'state',
++          'hiringPreferences.workModePreference',
++          'hiringPreferences.typicalCtcBand',
++          'hiringPreferences.avgMonthlyHiringVolume',
++          'metrics.totalHires',
++          'metrics.totalJobsPosted'
++        ].join(' ')
++      );
+ 
+     if (!job) {
+       return res.status(404).json({
+         success: false,
+-        message: "Job not found",
++        message: 'Job not found'
+       });
+     }
+ 
+     job.metrics.views += 1;
+     await job.save();
+ 
++    // Build safe company profile for vendor
++    const company = job.company;
++    const safeCompanyInfo = company ? {
++      companyName: company.companyName,
++      logo: company.kyc?.logo || null,
++      industry: company.kyc?.industry || null,
++      companyType: company.kyc?.companyType || null,
++      yearEstablished: company.kyc?.yearEstablished || null,
++      employeeCount: company.kyc?.employeeCount || null,
++      description: company.kyc?.description || null,
++      website: company.kyc?.website || null,
++      location: {
++        city: company.city || null,
++        state: company.state || null
++      },
++      workMode: company.hiringPreferences?.workModePreference || null,
++      typicalCtcBand: company.hiringPreferences?.typicalCtcBand || null,
++      hiringVolume: company.hiringPreferences?.avgMonthlyHiringVolume || null,
++      platformStats: {
++        totalHires: company.metrics?.totalHires || 0,
++        totalJobsPosted: company.metrics?.totalJobsPosted || 0
++      }
++    } : null;
++
++    // Build clean job response
++    const jobData = job.toObject();
++    delete jobData.company; // remove full company object
++
+     res.json({
+       success: true,
+       data: {
+-        job,
+-        shareableLink: job.shareableLink,
+-      },
++        job: {
++          ...jobData,
++          company: safeCompanyInfo // replace with safe version
++        },
++        shareableLink: job.shareableLink
++      }
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: "Failed to fetch job",
+-      error: error.message,
++      message: 'Failed to fetch job',
++      error: error.message
+     });
+   }
+ };
+-
+ // @desc    Submit Candidate for a Job
+ // @route   POST /api/staffing-partners/jobs/:jobId/candidates
+ exports.submitCandidate = async (req, res) => {
+@@ -1176,44 +1223,67 @@ exports.submitCandidate = async (req, res) => {
+     // ================================
+     const sendCandidateConsent = async () => {
+       try {
++        const crypto = require('crypto');
+         const emailService = require('../services/emailService');
+-        const whatsappService = require('../services/whatsappService');
++
++        // Generate secure consent token
++        const consentToken = crypto.randomBytes(32).toString('hex');
++        const consentExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
++
++        // Save token to candidate
++        await Candidate.findByIdAndUpdate(candidate._id, {
++          'consent.consentToken': consentToken,
++          'consent.consentStatus': 'PENDING_CONFIRMATION'
++        });
++
++        const confirmUrl = `${process.env.FRONTEND_URL}/consent/confirm?token=${consentToken}`;
++        const denyUrl = `${process.env.FRONTEND_URL}/consent/deny?token=${consentToken}`;
+ 
+         await emailService.sendEmail({
+           to: email.toLowerCase(),
+-          subject: `Your profile has been submitted for ${job.title} — Syncro1`,
++          subject: `Your profile has been submitted for ${job.title} — Action Required`,
+           html: `
+         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+-          <h2>Syncro1</h2>
+-          <p>Dear ${firstName} ${lastName},</p>
+-
+-          <p>Your profile has been submitted for:</p>
+-
+-          <div style="padding:10px; background:#eef; border-left:4px solid #3b82f6;">
+-            <p><strong>Position:</strong> ${job.title}</p>
+-            <p><strong>Submitted by:</strong> ${partner.firmName}</p>
++          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px 10px 0 0;">
++            <h1 style="margin: 0; font-size: 20px;">Syncro1</h1>
++            <p style="margin: 5px 0 0 0; opacity: 0.9;">Profile Submission — Your Action Required</p>
++          </div>
++          <div style="padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb;">
++            <p>Dear ${firstName} ${lastName},</p>
++            <p>Your profile has been submitted for the following opportunity through Syncro1 platform:</p>
++            <div style="background: #dbeafe; border-left: 4px solid #3b82f6; padding: 15px; margin: 20px 0; border-radius: 4px;">
++              <p><strong>Position:</strong> ${job.title}</p>
++              <p><strong>Submitted by:</strong> ${partner.firmName}</p>
++              <p><strong>Platform:</strong> Syncro1 Private Limited</p>
++            </div>
++            <p>Please confirm whether you consent to this submission:</p>
++            <div style="text-align: center; margin: 30px 0;">
++              <a href="${confirmUrl}"
++                 style="background: #10b981; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-right: 15px;">
++                ✅ Yes, I Consent
++              </a>
++              <a href="${denyUrl}"
++                 style="background: #ef4444; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
++                ❌ No, I Do Not Consent
++              </a>
++            </div>
++            <p style="font-size: 12px; color: #666;">This link expires in 7 days. If you did not authorise this submission, please click "No, I Do Not Consent" immediately.</p>
++          </div>
++          <div style="text-align: center; padding: 15px; color: #6b7280; font-size: 11px;">
++            © ${new Date().getFullYear()} Syncro1 Private Limited
+           </div>
+-
+-          <p>If you did not consent, contact support@syncro1.com</p>
+         </div>
+       `
+         });
+ 
+-        console.log(`[CONSENT] Email sent to ${email}`);
+-
+-        if (mobile) {
+-          await whatsappService.sendMessage(
+-            mobile,
+-            `Hi ${firstName}, your profile was submitted for ${job.title} via Syncro1 by ${partner.firmName}. If this was not authorized, contact support@syncro1.com`
+-          );
+-        }
+-
+-        console.log(`[CONSENT] WhatsApp sent to ${mobile}`);
++        console.log(`[CONSENT] ✅ Consent email sent to: ${email}`);
+       } catch (err) {
+         console.error('[CONSENT] Failed:', err.message);
+       }
+     };
+ 
++    sendCandidateConsent();
++
+     // fire-and-forget
+     sendCandidateConsent();
+ 
+diff --git a/models/Candidate.js b/models/Candidate.js
+index ba34bb7..1e87866 100644
+--- a/models/Candidate.js
++++ b/models/Candidate.js
+@@ -40,7 +40,6 @@ const candidateSchema = new mongoose.Schema({
+     required: true
+   },
+ 
+-  // Consent
+   consent: {
+     given: {
+       type: Boolean,
+@@ -48,10 +47,23 @@ const candidateSchema = new mongoose.Schema({
+       default: false
+     },
+     givenAt: Date,
+-    consentDocument: String,
+-    ipAddress: String
+-  },
++    ipAddress: String,
+ 
++    // Candidate's own consent confirmation
++    consentToken: {
++      type: String,
++      index: true,
++      sparse: true
++    },
++    consentStatus: {
++      type: String,
++      enum: ['PENDING_CONFIRMATION', 'CONFIRMED', 'DENIED'],
++      default: 'PENDING_CONFIRMATION'
++    },
++    consentConfirmedAt: Date,
++    consentDeniedAt: Date,
++    consentIp: String
++  },
+   // Resume
+   resume: {
+     url: String,
+diff --git a/models/Company.js b/models/Company.js
+index 072bb3e..a3077fa 100644
+--- a/models/Company.js
++++ b/models/Company.js
+@@ -9,6 +9,14 @@ const companySchema = new mongoose.Schema({
+     unique: true
+   },
+ 
++  // ✅ Added uniqueId field
++  uniqueId: {
++    type: String,
++    unique: true,
++    sparse: true,
++    index: true
++  },
++
+   // ==================== 1. PRIMARY ACCOUNT (Decision Maker) ====================
+   decisionMakerName: {
+     type: String,
+@@ -33,7 +41,7 @@ const companySchema = new mongoose.Schema({
+     required: true
+   },
+ 
+-  // ==================== 2. COMPANY INFORMATION (Core KYC Layer) ====================
++  // ==================== 2. COMPANY INFORMATION ====================
+   companyName: {
+     type: String,
+     required: [true, 'Company name is required'],
+@@ -106,7 +114,7 @@ const companySchema = new mongoose.Schema({
+     }
+   },
+ 
+-  // ==================== 5. COMMERCIAL & BILLING SETUP ====================
++  // ==================== 5. BILLING ====================
+   billing: {
+     billingEntityName: String,
+     billingAddress: {
+@@ -136,7 +144,7 @@ const companySchema = new mongoose.Schema({
+     }
+   },
+ 
+-  // ==================== 6. USER ROLES & ACCESS CONTROL ====================
++  // ==================== 6. TEAM ====================
+   teamAccess: {
+     isTeamEnabled: { type: Boolean, default: false },
+     teamMembers: [{
+@@ -153,34 +161,23 @@ const companySchema = new mongoose.Schema({
+     }]
+   },
+ 
+-  // ==================== 7. LEGAL & COMPLIANCE ====================
++  // ==================== 7. LEGAL ====================
+   legalConsents: {
+-    // Terms of Service
+     termsAccepted: { type: Boolean, default: false },
+     termsAcceptedAt: Date,
+     termsAcceptedIp: String,
+-
+-    // Privacy Policy
+     privacyPolicyAccepted: { type: Boolean, default: false },
+     privacyPolicyAcceptedAt: Date,
+     privacyPolicyAcceptedIp: String,
+-
+-    // Cookie Policy
+     cookiePolicyAccepted: { type: Boolean, default: false },
+     cookiePolicyAcceptedAt: Date,
+     cookiePolicyAcceptedIp: String,
+-
+-    // Data Storage Consent
+     dataStorageConsent: { type: Boolean, default: false },
+     dataStorageConsentAt: Date,
+     dataStorageConsentIp: String,
+-
+-    // Vendor Sharing Consent
+     vendorSharingConsent: { type: Boolean, default: false },
+     vendorSharingConsentAt: Date,
+     vendorSharingConsentIp: String,
+-
+-    // Communication Consent
+     communicationConsent: {
+       email: { type: Boolean, default: true },
+       whatsapp: { type: Boolean, default: false },
+@@ -190,9 +187,8 @@ const companySchema = new mongoose.Schema({
+     communicationConsentIp: String
+   },
+ 
+-  // ==================== 8. DOCUMENTS (Post-Signup) ====================
++  // ==================== DOCUMENTS ====================
+   documents: {
+-    // Mandatory
+     gstCertificate: String,
+     panCard: String,
+     incorporationCertificate: String,
+@@ -238,4 +234,21 @@ const companySchema = new mongoose.Schema({
+   timestamps: true
+ });
+ 
++// ✅ Pre-save hook for uniqueId
++companySchema.pre('save', function (next) {
++  if (!this.uniqueId) {
++    const now = new Date();
++    const year = now.getFullYear();
++    const date = String(now.getDate()).padStart(2, '0');
++    const month = String(now.getMonth() + 1).padStart(2, '0');
++    const hours = String(now.getHours()).padStart(2, '0');
++    const minutes = String(now.getMinutes()).padStart(2, '0');
++    const seconds = String(now.getSeconds()).padStart(2, '0');
++    const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
++
++    this.uniqueId = `CMP-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
++  }
++  next();
++});
++
+ module.exports = mongoose.model('Company', companySchema);
+\ No newline at end of file
+diff --git a/models/Job.js b/models/Job.js
+index dfe3d81..976e53d 100644
+--- a/models/Job.js
++++ b/models/Job.js
+@@ -24,6 +24,15 @@ const jobSchema = new mongoose.Schema({
+     type: String,
+     unique: true
+   },
++
++  // ✅ Added uniqueId field
++  uniqueId: {
++    type: String,
++    unique: true,
++    sparse: true,
++    index: true
++  },
++
+   description: {
+     type: String,
+     required: [true, 'Job description is required'],
+@@ -124,14 +133,14 @@ const jobSchema = new mongoose.Schema({
+     default: '0-15 days'
+   },
+ 
+-  // ==================== JOB STATUS (for partner visibility) ====================
++  // ==================== JOB STATUS ====================
+   status: {
+     type: String,
+     enum: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'CLOSED', 'FILLED'],
+     default: 'DRAFT'
+   },
+ 
+-  // ==================== APPROVAL WORKFLOW (NEW) ====================
++  // ==================== APPROVAL WORKFLOW ====================
+   approvalStatus: {
+     type: String,
+     enum: [
+@@ -154,7 +163,7 @@ const jobSchema = new mongoose.Schema({
+   rejectionReason: String,
+   rejectedAt: Date,
+ 
+-  // ==================== EDIT REQUEST TRACKING (NEW) ====================
++  // ==================== EDIT REQUEST TRACKING ====================
+   editRequestCount: {
+     type: Number,
+     default: 0
+@@ -169,7 +178,7 @@ const jobSchema = new mongoose.Schema({
+   },
+   lastEditRequestAt: Date,
+ 
+-  // ==================== DISCONTINUATION (NEW) ====================
++  // ==================== DISCONTINUATION ====================
+   discontinuedReason: String,
+   discontinuedBy: {
+     type: mongoose.Schema.Types.ObjectId,
+@@ -177,7 +186,7 @@ const jobSchema = new mongoose.Schema({
+   },
+   discontinuedAt: Date,
+ 
+-  // ==================== CHANGE HISTORY (NEW - AUDIT TRAIL) ====================
++  // ==================== CHANGE HISTORY ====================
+   changeHistory: [{
+     changedAt: {
+       type: Date,
+@@ -250,10 +259,8 @@ const jobSchema = new mongoose.Schema({
+ jobSchema.index({ company: 1, approvalStatus: 1 });
+ jobSchema.index({ approvalStatus: 1, createdAt: -1 });
+ jobSchema.index({ status: 1, eligiblePlans: 1 });
+-// jobSchema.index({ slug: 1 });
+ jobSchema.index({ category: 1, status: 1 });
+ jobSchema.index({ 'location.city': 1, status: 1 });
+-// ✅ FIX #8: Added missing index
+ jobSchema.index({ company: 1, status: 1, createdAt: -1 });
+ 
+ // ==================== VIRTUAL FIELDS ====================
+@@ -270,7 +277,6 @@ jobSchema.virtual('requiresApproval').get(function () {
+ });
+ 
+ // ==================== MIDDLEWARE ====================
+-
+ jobSchema.pre('save', function (next) {
+   // Auto-generate slug
+   if (this.isModified('title') && !this.slug) {
+@@ -280,7 +286,7 @@ jobSchema.pre('save', function (next) {
+       .replace(/(^-|-$)/g, '') + '-' + Date.now();
+   }
+ 
+-  // Auto-generate uniqueId: YYYY-DD-MM-HHmmss-random
++  // Auto-generate uniqueId
+   if (!this.uniqueId) {
+     const now = new Date();
+     const year = now.getFullYear();
+@@ -290,6 +296,7 @@ jobSchema.pre('save', function (next) {
+     const minutes = String(now.getMinutes()).padStart(2, '0');
+     const seconds = String(now.getSeconds()).padStart(2, '0');
+     const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
++
+     this.uniqueId = `JOB-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
+   }
+ 
+@@ -318,7 +325,6 @@ jobSchema.pre('save', function (next) {
+ });
+ 
+ // ==================== METHODS ====================
+-
+ jobSchema.methods.addToHistory = function (changeType, changedBy, changes = {}, notes = '') {
+   this.changeHistory.push({
+     changedAt: new Date(),
+@@ -329,7 +335,6 @@ jobSchema.methods.addToHistory = function (changeType, changedBy, changes = {},
+   });
+ };
+ 
+-// ✅ FIX #1: Proper markModified with actual field names
+ jobSchema.methods.applyEditChanges = function (appliedChanges) {
+   Object.keys(appliedChanges).forEach(field => {
+     const keys = field.split('.');
+diff --git a/models/Notification.js b/models/Notification.js
+index 0d557a0..88452fc 100644
+--- a/models/Notification.js
++++ b/models/Notification.js
+@@ -25,19 +25,17 @@ const notificationSchema = new mongoose.Schema({
+       'CANDIDATE_JOINED',
+       'CANDIDATE_REJECTED',
+       'CANDIDATE_ON_HOLD',
++      'CANDIDATE_WITHDRAWN',
+ 
+       // Candidate submission — sent to COMPANY
+       'NEW_CANDIDATE_SUBMITTED',
+ 
+-      // ✅ NEW: Candidate
+-      'CANDIDATE_WITHDRAWN',
+-
+       // Job notifications — sent to PARTNER
+       'NEW_JOB_MATCHED',
+       'JOB_CLOSING_SOON',
+       'JOB_CLOSED',
+ 
+-      // ✅ NEW: Job approval workflow
++      // Job approval workflow
+       'JOB_SUBMITTED_FOR_APPROVAL',
+       'JOB_APPROVED',
+       'JOB_REJECTED',
+@@ -52,19 +50,32 @@ const notificationSchema = new mongoose.Schema({
+       'SUBSCRIPTION_EXPIRING',
+       'SUBSCRIPTION_EXPIRED',
+ 
+-      // ✅ NEW: Payout notifications
++      // Payout notifications
+       'PAYOUT_ELIGIBLE',
+       'PAYOUT_APPROVED',
+       'PAYOUT_PAID',
+       'PAYOUT_FORFEITED',
+       'PAYOUT_ON_HOLD',
+ 
+-      // ✅ NEW: Invoice notifications
++      // Invoice notifications
+       'INVOICE_GENERATED',
+       'INVOICE_SENT',
+       'INVOICE_PAID',
+       'INVOICE_OVERDUE',
+ 
++      // Job interest and extension
++      'LIMIT_EXTENSION_REQUESTED',
++      'LIMIT_EXTENSION_APPROVED',
++      'LIMIT_EXTENSION_REJECTED',
++
++      // Agreement
++      'AGREEMENT_QUERY_SUBMITTED',
++      'AGREEMENT_QUERY_RESPONDED',
++
++      // Candidate consent
++      'CANDIDATE_CONSENT_CONFIRMED',
++      'CANDIDATE_CONSENT_DENIED',
++
+       // System
+       'SYSTEM_ANNOUNCEMENT'
+     ],
+diff --git a/models/StaffingPartner.js b/models/StaffingPartner.js
+index c559200..1781cb5 100644
+--- a/models/StaffingPartner.js
++++ b/models/StaffingPartner.js
+@@ -9,6 +9,14 @@ const staffingPartnerSchema = new mongoose.Schema({
+     unique: true
+   },
+ 
++  // ✅ Added uniqueId field
++  uniqueId: {
++    type: String,
++    unique: true,
++    sparse: true,
++    index: true
++  },
++
+   // ==================== 1. PRIMARY PARTNER ACCOUNT ====================
+   firstName: {
+     type: String,
+@@ -175,7 +183,6 @@ const staffingPartnerSchema = new mongoose.Schema({
+ 
+   // ==================== 6. COMMERCIAL & PAYOUT PREFERENCES (MERGED) ====================
+   commercialDetails: {
+-    // Payout Entity Info
+     payoutEntityName: { type: String, trim: true },
+     gstRegistration: {
+       type: String,
+@@ -183,8 +190,6 @@ const staffingPartnerSchema = new mongoose.Schema({
+       default: 'Unregistered'
+     },
+     tdsApplicable: { type: Boolean, default: true },
+-
+-    // Bank Details
+     bankAccountHolderName: String,
+     bankName: String,
+     accountNumber: String,
+@@ -236,6 +241,7 @@ const staffingPartnerSchema = new mongoose.Schema({
+     isActive: { type: Boolean, default: true },
+     autoRenew: { type: Boolean, default: false }
+   },
++
+   // ==================== PERFORMANCE METRICS ====================
+   metrics: {
+     totalSubmissions: { type: Number, default: 0 },
+@@ -271,7 +277,7 @@ const staffingPartnerSchema = new mongoose.Schema({
+     Syncro1Competency: { type: Boolean, default: false },
+     geographicReach: { type: Boolean, default: false },
+     compliance: { type: Boolean, default: false },
+-    commercialDetails: { type: Boolean, default: false },  // ✅ MERGED
++    commercialDetails: { type: Boolean, default: false },
+     documents: { type: Boolean, default: false }
+   },
+ 
+@@ -297,4 +303,21 @@ staffingPartnerSchema.methods.getProfileCompletionPercentage = function () {
+   return Math.round((completed / fields.length) * 100);
+ };
+ 
++// ✅ Pre-save hook for uniqueId
++staffingPartnerSchema.pre('save', function (next) {
++  if (!this.uniqueId) {
++    const now = new Date();
++    const year = now.getFullYear();
++    const date = String(now.getDate()).padStart(2, '0');
++    const month = String(now.getMonth() + 1).padStart(2, '0');
++    const hours = String(now.getHours()).padStart(2, '0');
++    const minutes = String(now.getMinutes()).padStart(2, '0');
++    const seconds = String(now.getSeconds()).padStart(2, '0');
++    const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
++
++    this.uniqueId = `SP-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
++  }
++  next();
++});
++
+ module.exports = mongoose.model('StaffingPartner', staffingPartnerSchema);
+\ No newline at end of file
+diff --git a/routes/adminRoutes.js b/routes/adminRoutes.js
+index 88596ea..6773c5f 100644
+--- a/routes/adminRoutes.js
++++ b/routes/adminRoutes.js
+@@ -31,7 +31,18 @@ const {
+   holdPayout,
+   releasePayout,
+   forfeitPayout,
+-  checkPayoutEligibility
++  checkPayoutEligibility,
++
++  // NEW
++  getAllJobs,
++  getJobDetail,
++  getAllCandidates,
++  getCandidateDetail,
++  getAllPartners,
++  getPartnerDetail,
++  getAllCompanies,
++  getCompanyDetail,
++  getAuditLogs
+ } = require('../controllers/adminController');
+ 
+ const {
+@@ -66,9 +77,6 @@ router.get(
+   getPendingVerifications
+ );
+ 
+-// NOTE:
+-// verifyPartner / verifyCompany currently use action in req.body (approve/reject)
+-// We will add action-based permission checks inside controller in next step if needed.
+ router.put(
+   '/verify/partner/:id',
+   checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+@@ -150,6 +158,119 @@ router.put(
+   rejectEditRequest
+ );
+ 
++// ==================== REGISTRY ROUTES ====================
++
++// All jobs
++router.get(
++  '/jobs',
++  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
++  getAllJobs
++);
++
++router.get(
++  '/jobs/:id/detail',
++  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
++  getJobDetail
++);
++
++// All candidates
++router.get(
++  '/candidates',
++  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
++  getAllCandidates
++);
++
++router.get(
++  '/candidates/:id',
++  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
++  getCandidateDetail
++);
++
++// All partners
++router.get(
++  '/partners',
++  checkPermission(PERMISSIONS.VIEW_ALL_PARTNERS),
++  getAllPartners
++);
++
++router.get(
++  '/partners/:id',
++  checkPermission(PERMISSIONS.VIEW_ALL_PARTNERS),
++  getPartnerDetail
++);
++
++// All companies
++router.get(
++  '/companies',
++  checkPermission(PERMISSIONS.VIEW_ALL_COMPANIES),
++  getAllCompanies
++);
++
++router.get(
++  '/companies/:id',
++  checkPermission(PERMISSIONS.VIEW_ALL_COMPANIES),
++  getCompanyDetail
++);
++
++// Audit logs
++router.get(
++  '/audit-logs',
++  checkPermission(PERMISSIONS.VIEW_AUDIT_LOGS),
++  getAuditLogs
++);
++
++// Agreement queries via admin
++router.get(
++  '/agreement-queries',
++  checkPermission(PERMISSIONS.VIEW_AGREEMENT_QUERIES),
++  async (req, res) => {
++    try {
++      const AgreementQuery = require('../models/AgreementQuery');
++      const { status, page = 1, limit = 20 } = req.query;
++
++      const query = {};
++      if (status) query.status = status;
++
++      const sanitizedPage = Math.max(1, parseInt(page));
++      const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
++      const skip = (sanitizedPage - 1) * sanitizedLimit;
++
++      const [queries, total] = await Promise.all([
++        AgreementQuery.find(query)
++          .populate({ path: 'partner', select: 'firstName lastName firmName' })
++          .populate('user', 'email mobile')
++          .populate('respondedBy', 'email role')
++          .sort({ createdAt: 1 })
++          .skip(skip)
++          .limit(sanitizedLimit),
++        AgreementQuery.countDocuments(query)
++      ]);
++
++      const summary = await AgreementQuery.aggregate([
++        { $group: { _id: '$status', count: { $sum: 1 } } }
++      ]);
++
++      res.json({
++        success: true,
++        data: {
++          queries,
++          summary: summary.reduce((acc, item) => {
++            acc[item._id] = item.count;
++            return acc;
++          }, {}),
++          pagination: {
++            current: sanitizedPage,
++            pages: Math.ceil(total / sanitizedLimit),
++            total
++          }
++        }
++      });
++    } catch (error) {
++      res.status(500).json({ success: false, message: error.message });
++    }
++  }
++);
++
+ // ==================== PAYOUT MANAGEMENT ====================
+ router.get(
+   '/payouts',
+@@ -199,4 +320,41 @@ router.post(
+   checkPayoutEligibility
+ );
+ 
++// WhatsApp test route — Admin only
++router.post('/whatsapp/test', async (req, res) => {
++  try {
++    const { phone, type = 'otp' } = req.body;
++    const whatsappService = require('../services/whatsappService');
++
++    let result;
++
++    switch (type) {
++      case 'otp':
++        result = await whatsappService.sendOTP(phone, '123456');
++        break;
++      case 'connection':
++        result = await whatsappService.testConnection();
++        break;
++      case 'profile_verified':
++        result = await whatsappService.sendProfileVerified(phone, 'Test Partner');
++        break;
++      default:
++        result = await whatsappService.sendOTP(phone, '123456');
++    }
++
++    res.json({
++      success: true,
++      message: 'WhatsApp test executed',
++      data: result
++    });
++  } catch (error) {
++    res.status(500).json({
++      success: false,
++      message: error.message
++    });
++  }
++});
++
++
++
+ module.exports = router;
+\ No newline at end of file
+diff --git a/routes/candidateRoutes.js b/routes/candidateRoutes.js
+index d1c2875..3f5a052 100644
+--- a/routes/candidateRoutes.js
++++ b/routes/candidateRoutes.js
+@@ -1,19 +1,24 @@
+-// backend/routes/candidateRoutes.js
++
+ const express = require('express');
+ const router = express.Router();
+-const Candidate = require('../models/Candidate');
+-const Job = require('../models/Job');
+-const { protect, authorize } = require('../middleware/auth');
++const crypto = require('crypto');
+ 
+-// @desc    Public consent page data
+-// @route   GET /api/candidates/consent/:token
+-router.get('/consent/:token', async (req, res) => {
++// @desc    Candidate confirms consent via token link
++// @route   GET /api/candidates/consent/confirm
++router.get('/consent/confirm', async (req, res) => {
+   try {
+-    // NOTE: In production, this should be a JWT or other secure token,
+-    // not a raw candidate _id. Adjust lookup logic accordingly.
+-    const candidate = await Candidate.findById(req.params.token)
+-      .populate('job', 'title company description location')
+-      .populate('company', 'companyName');
++    const { token } = req.query;
++
++    if (!token) {
++      return res.status(400).json({
++        success: false,
++        message: 'Invalid consent link'
++      });
++    }
++
++    const candidate = await Candidate.findOne({
++      'consent.consentToken': token
++    });
+ 
+     if (!candidate) {
+       return res.status(404).json({
+@@ -22,112 +27,132 @@ router.get('/consent/:token', async (req, res) => {
+       });
+     }
+ 
+-    if (candidate.consent?.given) {
++    if (candidate.consent.consentStatus !== 'PENDING_CONFIRMATION') {
+       return res.json({
+         success: true,
+-        message: 'Consent already provided',
+-        data: { alreadyConsented: true }
++        message: 'Consent already recorded',
++        data: {
++          status: candidate.consent.consentStatus
++        }
++      });
++    }
++
++    candidate.consent.consentStatus = 'CONFIRMED';
++    candidate.consent.consentConfirmedAt = new Date();
++    candidate.consent.consentIp = req.ip;
++    await candidate.save();
++
++    // Notify partner
++    const notificationEngine = require('../services/notificationEngine');
++    const StaffingPartner = require('../models/StaffingPartner');
++    const partner = await StaffingPartner.findById(candidate.submittedBy)
++      .populate('user', '_id');
++
++    if (partner?.user?._id) {
++      await notificationEngine.send({
++        recipientId: partner.user._id,
++        type: 'CANDIDATE_CONSENT_CONFIRMED',
++        title: '✅ Candidate consent confirmed',
++        message: `${candidate.firstName} ${candidate.lastName} has confirmed consent for their profile submission.`,
++        data: {
++          entityType: 'Candidate',
++          entityId: candidate._id,
++          actionUrl: `/partner/submissions/${candidate._id}`
++        },
++        channels: { inApp: true },
++        priority: 'low'
+       });
+     }
+ 
+     res.json({
+       success: true,
+-      data: {
+-        candidateName: `${candidate.firstName} ${candidate.lastName}`,
+-        jobTitle: candidate.job?.title,
+-        companyName: candidate.company?.companyName,
+-        jobLocation: candidate.job?.location
+-      }
++      message: 'Thank you! Your consent has been confirmed.',
++      data: { status: 'CONFIRMED' }
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch consent data',
++      message: 'Failed to confirm consent',
+       error: error.message
+     });
+   }
+ });
+ 
+-// @desc    Submit consent (public route using token)
+-// @route   POST /api/candidates/consent/:token
+-router.post('/consent/:token', async (req, res) => {
++// @desc    Candidate denies consent via token link
++// @route   GET /api/candidates/consent/deny
++router.get('/consent/deny', async (req, res) => {
+   try {
+-    const { consent, signature } = req.body;
++    const { token } = req.query;
+ 
+-    // Again, token should ideally be a secure token / JWT
+-    const candidate = await Candidate.findById(req.params.token);
+-
+-    if (!candidate) {
+-      return res.status(404).json({
++    if (!token) {
++      return res.status(400).json({
+         success: false,
+         message: 'Invalid consent link'
+       });
+     }
+ 
+-    candidate.consent = {
+-      given: consent === true,
+-      givenAt: new Date(),
+-      ipAddress: req.ip || req.headers['x-forwarded-for'],
+-      signature: signature
+-    };
+-
+-    await candidate.save();
+-
+-    res.json({
+-      success: true,
+-      message: consent
+-        ? 'Thank you! Your consent has been recorded.'
+-        : 'You have declined to provide consent.'
+-    });
+-  } catch (error) {
+-    res.status(500).json({
+-      success: false,
+-      message: 'Failed to record consent',
+-      error: error.message
++    const candidate = await Candidate.findOne({
++      'consent.consentToken': token
+     });
+-  }
+-});
+-
+-// @desc    Get candidate details (for authorized users)
+-// @route   GET /api/candidates/:id
+-router.get('/:id', protect, async (req, res) => {
+-  try {
+-    const candidate = await Candidate.findById(req.params.id)
+-      .populate('submittedBy', 'firstName lastName firmName user')
+-      .populate('job', 'title commission company')
+-      .populate('company', 'companyName');
+ 
+     if (!candidate) {
+       return res.status(404).json({
+         success: false,
+-        message: 'Candidate not found'
++        message: 'Invalid or expired consent link'
+       });
+     }
+ 
+-    // Check authorization - only admin, the company, or the submitting partner can view
+-    const isAdmin = req.user.role === 'admin';
+-    const isCompany =
+-      req.user.role === 'company' &&
+-      candidate.company?.user?.toString() === req.user._id.toString();
+-    const isPartner =
+-      req.user.role === 'staffing_partner' &&
+-      candidate.submittedBy?.user?.toString() === req.user._id.toString();
+-
+-    if (!isAdmin && !isCompany && !isPartner) {
+-      return res.status(403).json({
+-        success: false,
+-        message: 'Not authorized to view this candidate'
++    if (candidate.consent.consentStatus !== 'PENDING_CONFIRMATION') {
++      return res.json({
++        success: true,
++        message: 'Consent already recorded',
++        data: { status: candidate.consent.consentStatus }
++      });
++    }
++
++    candidate.consent.consentStatus = 'DENIED';
++    candidate.consent.consentDeniedAt = new Date();
++    candidate.consent.consentIp = req.ip;
++    // Flag the submission
++    candidate.status = 'WITHDRAWN';
++    candidate.statusHistory.push({
++      status: 'WITHDRAWN',
++      changedAt: new Date(),
++      notes: 'Candidate denied consent — auto-withdrawn'
++    });
++    await candidate.save();
++
++    // Notify partner
++    const notificationEngine = require('../services/notificationEngine');
++    const StaffingPartner = require('../models/StaffingPartner');
++    const partner = await StaffingPartner.findById(candidate.submittedBy)
++      .populate('user', '_id');
++
++    if (partner?.user?._id) {
++      await notificationEngine.send({
++        recipientId: partner.user._id,
++        type: 'CANDIDATE_CONSENT_DENIED',
++        title: '❌ Candidate denied consent',
++        message: `${candidate.firstName} ${candidate.lastName} has denied consent. The submission has been automatically withdrawn.`,
++        data: {
++          entityType: 'Candidate',
++          entityId: candidate._id,
++          actionUrl: `/partner/submissions/${candidate._id}`
++        },
++        channels: { inApp: true, email: true },
++        priority: 'high'
+       });
+     }
+ 
+     res.json({
+       success: true,
+-      data: candidate
++      message: 'Your consent denial has been recorded. The submission has been withdrawn.',
++      data: { status: 'DENIED' }
+     });
+   } catch (error) {
+     res.status(500).json({
+       success: false,
+-      message: 'Failed to fetch candidate',
++      message: 'Failed to record consent denial',
+       error: error.message
+     });
+   }
+diff --git a/seeders/seed.js b/seeders/seed.js
+index 31b5cf7..17467a0 100644
+--- a/seeders/seed.js
++++ b/seeders/seed.js
+@@ -15,74 +15,59 @@ const { SubscriptionPlan } = require("../models/Subscription");
+ 
+ const seedDatabase = async () => {
+   try {
+-    // Connect to MongoDB
+     await mongoose.connect(process.env.MONGO_URI);
+     console.log("📦 Connected to MongoDB");
+ 
+-    // 1. Create Admin User
++    // 1. Admin
+     const adminExists = await User.findOne({ email: "admin@Syncro1.com" });
+     if (!adminExists) {
+-      const salt = await bcrypt.genSalt(10);
+-      const hashedPassword = await bcrypt.hash("Admin@123", salt);
+-
+       await User.create({
+         email: "admin@Syncro1.com",
+         mobile: "9999999999",
+-        password: hashedPassword,
++        password: "Admin@123",
+         role: "admin",
+         status: "ACTIVE",
+         emailVerified: true,
+         mobileVerified: true,
+         isPasswordChanged: true,
+       });
+-
+       console.log("✅ Admin user created");
+-      console.log("   📧 Email: admin@Syncro1.com");
+-      console.log("   🔑 Password: Admin@123");
+     } else {
+       console.log("ℹ️  Admin user already exists");
+     }
+ 
+-    // 1b. Create Test Sub-Admin
+-    const subAdminExists = await User.findOne({ email: 'subadmin@syncro1.com' });
++    // 2. Sub-Admin
++    const subAdminExists = await User.findOne({ email: "subadmin@syncro1.com" });
+     if (!subAdminExists) {
+-      const salt = await bcrypt.genSalt(10);
+-      const hashedPassword = await bcrypt.hash('SubAdmin@123', salt);
+-
+       await User.create({
+-        email: 'subadmin@syncro1.com',
+-        mobile: '9999999998',
+-        password: hashedPassword,
+-        role: 'sub_admin',
+-        status: 'ACTIVE',
++        email: "subadmin@syncro1.com",
++        mobile: "9999999998",
++        password: "SubAdmin@123",
++        role: "sub_admin",
++        status: "ACTIVE",
+         emailVerified: true,
+         mobileVerified: true,
+         isPasswordChanged: true,
+         permissions: [
+-          'VIEW_ADMIN_DASHBOARD',
+-          'VIEW_VERIFICATIONS',
+-          'APPROVE_PARTNER',
+-          'REJECT_PARTNER',
+-          'APPROVE_COMPANY',
+-          'REJECT_COMPANY',
+-          'VIEW_PENDING_JOBS',
+-          'APPROVE_JOB',
+-          'REJECT_JOB',
+-          'VIEW_NOTIFICATIONS'
++          "VIEW_ADMIN_DASHBOARD",
++          "VIEW_VERIFICATIONS",
++          "APPROVE_PARTNER",
++          "REJECT_PARTNER",
++          "APPROVE_COMPANY",
++          "REJECT_COMPANY",
++          "VIEW_PENDING_JOBS",
++          "APPROVE_JOB",
++          "REJECT_JOB",
++          "VIEW_NOTIFICATIONS",
+         ],
+-        createdBy: null // Will be null for seeded sub-admin
++        createdBy: null,
+       });
+-
+-      console.log('✅ Test sub-admin created');
+-      console.log('   📧 Email: subadmin@syncro1.com');
+-      console.log('   🔑 Password: SubAdmin@123');
+-      console.log('   🔐 Permissions: verification + job review');
++      console.log("✅ Sub-admin created");
+     } else {
+-      console.log('ℹ️  Test sub-admin already exists');
++      console.log("ℹ️  Sub-admin already exists");
+     }
+ 
+-
+-    // 2. Create Subscription Plans
++    // 3. Subscription Plans
+     const plans = [
+       {
+         name: "FREE",
+@@ -179,23 +164,22 @@ const seedDatabase = async () => {
+     ];
+ 
+     for (const plan of plans) {
+-      await SubscriptionPlan.findOneAndUpdate({ name: plan.name }, plan, {
+-        upsert: true,
+-        new: true,
+-      });
++      await SubscriptionPlan.findOneAndUpdate(
++        { name: plan.name },
++        plan,
++        { upsert: true, new: true }
++      );
+     }
+-    console.log("✅ Subscription plans created/updated");
+ 
+-    // 3. Create Sample Verified Partner (for testing)
+-    const testPartnerExists = await User.findOne({ email: "partner@test.com" });
+-    if (!testPartnerExists) {
+-      const salt = await bcrypt.genSalt(10);
+-      const hashedPassword = await bcrypt.hash("Partner@123", salt);
++    console.log("✅ Subscription plans created/updated");
+ 
++    // 4. Partner
++    const partnerExists = await User.findOne({ email: "partner@test.com" });
++    if (!partnerExists) {
+       const partnerUser = await User.create({
+         email: "partner@test.com",
+         mobile: "9876543210",
+-        password: hashedPassword,
++        password: "Partner@123",
+         role: "staffing_partner",
+         status: "ACTIVE",
+         emailVerified: true,
+@@ -204,9 +188,7 @@ const seedDatabase = async () => {
+       });
+ 
+       const now = new Date();
+-      const ipAddress = "127.0.0.1";
+ 
+-      // ✅ FIXED: Use proper Object structure for compliance
+       await StaffingPartner.create({
+         user: partnerUser._id,
+         firstName: "Test",
+@@ -258,63 +240,26 @@ const seedDatabase = async () => {
+           operatingStates: ["Maharashtra", "Karnataka"],
+         },
+ 
+-        // ✅ FIXED: Proper Object structure matching the model
+         compliance: {
+           syncrotechAgreement: {
+-            noCvRecycling: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            },
+-            noFakeProfiles: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            },
+-            noDoubleRepresentation: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            },
+-            vendorCodeOfConduct: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            },
+-            dataPrivacyPolicy: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            },
+-            candidateConsentPolicy: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            },
+-            nonCircumventionClause: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            },
+-            commissionPayoutTerms: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            },
+-            replacementBackoutLiability: {
+-              accepted: true,
+-              acceptedAt: now,
+-              acceptedIp: ipAddress
+-            }
++            noCvRecycling: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
++            noFakeProfiles: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
++            noDoubleRepresentation: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
++            vendorCodeOfConduct: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
++            dataPrivacyPolicy: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
++            candidateConsentPolicy: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
++            nonCircumventionClause: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
++            commissionPayoutTerms: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
++            replacementBackoutLiability: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+           },
+           allClausesAccepted: true,
+           agreementAcceptedAt: now,
+-          agreementAcceptedIp: ipAddress,
++          agreementAcceptedIp: "127.0.0.1",
+           digitalSignature: "Test Partner",
+           termsAccepted: true,
+           ndaSigned: true,
+           agreementSigned: true,
+-          agreementSignedAt: now
++          agreementSignedAt: now,
+         },
+ 
+         commercialDetails: {
+@@ -349,22 +294,17 @@ const seedDatabase = async () => {
+       });
+ 
+       console.log("✅ Test partner created");
+-      console.log("   📧 Email: partner@test.com");
+-      console.log("   🔑 Password: Partner@123");
+     } else {
+       console.log("ℹ️  Test partner already exists");
+     }
+ 
+-    // 4. Create Sample Verified Company (for testing)
+-    const testCompanyExists = await User.findOne({ email: "company@test.com" });
+-    if (!testCompanyExists) {
+-      const salt = await bcrypt.genSalt(10);
+-      const hashedPassword = await bcrypt.hash("Company@123", salt);
+-
++    // 5. Company
++    const companyExists = await User.findOne({ email: "company@test.com" });
++    if (!companyExists) {
+       const companyUser = await User.create({
+         email: "company@test.com",
+         mobile: "9876543211",
+-        password: hashedPassword,
++        password: "Company@123",
+         role: "company",
+         status: "ACTIVE",
+         emailVerified: true,
+@@ -373,7 +313,6 @@ const seedDatabase = async () => {
+       });
+ 
+       const now = new Date();
+-      const ipAddress = "127.0.0.1";
+ 
+       const company = await Company.create({
+         user: companyUser._id,
+@@ -381,7 +320,6 @@ const seedDatabase = async () => {
+         decisionMakerName: "John Doe",
+         designation: "HR Director",
+         department: "HR",
+-        linkedinProfile: "https://linkedin.com/in/johndoe",
+         city: "Bangalore",
+         state: "Karnataka",
+ 
+@@ -427,37 +365,34 @@ const seedDatabase = async () => {
+ 
+         billing: {
+           billingEntityName: "TechCorp Solutions Private Limited",
+-          gstRegistrationType: "Regular",
+           gstNumber: "29AABCT5678A1Z5",
+           panNumber: "AABCT5678A",
+-          poRequired: false,
+-          tdsApplicable: true,
+           paymentTerms: "Net 30",
+         },
+ 
+         legalConsents: {
+           termsAccepted: true,
+           termsAcceptedAt: now,
+-          termsAcceptedIp: ipAddress,
++          termsAcceptedIp: "127.0.0.1",
+           privacyPolicyAccepted: true,
+           privacyPolicyAcceptedAt: now,
+-          privacyPolicyAcceptedIp: ipAddress,
++          privacyPolicyAcceptedIp: "127.0.0.1",
+           dataProcessingAgreementAccepted: true,
+           dataProcessingAgreementAcceptedAt: now,
+-          dataProcessingAgreementAcceptedIp: ipAddress,
++          dataProcessingAgreementAcceptedIp: "127.0.0.1",
+           dataStorageConsent: true,
+           dataStorageConsentAt: now,
+-          dataStorageConsentIp: ipAddress,
++          dataStorageConsentIp: "127.0.0.1",
+           vendorSharingConsent: true,
+           vendorSharingConsentAt: now,
+-          vendorSharingConsentIp: ipAddress,
++          vendorSharingConsentIp: "127.0.0.1",
+           communicationConsent: {
+             email: true,
+             whatsapp: true,
+             sms: false,
+           },
+           communicationConsentAt: now,
+-          communicationConsentIp: ipAddress,
++          communicationConsentIp: "127.0.0.1",
+         },
+ 
+         verificationStatus: "APPROVED",
+@@ -473,8 +408,7 @@ const seedDatabase = async () => {
+         },
+       });
+ 
+-      // Create sample jobs
+-      const sampleJobs = [
++      await Job.create([
+         {
+           company: company._id,
+           postedBy: companyUser._id,
+@@ -487,7 +421,6 @@ const seedDatabase = async () => {
+           experienceLevel: "Senior",
+           experienceRange: { min: 5, max: 10 },
+           salary: { min: 2500000, max: 4000000, currency: "INR", isNegotiable: true },
+-          commission: { type: "percentage", value: 8.33 },
+           location: { city: "Bangalore", state: "Karnataka", isRemote: false, isHybrid: true },
+           skills: { required: ["JavaScript", "React", "Node.js"], preferred: ["AWS", "Docker"] },
+           vacancies: 3,
+@@ -498,60 +431,34 @@ const seedDatabase = async () => {
+           company: company._id,
+           postedBy: companyUser._id,
+           title: "Product Manager",
+-          description: "Join our product team to lead innovative solutions...",
+-          requirements: ["4+ years PM experience", "Agile", "Data Analysis"],
++          description: "Join our product team...",
++          requirements: ["4+ years PM experience", "Agile"],
+           category: "Technology",
+           employmentType: "Full-time",
+           experienceLevel: "Mid",
+           experienceRange: { min: 4, max: 8 },
+           salary: { min: 2000000, max: 3500000, currency: "INR", isNegotiable: true },
+-          commission: { type: "percentage", value: 8.33 },
+           location: { city: "Bangalore", state: "Karnataka", isRemote: true },
+-          skills: { required: ["Product Management", "Agile"], preferred: ["SQL", "Jira"] },
++          skills: { required: ["Product Management", "Agile"], preferred: ["SQL"] },
+           vacancies: 2,
+           status: "ACTIVE",
+           eligiblePlans: ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"],
+         },
+-        {
+-          company: company._id,
+-          postedBy: companyUser._id,
+-          title: "Junior Frontend Developer",
+-          description: "This is a great opportunity for freshers to start their career in frontend development using modern technologies like React, JavaScript, and responsive design principles.",
+-          requirements: ["0-2 years experience", "HTML", "CSS", "JavaScript"],
+-          category: "Technology",
+-          employmentType: "Full-time",
+-          experienceLevel: "Entry",
+-          experienceRange: { min: 0, max: 2 },
+-          salary: { min: 400000, max: 800000, currency: "INR" },
+-          commission: { type: "fixed", value: 25000 },
+-          location: { city: "Mumbai", state: "Maharashtra", isRemote: false },
+-          skills: { required: ["HTML", "CSS", "JavaScript", "React"], preferred: ["TypeScript"] },
+-          vacancies: 5,
+-          status: "ACTIVE",
+-          eligiblePlans: ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"],
+-        },
+-      ];
+-
+-      for (const jobData of sampleJobs) {
+-        await Job.create(jobData);
+-      }
++      ]);
+ 
+-      console.log("✅ Test company created with sample jobs");
+-      console.log("   📧 Email: company@test.com");
+-      console.log("   🔑 Password: Company@123");
+-      console.log("   📋 3 sample jobs created");
++      console.log("✅ Test company created");
++      console.log("   📋 Sample jobs created");
+     } else {
+       console.log("ℹ️  Test company already exists");
+     }
+ 
+-    console.log("\n🎉 Database seeding completed!");
+-    console.log("\n📝 Test Credentials:");
+-    console.log('━━━��━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+-    console.log('Admin:      admin@Syncro1.com / Admin@123');
+-    console.log('Sub-Admin:  subadmin@syncro1.com / SubAdmin@123');
+-    console.log('Partner:    partner@test.com / Partner@123');
+-    console.log('Company:    company@test.com / Company@123');
+-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
++    console.log("\n🎉 Seeding complete!");
++    console.log("━━━━━━━━━━━━━━━━━━━━");
++    console.log("Admin: admin@syncro1.com / Admin@123");
++    console.log("Sub-Admin: subadmin@syncro1.com / SubAdmin@123");
++    console.log("Partner: partner@test.com / Partner@123");
++    console.log("Company: company@test.com / Company@123");
++    console.log("━━━━━━━━━━━━━━━━━━━━");
+ 
+     process.exit(0);
+   } catch (error) {
+@@ -560,7 +467,4 @@ const seedDatabase = async () => {
+   }
+ };
+ 
+-seedDatabase();
+-
+-
+-
++seedDatabase();
+\ No newline at end of file
+diff --git a/server.js b/server.js
+index d43a68f..71d9444 100644
+--- a/server.js
++++ b/server.js
+@@ -20,6 +20,7 @@ const { testConnection: testCloudinary } = require('./config/cloudinary');
+ testCloudinary();
+ 
+ 
++// Initialize AI
+ // Initialize AI
+ const { initializeAI } = require('./config/ai');
+ initializeAI();
+@@ -30,12 +31,21 @@ require('./models/Notification');
+ // ✅ Register AgreementQuery model  
+ require('./models/AgreementQuery');
+ 
++// ===================== PART 10 FIX =====================
++// Register new models
++require('./models/AdminActionLog');
+ require('./models/JobInterest');
+ require('./models/LimitExtensionRequest');
+ 
++// =======================================================
++
++// (IMPORTANT: app must exist before using app.use)
++const app = express();
++
++// Mount new routes
+ app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
+ app.use('/api/agreements', require('./routes/agreementRoutes'));
+-const app = express();
++app.use('/api/ai', require('./routes/aiRoutes'));
+ 
+ /* =========================================================
+    SECURITY MIDDLEWARE
+diff --git a/services/jobAccessService.js b/services/jobAccessService.js
+index ef5498f..9c20a28 100644
+--- a/services/jobAccessService.js
++++ b/services/jobAccessService.js
+@@ -35,7 +35,6 @@ class JobAccessService {
+     if (filters.isUrgent === 'true' || filters.isUrgent === true) query.isUrgent = true;
+ 
+     if (filters.location) {
+-      // ✅ FIX #9: Limit search length to prevent DoS
+       const searchTerm = filters.location.slice(0, 100);
+       const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+       query.$or = [
+@@ -45,7 +44,6 @@ class JobAccessService {
+     }
+ 
+     if (filters.search) {
+-      // ✅ FIX #9: Limit search length to prevent DoS
+       const searchTerm = filters.search.slice(0, 100);
+       const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+       const searchOr = [
+@@ -66,8 +64,8 @@ class JobAccessService {
+     if (filters.salaryMin) query['salary.max'] = { $gte: Number(filters.salaryMin) };
+     if (filters.salaryMax) query['salary.min'] = { $lte: Number(filters.salaryMax) };
+ 
+-    // Sorting
+     let sort = { 'metrics.interestedPartners': -1, isFeatured: -1, isUrgent: -1, createdAt: -1 };
++
+     switch (filters.sortBy) {
+       case 'newest': sort = { createdAt: -1 }; break;
+       case 'oldest': sort = { createdAt: 1 }; break;
+@@ -77,19 +75,17 @@ class JobAccessService {
+       case 'urgent': sort = { isUrgent: -1, createdAt: -1 }; break;
+     }
+ 
+-    // ✅ FIX #10: Sanitize pagination to prevent bypass
+     const page = Math.max(1, Math.min(1000, parseInt(filters.page) || 1));
+     const limit = Math.max(1, Math.min(100, parseInt(filters.limit) || 10));
+     const skip = (page - 1) * limit;
+ 
+-    // ✅ FIX #7: Single aggregation with $lookup (optimized N+1)
+-    // Convert partnerId to ObjectId for $lookup matching
+     let partnerObjectId;
+     try {
+       partnerObjectId = new mongoose.Types.ObjectId(partnerId.toString());
+     } catch (err) {
+-      partnerObjectId = partnerId; // fallback (handles string IDs safely in some cases)
++      partnerObjectId = partnerId;
+     }
++
+     const jobs = await Job.aggregate([
+       { $match: query },
+       { $sort: sort },
+@@ -133,8 +129,42 @@ class JobAccessService {
+       }
+     ]);
+ 
+-    // Enrich jobs with commission and plan metadata
++    // =========================
++    // PART 9: JOB INTEREST LOGIC ADDED
++    // =========================
++
++    // Fetch partner's interests for these jobs
++    const jobIds = jobs.map(j => j._id);
++    const JobInterest = require('../models/JobInterest');
++
++    const interests = await JobInterest.find({
++      partner: partnerId,
++      job: { $in: jobIds },
++      status: 'ACTIVE'
++    });
++
++    const interestMap = interests.reduce((acc, i) => {
++      acc[i.job.toString()] = {
++        hasInterest: true,
++        submissionCount: i.submissionCount,
++        submissionLimit: i.submissionLimit,
++        remainingSlots: i.submissionLimit - i.submissionCount,
++        canSubmit: i.submissionCount < i.submissionLimit
++      };
++      return acc;
++    }, {});
++
++    // Enrich jobs with interest data
+     const enrichedJobs = jobs.map(job => {
++      const jobIdStr = job._id.toString();
++      const interest = interestMap[jobIdStr] || {
++        hasInterest: false,
++        submissionCount: 0,
++        submissionLimit: 5,
++        remainingSlots: 0,
++        canSubmit: false
++      };
++
+       let commissionEstimate = null;
+       if (job.commission && job.salary?.max) {
+         if (job.commission.type === 'percentage') {
+@@ -161,12 +191,12 @@ class JobAccessService {
+           commissionEstimate,
+           isPlanExclusive: lowestPlan !== 'FREE',
+           lowestRequiredPlan: lowestPlan,
+-          canSubmit: !job._meta.mySubmissions || job._meta.mySubmissions < (job.vacancies || 1)
++          canSubmit: interest.hasInterest && interest.canSubmit,
++          interest
+         }
+       };
+     });
+ 
+-    // Total jobs count for pagination (still a separate query)
+     const total = await Job.countDocuments(query);
+ 
+     return {
+diff --git a/services/whatsappService.js b/services/whatsappService.js
+index 43cab9f..165cc83 100644
+--- a/services/whatsappService.js
++++ b/services/whatsappService.js
+@@ -133,24 +133,83 @@ class WhatsAppService {
+    */
+   async sendOTP(phoneNumber, otp) {
+     const otpStr = String(otp);
++    const formattedPhone = this._formatPhone(phoneNumber);
+ 
+     console.log('═══════════════════════════════════════');
+     console.log('🔐 WhatsApp OTP');
+-    console.log(`   Phone: +${this._formatPhone(phoneNumber)}`);
++    console.log(`   Phone: +${formattedPhone}`);
+     console.log(`   OTP:   ${otpStr}`);
+     console.log('═══════════════════════════════════════');
+ 
+-    // Authentication template format:
+-    // body parameter = OTP
+-    // button parameter = OTP (same value, required for copy code button)
+-    return this.sendTemplate(
+-      phoneNumber,
+-      process.env.WHATSAPP_TEMPLATE_OTP || 'syncro1_otp',
+-      [otpStr],      // body params
+-      otpStr         // button param (for copy code button)
+-    );
+-  }
++    if (!this.enabled) {
++      return { success: true, mock: true };
++    }
++
++    try {
++      // Authentication template format
++      // OTP must go in BOTH body parameters AND button parameters
++      const payload = {
++        messaging_product: 'whatsapp',
++        recipient_type: 'individual',
++        to: formattedPhone,
++        type: 'template',
++        template: {
++          name: process.env.WHATSAPP_TEMPLATE_OTP || 'authtest',
++          language: {
++            code: 'en_US'
++          },
++          components: [
++            {
++              type: 'body',
++              parameters: [
++                {
++                  type: 'text',
++                  text: otpStr
++                }
++              ]
++            },
++            {
++              type: 'button',
++              sub_type: 'url',
++              index: '0',
++              parameters: [
++                {
++                  type: 'text',
++                  text: otpStr
++                }
++              ]
++            }
++          ]
++        }
++      };
+ 
++      const response = await axios.post(
++        `${this.baseUrl}/${this.phoneNumberId}/messages`,
++        payload,
++        {
++          headers: {
++            'Authorization': `Bearer ${this.accessToken}`,
++            'Content-Type': 'application/json'
++          },
++          timeout: 15000
++        }
++      );
++
++      const messageId = response.data?.messages?.[0]?.id;
++      console.log(`[WHATSAPP] ✅ OTP sent to +${formattedPhone} | ID: ${messageId}`);
++
++      return {
++        success: true,
++        messageId,
++        data: response.data
++      };
++    } catch (error) {
++      const errMsg = error.response?.data?.error?.message || error.message;
++      const errCode = error.response?.data?.error?.code;
++      console.error(`[WHATSAPP] ❌ OTP failed: ${errMsg} (Code: ${errCode})`);
++      return { success: false, error: errMsg, errorCode: errCode };
++    }
++  }
+   /**
+    * Send profile verified notification
+    * Params: [name]
+diff --git a/utils/permissions.js b/utils/permissions.js
+index 0b04a9d..b9783e3 100644
+--- a/utils/permissions.js
++++ b/utils/permissions.js
+@@ -37,6 +37,23 @@ const PERMISSIONS = {
+     VIEW_ALL_CANDIDATES: 'VIEW_ALL_CANDIDATES',
+     VIEW_CANDIDATE_DETAILS: 'VIEW_CANDIDATE_DETAILS',
+ 
++    // Extension requests
++    VIEW_EXTENSION_REQUESTS: 'VIEW_EXTENSION_REQUESTS',
++    APPROVE_EXTENSION_REQUEST: 'APPROVE_EXTENSION_REQUEST',
++    REJECT_EXTENSION_REQUEST: 'REJECT_EXTENSION_REQUEST',
++
++    // Agreement queries
++    VIEW_AGREEMENT_QUERIES: 'VIEW_AGREEMENT_QUERIES',
++    RESPOND_AGREEMENT_QUERY: 'RESPOND_AGREEMENT_QUERY',
++
++    // Registry views
++    VIEW_ALL_JOBS: 'VIEW_ALL_JOBS',
++    VIEW_ALL_PARTNERS: 'VIEW_ALL_PARTNERS',
++    VIEW_ALL_COMPANIES: 'VIEW_ALL_COMPANIES',
++
++    // Audit log
++    VIEW_AUDIT_LOGS: 'VIEW_AUDIT_LOGS',
++
+     // Payouts
+     VIEW_PAYOUTS: 'VIEW_PAYOUTS',
+     VIEW_PAYOUT_DETAILS: 'VIEW_PAYOUT_DETAILS',
+@@ -105,6 +122,29 @@ const PERMISSION_GROUPS = {
+         PERMISSIONS.VIEW_CANDIDATE_DETAILS
+     ],
+ 
++    // NEW GROUPS
++    EXTENSION_REQUESTS: [
++        PERMISSIONS.VIEW_EXTENSION_REQUESTS,
++        PERMISSIONS.APPROVE_EXTENSION_REQUEST,
++        PERMISSIONS.REJECT_EXTENSION_REQUEST
++    ],
++
++    AGREEMENT_QUERIES: [
++        PERMISSIONS.VIEW_AGREEMENT_QUERIES,
++        PERMISSIONS.RESPOND_AGREEMENT_QUERY
++    ],
++
++    REGISTRY: [
++        PERMISSIONS.VIEW_ALL_JOBS,
++        PERMISSIONS.VIEW_ALL_CANDIDATES,
++        PERMISSIONS.VIEW_ALL_PARTNERS,
++        PERMISSIONS.VIEW_ALL_COMPANIES
++    ],
++
++    AUDIT: [
++        PERMISSIONS.VIEW_AUDIT_LOGS
++    ],
++
+     PAYOUTS: [
+         PERMISSIONS.VIEW_PAYOUTS,
+         PERMISSIONS.VIEW_PAYOUT_DETAILS,
+@@ -183,6 +223,33 @@ const SUB_ADMIN_BUNDLES = {
+         PERMISSIONS.VIEW_PAYOUTS,
+         PERMISSIONS.VIEW_INVOICES,
+         PERMISSIONS.VIEW_NOTIFICATIONS
++    ],
++
++    // NEW BUNDLE
++    operations_manager: [
++        PERMISSIONS.VIEW_ADMIN_DASHBOARD,
++        PERMISSIONS.VIEW_VERIFICATIONS,
++        PERMISSIONS.APPROVE_PARTNER,
++        PERMISSIONS.REJECT_PARTNER,
++        PERMISSIONS.APPROVE_COMPANY,
++        PERMISSIONS.REJECT_COMPANY,
++        PERMISSIONS.VIEW_PENDING_JOBS,
++        PERMISSIONS.APPROVE_JOB,
++        PERMISSIONS.REJECT_JOB,
++        PERMISSIONS.VIEW_EDIT_REQUESTS,
++        PERMISSIONS.VIEW_EDIT_REQUEST_DETAILS,
++        PERMISSIONS.APPROVE_EDIT_REQUEST,
++        PERMISSIONS.REJECT_EDIT_REQUEST,
++        PERMISSIONS.VIEW_EXTENSION_REQUESTS,
++        PERMISSIONS.APPROVE_EXTENSION_REQUEST,
++        PERMISSIONS.REJECT_EXTENSION_REQUEST,
++        PERMISSIONS.VIEW_AGREEMENT_QUERIES,
++        PERMISSIONS.RESPOND_AGREEMENT_QUERY,
++        PERMISSIONS.VIEW_ALL_JOBS,
++        PERMISSIONS.VIEW_ALL_CANDIDATES,
++        PERMISSIONS.VIEW_ALL_PARTNERS,
++        PERMISSIONS.VIEW_ALL_COMPANIES,
++        PERMISSIONS.VIEW_NOTIFICATIONS
+     ]
+ };
+ 

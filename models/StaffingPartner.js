@@ -9,6 +9,14 @@ const staffingPartnerSchema = new mongoose.Schema({
     unique: true
   },
 
+  // ✅ Added uniqueId field
+  uniqueId: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
+
   // ==================== 1. PRIMARY PARTNER ACCOUNT ====================
   firstName: {
     type: String,
@@ -175,7 +183,6 @@ const staffingPartnerSchema = new mongoose.Schema({
 
   // ==================== 6. COMMERCIAL & PAYOUT PREFERENCES (MERGED) ====================
   commercialDetails: {
-    // Payout Entity Info
     payoutEntityName: { type: String, trim: true },
     gstRegistration: {
       type: String,
@@ -183,8 +190,6 @@ const staffingPartnerSchema = new mongoose.Schema({
       default: 'Unregistered'
     },
     tdsApplicable: { type: Boolean, default: true },
-
-    // Bank Details
     bankAccountHolderName: String,
     bankName: String,
     accountNumber: String,
@@ -236,6 +241,7 @@ const staffingPartnerSchema = new mongoose.Schema({
     isActive: { type: Boolean, default: true },
     autoRenew: { type: Boolean, default: false }
   },
+
   // ==================== PERFORMANCE METRICS ====================
   metrics: {
     totalSubmissions: { type: Number, default: 0 },
@@ -271,7 +277,7 @@ const staffingPartnerSchema = new mongoose.Schema({
     Syncro1Competency: { type: Boolean, default: false },
     geographicReach: { type: Boolean, default: false },
     compliance: { type: Boolean, default: false },
-    commercialDetails: { type: Boolean, default: false },  // ✅ MERGED
+    commercialDetails: { type: Boolean, default: false },
     documents: { type: Boolean, default: false }
   },
 
@@ -296,5 +302,22 @@ staffingPartnerSchema.methods.getProfileCompletionPercentage = function () {
   const completed = fields.filter(Boolean).length;
   return Math.round((completed / fields.length) * 100);
 };
+
+// ✅ Pre-save hook for uniqueId
+staffingPartnerSchema.pre('save', function (next) {
+  if (!this.uniqueId) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const date = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+
+    this.uniqueId = `SP-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
+  }
+  next();
+});
 
 module.exports = mongoose.model('StaffingPartner', staffingPartnerSchema);

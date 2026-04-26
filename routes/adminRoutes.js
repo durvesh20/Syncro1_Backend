@@ -31,7 +31,18 @@ const {
   holdPayout,
   releasePayout,
   forfeitPayout,
-  checkPayoutEligibility
+  checkPayoutEligibility,
+
+  // NEW
+  getAllJobs,
+  getJobDetail,
+  getAllCandidates,
+  getCandidateDetail,
+  getAllPartners,
+  getPartnerDetail,
+  getAllCompanies,
+  getCompanyDetail,
+  getAuditLogs
 } = require('../controllers/adminController');
 
 const {
@@ -66,9 +77,6 @@ router.get(
   getPendingVerifications
 );
 
-// NOTE:
-// verifyPartner / verifyCompany currently use action in req.body (approve/reject)
-// We will add action-based permission checks inside controller in next step if needed.
 router.put(
   '/verify/partner/:id',
   checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
@@ -150,6 +158,119 @@ router.put(
   rejectEditRequest
 );
 
+// ==================== REGISTRY ROUTES ====================
+
+// All jobs
+router.get(
+  '/jobs',
+  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
+  getAllJobs
+);
+
+router.get(
+  '/jobs/:id/detail',
+  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
+  getJobDetail
+);
+
+// All candidates
+router.get(
+  '/candidates',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  getAllCandidates
+);
+
+router.get(
+  '/candidates/:id',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  getCandidateDetail
+);
+
+// All partners
+router.get(
+  '/partners',
+  checkPermission(PERMISSIONS.VIEW_ALL_PARTNERS),
+  getAllPartners
+);
+
+router.get(
+  '/partners/:id',
+  checkPermission(PERMISSIONS.VIEW_ALL_PARTNERS),
+  getPartnerDetail
+);
+
+// All companies
+router.get(
+  '/companies',
+  checkPermission(PERMISSIONS.VIEW_ALL_COMPANIES),
+  getAllCompanies
+);
+
+router.get(
+  '/companies/:id',
+  checkPermission(PERMISSIONS.VIEW_ALL_COMPANIES),
+  getCompanyDetail
+);
+
+// Audit logs
+router.get(
+  '/audit-logs',
+  checkPermission(PERMISSIONS.VIEW_AUDIT_LOGS),
+  getAuditLogs
+);
+
+// Agreement queries via admin
+router.get(
+  '/agreement-queries',
+  checkPermission(PERMISSIONS.VIEW_AGREEMENT_QUERIES),
+  async (req, res) => {
+    try {
+      const AgreementQuery = require('../models/AgreementQuery');
+      const { status, page = 1, limit = 20 } = req.query;
+
+      const query = {};
+      if (status) query.status = status;
+
+      const sanitizedPage = Math.max(1, parseInt(page));
+      const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
+      const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+      const [queries, total] = await Promise.all([
+        AgreementQuery.find(query)
+          .populate({ path: 'partner', select: 'firstName lastName firmName' })
+          .populate('user', 'email mobile')
+          .populate('respondedBy', 'email role')
+          .sort({ createdAt: 1 })
+          .skip(skip)
+          .limit(sanitizedLimit),
+        AgreementQuery.countDocuments(query)
+      ]);
+
+      const summary = await AgreementQuery.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]);
+
+      res.json({
+        success: true,
+        data: {
+          queries,
+          summary: summary.reduce((acc, item) => {
+            acc[item._id] = item.count;
+            return acc;
+          }, {}),
+          pagination: {
+            current: sanitizedPage,
+            pages: Math.ceil(total / sanitizedLimit),
+            total
+          }
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
 // ==================== PAYOUT MANAGEMENT ====================
 router.get(
   '/payouts',
@@ -198,5 +319,42 @@ router.post(
   checkPermission(PERMISSIONS.RUN_PAYOUT_ELIGIBILITY),
   checkPayoutEligibility
 );
+
+// WhatsApp test route — Admin only
+router.post('/whatsapp/test', async (req, res) => {
+  try {
+    const { phone, type = 'otp' } = req.body;
+    const whatsappService = require('../services/whatsappService');
+
+    let result;
+
+    switch (type) {
+      case 'otp':
+        result = await whatsappService.sendOTP(phone, '123456');
+        break;
+      case 'connection':
+        result = await whatsappService.testConnection();
+        break;
+      case 'profile_verified':
+        result = await whatsappService.sendProfileVerified(phone, 'Test Partner');
+        break;
+      default:
+        result = await whatsappService.sendOTP(phone, '123456');
+    }
+
+    res.json({
+      success: true,
+      message: 'WhatsApp test executed',
+      data: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+
 
 module.exports = router;

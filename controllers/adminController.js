@@ -6,7 +6,7 @@ const Job = require('../models/Job');
 const Candidate = require('../models/Candidate');
 const { PERMISSIONS } = require('../utils/permissions');
 const emailService = require('../services/emailService');
-
+const auditService = require('../services/auditService');
 const hasPermission = (user, permission) => {
   if (!user) return false;
   if (user.role === 'admin') return true;
@@ -170,6 +170,19 @@ exports.verifyPartner = async (req, res) => {
     await partner.save();
     await user.save();
 
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: action === 'approve' ? 'PARTNER_APPROVED' : 'PARTNER_REJECTED',
+      entityType: 'StaffingPartner',
+      entityId: partner._id,
+      description: `Partner ${action}d: ${partner.firmName}`,
+      notes: action === 'approve' ? notes : rejectionReason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
     res.json({
       success: true,
       message: `Partner ${action}d successfully`,
@@ -259,6 +272,18 @@ exports.verifyCompany = async (req, res) => {
 
     await company.save();
     await user.save();
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: action === 'approve' ? 'COMPANY_APPROVED' : 'COMPANY_REJECTED',
+      entityType: 'Company',
+      entityId: company._id,
+      description: `Company ${action}d: ${company.companyName}`,
+      notes: action === 'approve' ? notes : rejectionReason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
 
     res.json({
       success: true,
@@ -417,6 +442,19 @@ exports.approvePayout = async (req, res) => {
 
     payout.approve(req.user._id, notes);
     await payout.save();
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'PAYOUT_APPROVED',
+      entityType: 'Payout',
+      entityId: payout._id,
+      description: `Payout approved: Rs.${payout.amount.netPayable}`,
+      notes,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
 
     const notificationEngine = require('../services/notificationEngine');
     if (payout.staffingPartner.user) {
@@ -768,6 +806,21 @@ exports.updateUserStatus = async (req, res) => {
       { new: true }
     );
 
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: status === 'SUSPENDED' ? 'USER_SUSPENDED' : 'USER_ACTIVATED',
+      entityType: 'User',
+      entityId: req.params.id,
+      description: `User status changed to ${status}`,
+      after: { status },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+
     res.json({
       success: true,
       message: 'User status updated',
@@ -946,6 +999,19 @@ exports.approveJob = async (req, res) => {
     job.addToHistory('APPROVED', req.user._id, {}, notes || 'Job approved by admin');
     await job.save();
 
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'JOB_APPROVED',
+      entityType: 'Job',
+      entityId: job._id,
+      description: `Job approved: ${job.title}`,
+      notes,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
     const notificationEngine = require('../services/notificationEngine');
 
     if (job.company.user) {
@@ -1034,6 +1100,19 @@ exports.rejectJob = async (req, res) => {
     job.rejectedAt = new Date();
     job.addToHistory('REJECTED', req.user._id, {}, reason);
     await job.save();
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'JOB_REJECTED',
+      entityType: 'Job',
+      entityId: job._id,
+      description: `Job rejected: ${job.title}`,
+      notes: reason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
 
     const notificationEngine = require('../services/notificationEngine');
 
@@ -1238,7 +1317,6 @@ exports.approveEditRequest = async (req, res) => {
         currentStatus: editRequest.status
       });
     }
-
     const job = editRequest.job;
     const changes = editRequest.requestedChanges;
     const appliedChanges = {};
@@ -1246,33 +1324,28 @@ exports.approveEditRequest = async (req, res) => {
     for (const [field, change] of Object.entries(changes)) {
       try {
         const keys = field.split('.');
-
-        // Navigate and set the value
         let target = job;
+
         for (let i = 0; i < keys.length - 1; i++) {
-          if (target[keys[i]] === undefined || target[keys[i]] === null) {
-            target[keys[i]] = {};
-          }
+          if (!target[keys[i]]) target[keys[i]] = {};
           target = target[keys[i]];
         }
 
         const lastKey = keys[keys.length - 1];
-        const oldValue = JSON.parse(JSON.stringify(target[lastKey] ?? null));
-        target[lastKey] = change.new;
+        const oldValue = target[lastKey];
 
         appliedChanges[field] = {
           old: oldValue,
           new: change.new
         };
 
-        // Mark nested fields as modified for Mongoose
-        const topLevelKey = keys[0];
-        job.markModified(topLevelKey);
-
+        target[lastKey] = change.new;
       } catch (err) {
-        console.error(`[EDIT REQUEST] Failed to apply field ${field}:`, err.message);
+        console.error(`Failed to apply change for field ${field}:`, err);
       }
     }
+
+    job.applyEditChanges(appliedChanges);
 
     // Also mark all top level keys as modified
     const topLevelKeys = [...new Set(Object.keys(changes).map(f => f.split('.')[0]))];
@@ -1655,4 +1728,521 @@ exports._buildTimeline = (job, editRequests, changeHistory) => {
   });
 
   return events.sort((a, b) => b.timestamp - a.timestamp);
+};
+
+// ==================== ADMIN REGISTRY ENDPOINTS ====================
+
+// @desc    Get all jobs (admin full registry)
+// @route   GET /api/admin/jobs
+exports.getAllJobs = async (req, res) => {
+  try {
+    const {
+      status,
+      approvalStatus,
+      company,
+      page = 1,
+      limit = 20,
+      search
+    } = req.query;
+
+    const query = {};
+    if (status) query.status = status;
+    if (approvalStatus) query.approvalStatus = approvalStatus;
+    if (company) query.company = company;
+    if (search) {
+      query.$or = [
+        { title: new RegExp(search, 'i') },
+        { category: new RegExp(search, 'i') }
+      ];
+    }
+
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    const [jobs, total] = await Promise.all([
+      Job.find(query)
+        .populate('company', 'companyName kyc.industry uniqueId')
+        .populate('postedBy', 'email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(sanitizedLimit),
+      Job.countDocuments(query)
+    ]);
+
+    const statusSummary = await Job.aggregate([
+      { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        jobs,
+        summary: statusSummary.reduce((acc, item) => {
+          acc[item._id] = item.count;
+          return acc;
+        }, {}),
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch jobs',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single job full detail (admin)
+// @route   GET /api/admin/jobs/:id/detail
+exports.getJobDetail = async (req, res) => {
+  try {
+    const JobEditRequest = require('../models/JobEditRequest');
+
+    const job = await Job.findById(req.params.id)
+      .populate('company', 'companyName kyc billing uniqueId verificationStatus')
+      .populate('postedBy', 'email mobile')
+      .populate('approvedBy', 'email role')
+      .populate('discontinuedBy', 'email role');
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    const candidates = await Candidate.find({ job: job._id })
+      .populate('submittedBy', 'firmName firstName lastName')
+      .sort({ createdAt: -1 })
+      .select('firstName lastName status createdAt submittedBy');
+
+    const editRequests = await JobEditRequest.find({ job: job._id })
+      .populate('requestedBy', 'email')
+      .populate('reviewedBy', 'email')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: {
+        job,
+        candidates: {
+          total: candidates.length,
+          list: candidates
+        },
+        editRequests,
+        stats: job.getEditStats()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch job detail',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all candidates (admin registry)
+// @route   GET /api/admin/candidates
+exports.getAllCandidates = async (req, res) => {
+  try {
+    const {
+      status,
+      job,
+      company,
+      partner,
+      page = 1,
+      limit = 20,
+      search
+    } = req.query;
+
+    const query = {};
+    if (status) query.status = status;
+    if (job) query.job = job;
+    if (company) query.company = company;
+    if (partner) query.submittedBy = partner;
+    if (search) {
+      query.$or = [
+        { firstName: new RegExp(search, 'i') },
+        { lastName: new RegExp(search, 'i') },
+        { email: new RegExp(search, 'i') },
+        { mobile: new RegExp(search, 'i') }
+      ];
+    }
+
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    const [candidates, total] = await Promise.all([
+      Candidate.find(query)
+        .populate('submittedBy', 'firmName firstName lastName uniqueId')
+        .populate('job', 'title uniqueId')
+        .populate('company', 'companyName uniqueId')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(sanitizedLimit)
+        .select('-statusHistory -notes -qualityCheck'),
+      Candidate.countDocuments(query)
+    ]);
+
+    const statusSummary = await Candidate.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        candidates,
+        summary: statusSummary.reduce((acc, item) => {
+          acc[item._id] = item.count;
+          return acc;
+        }, {}),
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch candidates',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single candidate full detail (admin)
+// @route   GET /api/admin/candidates/:id
+exports.getCandidateDetail = async (req, res) => {
+  try {
+    const candidate = await Candidate.findById(req.params.id)
+      .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
+      .populate('job', 'title uniqueId company')
+      .populate('company', 'companyName uniqueId')
+      .populate('statusHistory.changedBy', 'email role');
+
+    if (!candidate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Candidate not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: candidate
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch candidate',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all partners (admin registry)
+// @route   GET /api/admin/partners
+exports.getAllPartners = async (req, res) => {
+  try {
+    const {
+      verificationStatus,
+      page = 1,
+      limit = 20,
+      search
+    } = req.query;
+
+    const query = {};
+    if (verificationStatus) query.verificationStatus = verificationStatus;
+    if (search) {
+      query.$or = [
+        { firmName: new RegExp(search, 'i') },
+        { firstName: new RegExp(search, 'i') },
+        { lastName: new RegExp(search, 'i') }
+      ];
+    }
+
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    const [partners, total] = await Promise.all([
+      StaffingPartner.find(query)
+        .populate('user', 'email mobile status lastLogin')
+        .populate('verifiedBy', 'email role')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(sanitizedLimit)
+        .select('-documents -compliance'),
+      StaffingPartner.countDocuments(query)
+    ]);
+
+    const statusSummary = await StaffingPartner.aggregate([
+      { $group: { _id: '$verificationStatus', count: { $sum: 1 } } }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        partners,
+        summary: statusSummary.reduce((acc, item) => {
+          acc[item._id] = item.count;
+          return acc;
+        }, {}),
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch partners',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single partner full detail (admin)
+// @route   GET /api/admin/partners/:id
+exports.getPartnerDetail = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findById(req.params.id)
+      .populate('user', 'email mobile status lastLogin createdAt')
+      .populate('verifiedBy', 'email role');
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner not found'
+      });
+    }
+
+    // Get submission and placement stats
+    const submissionStats = await Candidate.aggregate([
+      { $match: { submittedBy: partner._id } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    // Get recent submissions
+    const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
+      .populate('job', 'title')
+      .populate('company', 'companyName')
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select('firstName lastName status job company createdAt');
+
+    // Get payout info
+    const Payout = require('../models/Payout');
+    const payoutSummary = await Payout.aggregate([
+      { $match: { staffingPartner: partner._id } },
+      { $group: { _id: '$status', count: { $sum: 1 }, amount: { $sum: '$amount.netPayable' } } }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        partner,
+        submissionStats: submissionStats.reduce((acc, item) => {
+          acc[item._id] = item.count;
+          return acc;
+        }, {}),
+        payoutSummary: payoutSummary.reduce((acc, item) => {
+          acc[item._id] = { count: item.count, amount: item.amount };
+          return acc;
+        }, {}),
+        recentSubmissions
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch partner detail',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all companies (admin registry)
+// @route   GET /api/admin/companies
+exports.getAllCompanies = async (req, res) => {
+  try {
+    const {
+      verificationStatus,
+      page = 1,
+      limit = 20,
+      search
+    } = req.query;
+
+    const query = {};
+    if (verificationStatus) query.verificationStatus = verificationStatus;
+    if (search) {
+      query.$or = [
+        { companyName: new RegExp(search, 'i') },
+        { 'kyc.industry': new RegExp(search, 'i') }
+      ];
+    }
+
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    const [companies, total] = await Promise.all([
+      Company.find(query)
+        .populate('user', 'email mobile status lastLogin')
+        .populate('verifiedBy', 'email role')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(sanitizedLimit)
+        .select('-documents -legalConsents -billing'),
+      Company.countDocuments(query)
+    ]);
+
+    const statusSummary = await Company.aggregate([
+      { $group: { _id: '$verificationStatus', count: { $sum: 1 } } }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        companies,
+        summary: statusSummary.reduce((acc, item) => {
+          acc[item._id] = item.count;
+          return acc;
+        }, {}),
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch companies',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single company full detail (admin)
+// @route   GET /api/admin/companies/:id
+exports.getCompanyDetail = async (req, res) => {
+  try {
+    const company = await Company.findById(req.params.id)
+      .populate('user', 'email mobile status lastLogin createdAt')
+      .populate('verifiedBy', 'email role');
+
+    if (!company) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company not found'
+      });
+    }
+
+    // Get job stats
+    const jobStats = await Job.aggregate([
+      { $match: { company: company._id } },
+      { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+    ]);
+
+    // Get recent jobs
+    const recentJobs = await Job.find({ company: company._id })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('title approvalStatus status createdAt vacancies');
+
+    // Get candidate pipeline
+    const candidateStats = await Candidate.aggregate([
+      { $match: { company: company._id } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        company,
+        jobStats: jobStats.reduce((acc, item) => {
+          acc[item._id] = item.count;
+          return acc;
+        }, {}),
+        candidateStats: candidateStats.reduce((acc, item) => {
+          acc[item._id] = item.count;
+          return acc;
+        }, {}),
+        recentJobs
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch company detail',
+      error: error.message
+    });
+  }
+};
+
+// ==================== AUDIT LOG ====================
+
+// @desc    Get audit logs
+// @route   GET /api/admin/audit-logs
+exports.getAuditLogs = async (req, res) => {
+  try {
+    const AdminActionLog = require('../models/AdminActionLog');
+    const {
+      actor,
+      action,
+      entityType,
+      page = 1,
+      limit = 50
+    } = req.query;
+
+    const query = {};
+    if (actor) query.actor = actor;
+    if (action) query.action = action;
+    if (entityType) query.entityType = entityType;
+
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    const [logs, total] = await Promise.all([
+      AdminActionLog.find(query)
+        .populate('actor', 'email role')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(sanitizedLimit),
+      AdminActionLog.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        logs,
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch audit logs',
+      error: error.message
+    });
+  }
 };

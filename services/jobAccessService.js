@@ -35,7 +35,6 @@ class JobAccessService {
     if (filters.isUrgent === 'true' || filters.isUrgent === true) query.isUrgent = true;
 
     if (filters.location) {
-      // ✅ FIX #9: Limit search length to prevent DoS
       const searchTerm = filters.location.slice(0, 100);
       const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
@@ -45,7 +44,6 @@ class JobAccessService {
     }
 
     if (filters.search) {
-      // ✅ FIX #9: Limit search length to prevent DoS
       const searchTerm = filters.search.slice(0, 100);
       const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const searchOr = [
@@ -66,8 +64,8 @@ class JobAccessService {
     if (filters.salaryMin) query['salary.max'] = { $gte: Number(filters.salaryMin) };
     if (filters.salaryMax) query['salary.min'] = { $lte: Number(filters.salaryMax) };
 
-    // Sorting
     let sort = { 'metrics.interestedPartners': -1, isFeatured: -1, isUrgent: -1, createdAt: -1 };
+
     switch (filters.sortBy) {
       case 'newest': sort = { createdAt: -1 }; break;
       case 'oldest': sort = { createdAt: 1 }; break;
@@ -77,19 +75,17 @@ class JobAccessService {
       case 'urgent': sort = { isUrgent: -1, createdAt: -1 }; break;
     }
 
-    // ✅ FIX #10: Sanitize pagination to prevent bypass
     const page = Math.max(1, Math.min(1000, parseInt(filters.page) || 1));
     const limit = Math.max(1, Math.min(100, parseInt(filters.limit) || 10));
     const skip = (page - 1) * limit;
 
-    // ✅ FIX #7: Single aggregation with $lookup (optimized N+1)
-    // Convert partnerId to ObjectId for $lookup matching
     let partnerObjectId;
     try {
       partnerObjectId = new mongoose.Types.ObjectId(partnerId.toString());
     } catch (err) {
-      partnerObjectId = partnerId; // fallback (handles string IDs safely in some cases)
+      partnerObjectId = partnerId;
     }
+
     const jobs = await Job.aggregate([
       { $match: query },
       { $sort: sort },
@@ -133,8 +129,42 @@ class JobAccessService {
       }
     ]);
 
-    // Enrich jobs with commission and plan metadata
+    // =========================
+    // PART 9: JOB INTEREST LOGIC ADDED
+    // =========================
+
+    // Fetch partner's interests for these jobs
+    const jobIds = jobs.map(j => j._id);
+    const JobInterest = require('../models/JobInterest');
+
+    const interests = await JobInterest.find({
+      partner: partnerId,
+      job: { $in: jobIds },
+      status: 'ACTIVE'
+    });
+
+    const interestMap = interests.reduce((acc, i) => {
+      acc[i.job.toString()] = {
+        hasInterest: true,
+        submissionCount: i.submissionCount,
+        submissionLimit: i.submissionLimit,
+        remainingSlots: i.submissionLimit - i.submissionCount,
+        canSubmit: i.submissionCount < i.submissionLimit
+      };
+      return acc;
+    }, {});
+
+    // Enrich jobs with interest data
     const enrichedJobs = jobs.map(job => {
+      const jobIdStr = job._id.toString();
+      const interest = interestMap[jobIdStr] || {
+        hasInterest: false,
+        submissionCount: 0,
+        submissionLimit: 5,
+        remainingSlots: 0,
+        canSubmit: false
+      };
+
       let commissionEstimate = null;
       if (job.commission && job.salary?.max) {
         if (job.commission.type === 'percentage') {
@@ -161,12 +191,12 @@ class JobAccessService {
           commissionEstimate,
           isPlanExclusive: lowestPlan !== 'FREE',
           lowestRequiredPlan: lowestPlan,
-          canSubmit: !job._meta.mySubmissions || job._meta.mySubmissions < (job.vacancies || 1)
+          canSubmit: interest.hasInterest && interest.canSubmit,
+          interest
         }
       };
     });
 
-    // Total jobs count for pagination (still a separate query)
     const total = await Job.countDocuments(query);
 
     return {

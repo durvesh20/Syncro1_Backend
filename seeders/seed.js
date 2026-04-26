@@ -15,74 +15,59 @@ const { SubscriptionPlan } = require("../models/Subscription");
 
 const seedDatabase = async () => {
   try {
-    // Connect to MongoDB
     await mongoose.connect(process.env.MONGO_URI);
     console.log("📦 Connected to MongoDB");
 
-    // 1. Create Admin User
+    // 1. Admin
     const adminExists = await User.findOne({ email: "admin@Syncro1.com" });
     if (!adminExists) {
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash("Admin@123", salt);
-
       await User.create({
         email: "admin@Syncro1.com",
         mobile: "9999999999",
-        password: hashedPassword,
+        password: "Admin@123",
         role: "admin",
         status: "ACTIVE",
         emailVerified: true,
         mobileVerified: true,
         isPasswordChanged: true,
       });
-
       console.log("✅ Admin user created");
-      console.log("   📧 Email: admin@Syncro1.com");
-      console.log("   🔑 Password: Admin@123");
     } else {
       console.log("ℹ️  Admin user already exists");
     }
 
-    // 1b. Create Test Sub-Admin
-    const subAdminExists = await User.findOne({ email: 'subadmin@syncro1.com' });
+    // 2. Sub-Admin
+    const subAdminExists = await User.findOne({ email: "subadmin@syncro1.com" });
     if (!subAdminExists) {
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash('SubAdmin@123', salt);
-
       await User.create({
-        email: 'subadmin@syncro1.com',
-        mobile: '9999999998',
-        password: hashedPassword,
-        role: 'sub_admin',
-        status: 'ACTIVE',
+        email: "subadmin@syncro1.com",
+        mobile: "9999999998",
+        password: "SubAdmin@123",
+        role: "sub_admin",
+        status: "ACTIVE",
         emailVerified: true,
         mobileVerified: true,
         isPasswordChanged: true,
         permissions: [
-          'VIEW_ADMIN_DASHBOARD',
-          'VIEW_VERIFICATIONS',
-          'APPROVE_PARTNER',
-          'REJECT_PARTNER',
-          'APPROVE_COMPANY',
-          'REJECT_COMPANY',
-          'VIEW_PENDING_JOBS',
-          'APPROVE_JOB',
-          'REJECT_JOB',
-          'VIEW_NOTIFICATIONS'
+          "VIEW_ADMIN_DASHBOARD",
+          "VIEW_VERIFICATIONS",
+          "APPROVE_PARTNER",
+          "REJECT_PARTNER",
+          "APPROVE_COMPANY",
+          "REJECT_COMPANY",
+          "VIEW_PENDING_JOBS",
+          "APPROVE_JOB",
+          "REJECT_JOB",
+          "VIEW_NOTIFICATIONS",
         ],
-        createdBy: null // Will be null for seeded sub-admin
+        createdBy: null,
       });
-
-      console.log('✅ Test sub-admin created');
-      console.log('   📧 Email: subadmin@syncro1.com');
-      console.log('   🔑 Password: SubAdmin@123');
-      console.log('   🔐 Permissions: verification + job review');
+      console.log("✅ Sub-admin created");
     } else {
-      console.log('ℹ️  Test sub-admin already exists');
+      console.log("ℹ️  Sub-admin already exists");
     }
 
-
-    // 2. Create Subscription Plans
+    // 3. Subscription Plans
     const plans = [
       {
         name: "FREE",
@@ -179,23 +164,22 @@ const seedDatabase = async () => {
     ];
 
     for (const plan of plans) {
-      await SubscriptionPlan.findOneAndUpdate({ name: plan.name }, plan, {
-        upsert: true,
-        new: true,
-      });
+      await SubscriptionPlan.findOneAndUpdate(
+        { name: plan.name },
+        plan,
+        { upsert: true, new: true }
+      );
     }
+
     console.log("✅ Subscription plans created/updated");
 
-    // 3. Create Sample Verified Partner (for testing)
-    const testPartnerExists = await User.findOne({ email: "partner@test.com" });
-    if (!testPartnerExists) {
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash("Partner@123", salt);
-
+    // 4. Partner
+    const partnerExists = await User.findOne({ email: "partner@test.com" });
+    if (!partnerExists) {
       const partnerUser = await User.create({
         email: "partner@test.com",
         mobile: "9876543210",
-        password: hashedPassword,
+        password: "Partner@123",
         role: "staffing_partner",
         status: "ACTIVE",
         emailVerified: true,
@@ -204,9 +188,7 @@ const seedDatabase = async () => {
       });
 
       const now = new Date();
-      const ipAddress = "127.0.0.1";
 
-      // ✅ FIXED: Use proper Object structure for compliance
       await StaffingPartner.create({
         user: partnerUser._id,
         firstName: "Test",
@@ -258,63 +240,26 @@ const seedDatabase = async () => {
           operatingStates: ["Maharashtra", "Karnataka"],
         },
 
-        // ✅ FIXED: Proper Object structure matching the model
         compliance: {
           syncrotechAgreement: {
-            noCvRecycling: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            },
-            noFakeProfiles: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            },
-            noDoubleRepresentation: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            },
-            vendorCodeOfConduct: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            },
-            dataPrivacyPolicy: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            },
-            candidateConsentPolicy: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            },
-            nonCircumventionClause: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            },
-            commissionPayoutTerms: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            },
-            replacementBackoutLiability: {
-              accepted: true,
-              acceptedAt: now,
-              acceptedIp: ipAddress
-            }
+            noCvRecycling: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+            noFakeProfiles: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+            noDoubleRepresentation: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+            vendorCodeOfConduct: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+            dataPrivacyPolicy: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+            candidateConsentPolicy: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+            nonCircumventionClause: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+            commissionPayoutTerms: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
+            replacementBackoutLiability: { accepted: true, acceptedAt: now, acceptedIp: "127.0.0.1" },
           },
           allClausesAccepted: true,
           agreementAcceptedAt: now,
-          agreementAcceptedIp: ipAddress,
+          agreementAcceptedIp: "127.0.0.1",
           digitalSignature: "Test Partner",
           termsAccepted: true,
           ndaSigned: true,
           agreementSigned: true,
-          agreementSignedAt: now
+          agreementSignedAt: now,
         },
 
         commercialDetails: {
@@ -349,22 +294,17 @@ const seedDatabase = async () => {
       });
 
       console.log("✅ Test partner created");
-      console.log("   📧 Email: partner@test.com");
-      console.log("   🔑 Password: Partner@123");
     } else {
       console.log("ℹ️  Test partner already exists");
     }
 
-    // 4. Create Sample Verified Company (for testing)
-    const testCompanyExists = await User.findOne({ email: "company@test.com" });
-    if (!testCompanyExists) {
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash("Company@123", salt);
-
+    // 5. Company
+    const companyExists = await User.findOne({ email: "company@test.com" });
+    if (!companyExists) {
       const companyUser = await User.create({
         email: "company@test.com",
         mobile: "9876543211",
-        password: hashedPassword,
+        password: "Company@123",
         role: "company",
         status: "ACTIVE",
         emailVerified: true,
@@ -373,7 +313,6 @@ const seedDatabase = async () => {
       });
 
       const now = new Date();
-      const ipAddress = "127.0.0.1";
 
       const company = await Company.create({
         user: companyUser._id,
@@ -381,7 +320,6 @@ const seedDatabase = async () => {
         decisionMakerName: "John Doe",
         designation: "HR Director",
         department: "HR",
-        linkedinProfile: "https://linkedin.com/in/johndoe",
         city: "Bangalore",
         state: "Karnataka",
 
@@ -427,37 +365,34 @@ const seedDatabase = async () => {
 
         billing: {
           billingEntityName: "TechCorp Solutions Private Limited",
-          gstRegistrationType: "Regular",
           gstNumber: "29AABCT5678A1Z5",
           panNumber: "AABCT5678A",
-          poRequired: false,
-          tdsApplicable: true,
           paymentTerms: "Net 30",
         },
 
         legalConsents: {
           termsAccepted: true,
           termsAcceptedAt: now,
-          termsAcceptedIp: ipAddress,
+          termsAcceptedIp: "127.0.0.1",
           privacyPolicyAccepted: true,
           privacyPolicyAcceptedAt: now,
-          privacyPolicyAcceptedIp: ipAddress,
+          privacyPolicyAcceptedIp: "127.0.0.1",
           dataProcessingAgreementAccepted: true,
           dataProcessingAgreementAcceptedAt: now,
-          dataProcessingAgreementAcceptedIp: ipAddress,
+          dataProcessingAgreementAcceptedIp: "127.0.0.1",
           dataStorageConsent: true,
           dataStorageConsentAt: now,
-          dataStorageConsentIp: ipAddress,
+          dataStorageConsentIp: "127.0.0.1",
           vendorSharingConsent: true,
           vendorSharingConsentAt: now,
-          vendorSharingConsentIp: ipAddress,
+          vendorSharingConsentIp: "127.0.0.1",
           communicationConsent: {
             email: true,
             whatsapp: true,
             sms: false,
           },
           communicationConsentAt: now,
-          communicationConsentIp: ipAddress,
+          communicationConsentIp: "127.0.0.1",
         },
 
         verificationStatus: "APPROVED",
@@ -473,8 +408,7 @@ const seedDatabase = async () => {
         },
       });
 
-      // Create sample jobs
-      const sampleJobs = [
+      await Job.create([
         {
           company: company._id,
           postedBy: companyUser._id,
@@ -487,7 +421,6 @@ const seedDatabase = async () => {
           experienceLevel: "Senior",
           experienceRange: { min: 5, max: 10 },
           salary: { min: 2500000, max: 4000000, currency: "INR", isNegotiable: true },
-          commission: { type: "percentage", value: 8.33 },
           location: { city: "Bangalore", state: "Karnataka", isRemote: false, isHybrid: true },
           skills: { required: ["JavaScript", "React", "Node.js"], preferred: ["AWS", "Docker"] },
           vacancies: 3,
@@ -498,60 +431,34 @@ const seedDatabase = async () => {
           company: company._id,
           postedBy: companyUser._id,
           title: "Product Manager",
-          description: "Join our product team to lead innovative solutions...",
-          requirements: ["4+ years PM experience", "Agile", "Data Analysis"],
+          description: "Join our product team...",
+          requirements: ["4+ years PM experience", "Agile"],
           category: "Technology",
           employmentType: "Full-time",
           experienceLevel: "Mid",
           experienceRange: { min: 4, max: 8 },
           salary: { min: 2000000, max: 3500000, currency: "INR", isNegotiable: true },
-          commission: { type: "percentage", value: 8.33 },
           location: { city: "Bangalore", state: "Karnataka", isRemote: true },
-          skills: { required: ["Product Management", "Agile"], preferred: ["SQL", "Jira"] },
+          skills: { required: ["Product Management", "Agile"], preferred: ["SQL"] },
           vacancies: 2,
           status: "ACTIVE",
           eligiblePlans: ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"],
         },
-        {
-          company: company._id,
-          postedBy: companyUser._id,
-          title: "Junior Frontend Developer",
-          description: "This is a great opportunity for freshers to start their career in frontend development using modern technologies like React, JavaScript, and responsive design principles.",
-          requirements: ["0-2 years experience", "HTML", "CSS", "JavaScript"],
-          category: "Technology",
-          employmentType: "Full-time",
-          experienceLevel: "Entry",
-          experienceRange: { min: 0, max: 2 },
-          salary: { min: 400000, max: 800000, currency: "INR" },
-          commission: { type: "fixed", value: 25000 },
-          location: { city: "Mumbai", state: "Maharashtra", isRemote: false },
-          skills: { required: ["HTML", "CSS", "JavaScript", "React"], preferred: ["TypeScript"] },
-          vacancies: 5,
-          status: "ACTIVE",
-          eligiblePlans: ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"],
-        },
-      ];
+      ]);
 
-      for (const jobData of sampleJobs) {
-        await Job.create(jobData);
-      }
-
-      console.log("✅ Test company created with sample jobs");
-      console.log("   📧 Email: company@test.com");
-      console.log("   🔑 Password: Company@123");
-      console.log("   📋 3 sample jobs created");
+      console.log("✅ Test company created");
+      console.log("   📋 Sample jobs created");
     } else {
       console.log("ℹ️  Test company already exists");
     }
 
-    console.log("\n🎉 Database seeding completed!");
-    console.log("\n📝 Test Credentials:");
-    console.log('━━━��━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('Admin:      admin@Syncro1.com / Admin@123');
-    console.log('Sub-Admin:  subadmin@syncro1.com / SubAdmin@123');
-    console.log('Partner:    partner@test.com / Partner@123');
-    console.log('Company:    company@test.com / Company@123');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log("\n🎉 Seeding complete!");
+    console.log("━━━━━━━━━━━━━━━━━━━━");
+    console.log("Admin: admin@syncro1.com / Admin@123");
+    console.log("Sub-Admin: subadmin@syncro1.com / SubAdmin@123");
+    console.log("Partner: partner@test.com / Partner@123");
+    console.log("Company: company@test.com / Company@123");
+    console.log("━━━━━━━━━━━━━━━━━━━━");
 
     process.exit(0);
   } catch (error) {
@@ -561,6 +468,3 @@ const seedDatabase = async () => {
 };
 
 seedDatabase();
-
-
-

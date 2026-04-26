@@ -9,6 +9,14 @@ const companySchema = new mongoose.Schema({
     unique: true
   },
 
+  // ✅ Added uniqueId field
+  uniqueId: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
+
   // ==================== 1. PRIMARY ACCOUNT (Decision Maker) ====================
   decisionMakerName: {
     type: String,
@@ -33,7 +41,7 @@ const companySchema = new mongoose.Schema({
     required: true
   },
 
-  // ==================== 2. COMPANY INFORMATION (Core KYC Layer) ====================
+  // ==================== 2. COMPANY INFORMATION ====================
   companyName: {
     type: String,
     required: [true, 'Company name is required'],
@@ -106,7 +114,7 @@ const companySchema = new mongoose.Schema({
     }
   },
 
-  // ==================== 5. COMMERCIAL & BILLING SETUP ====================
+  // ==================== 5. BILLING ====================
   billing: {
     billingEntityName: String,
     billingAddress: {
@@ -136,7 +144,7 @@ const companySchema = new mongoose.Schema({
     }
   },
 
-  // ==================== 6. USER ROLES & ACCESS CONTROL ====================
+  // ==================== 6. TEAM ====================
   teamAccess: {
     isTeamEnabled: { type: Boolean, default: false },
     teamMembers: [{
@@ -153,34 +161,23 @@ const companySchema = new mongoose.Schema({
     }]
   },
 
-  // ==================== 7. LEGAL & COMPLIANCE ====================
+  // ==================== 7. LEGAL ====================
   legalConsents: {
-    // Terms of Service
     termsAccepted: { type: Boolean, default: false },
     termsAcceptedAt: Date,
     termsAcceptedIp: String,
-
-    // Privacy Policy
     privacyPolicyAccepted: { type: Boolean, default: false },
     privacyPolicyAcceptedAt: Date,
     privacyPolicyAcceptedIp: String,
-
-    // Cookie Policy
     cookiePolicyAccepted: { type: Boolean, default: false },
     cookiePolicyAcceptedAt: Date,
     cookiePolicyAcceptedIp: String,
-
-    // Data Storage Consent
     dataStorageConsent: { type: Boolean, default: false },
     dataStorageConsentAt: Date,
     dataStorageConsentIp: String,
-
-    // Vendor Sharing Consent
     vendorSharingConsent: { type: Boolean, default: false },
     vendorSharingConsentAt: Date,
     vendorSharingConsentIp: String,
-
-    // Communication Consent
     communicationConsent: {
       email: { type: Boolean, default: true },
       whatsapp: { type: Boolean, default: false },
@@ -190,9 +187,8 @@ const companySchema = new mongoose.Schema({
     communicationConsentIp: String
   },
 
-  // ==================== 8. DOCUMENTS (Post-Signup) ====================
+  // ==================== DOCUMENTS ====================
   documents: {
-    // Mandatory
     gstCertificate: String,
     panCard: String,
     incorporationCertificate: String,
@@ -236,6 +232,23 @@ const companySchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true }
 }, {
   timestamps: true
+});
+
+// ✅ Pre-save hook for uniqueId
+companySchema.pre('save', function (next) {
+  if (!this.uniqueId) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const date = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+
+    this.uniqueId = `CMP-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
+  }
+  next();
 });
 
 module.exports = mongoose.model('Company', companySchema);

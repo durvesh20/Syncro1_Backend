@@ -24,6 +24,15 @@ const jobSchema = new mongoose.Schema({
     type: String,
     unique: true
   },
+
+  // ✅ Added uniqueId field
+  uniqueId: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
+
   description: {
     type: String,
     required: [true, 'Job description is required'],
@@ -124,14 +133,14 @@ const jobSchema = new mongoose.Schema({
     default: '0-15 days'
   },
 
-  // ==================== JOB STATUS (for partner visibility) ====================
+  // ==================== JOB STATUS ====================
   status: {
     type: String,
     enum: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'CLOSED', 'FILLED'],
     default: 'DRAFT'
   },
 
-  // ==================== APPROVAL WORKFLOW (NEW) ====================
+  // ==================== APPROVAL WORKFLOW ====================
   approvalStatus: {
     type: String,
     enum: [
@@ -154,7 +163,7 @@ const jobSchema = new mongoose.Schema({
   rejectionReason: String,
   rejectedAt: Date,
 
-  // ==================== EDIT REQUEST TRACKING (NEW) ====================
+  // ==================== EDIT REQUEST TRACKING ====================
   editRequestCount: {
     type: Number,
     default: 0
@@ -169,7 +178,7 @@ const jobSchema = new mongoose.Schema({
   },
   lastEditRequestAt: Date,
 
-  // ==================== DISCONTINUATION (NEW) ====================
+  // ==================== DISCONTINUATION ====================
   discontinuedReason: String,
   discontinuedBy: {
     type: mongoose.Schema.Types.ObjectId,
@@ -177,7 +186,7 @@ const jobSchema = new mongoose.Schema({
   },
   discontinuedAt: Date,
 
-  // ==================== CHANGE HISTORY (NEW - AUDIT TRAIL) ====================
+  // ==================== CHANGE HISTORY ====================
   changeHistory: [{
     changedAt: {
       type: Date,
@@ -250,10 +259,8 @@ const jobSchema = new mongoose.Schema({
 jobSchema.index({ company: 1, approvalStatus: 1 });
 jobSchema.index({ approvalStatus: 1, createdAt: -1 });
 jobSchema.index({ status: 1, eligiblePlans: 1 });
-// jobSchema.index({ slug: 1 });
 jobSchema.index({ category: 1, status: 1 });
 jobSchema.index({ 'location.city': 1, status: 1 });
-// ✅ FIX #8: Added missing index
 jobSchema.index({ company: 1, status: 1, createdAt: -1 });
 
 // ==================== VIRTUAL FIELDS ====================
@@ -270,7 +277,6 @@ jobSchema.virtual('requiresApproval').get(function () {
 });
 
 // ==================== MIDDLEWARE ====================
-
 jobSchema.pre('save', function (next) {
   // Auto-generate slug
   if (this.isModified('title') && !this.slug) {
@@ -280,7 +286,7 @@ jobSchema.pre('save', function (next) {
       .replace(/(^-|-$)/g, '') + '-' + Date.now();
   }
 
-  // Auto-generate uniqueId: YYYY-DD-MM-HHmmss-random
+  // Auto-generate uniqueId
   if (!this.uniqueId) {
     const now = new Date();
     const year = now.getFullYear();
@@ -290,6 +296,7 @@ jobSchema.pre('save', function (next) {
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
     const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+
     this.uniqueId = `JOB-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
   }
 
@@ -318,7 +325,6 @@ jobSchema.pre('save', function (next) {
 });
 
 // ==================== METHODS ====================
-
 jobSchema.methods.addToHistory = function (changeType, changedBy, changes = {}, notes = '') {
   this.changeHistory.push({
     changedAt: new Date(),
@@ -329,7 +335,6 @@ jobSchema.methods.addToHistory = function (changeType, changedBy, changes = {}, 
   });
 };
 
-// ✅ FIX #1: Proper markModified with actual field names
 jobSchema.methods.applyEditChanges = function (appliedChanges) {
   Object.keys(appliedChanges).forEach(field => {
     const keys = field.split('.');

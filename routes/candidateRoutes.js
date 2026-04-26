@@ -1,19 +1,24 @@
-// backend/routes/candidateRoutes.js
+
 const express = require('express');
 const router = express.Router();
-const Candidate = require('../models/Candidate');
-const Job = require('../models/Job');
-const { protect, authorize } = require('../middleware/auth');
+const crypto = require('crypto');
 
-// @desc    Public consent page data
-// @route   GET /api/candidates/consent/:token
-router.get('/consent/:token', async (req, res) => {
+// @desc    Candidate confirms consent via token link
+// @route   GET /api/candidates/consent/confirm
+router.get('/consent/confirm', async (req, res) => {
   try {
-    // NOTE: In production, this should be a JWT or other secure token,
-    // not a raw candidate _id. Adjust lookup logic accordingly.
-    const candidate = await Candidate.findById(req.params.token)
-      .populate('job', 'title company description location')
-      .populate('company', 'companyName');
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid consent link'
+      });
+    }
+
+    const candidate = await Candidate.findOne({
+      'consent.consentToken': token
+    });
 
     if (!candidate) {
       return res.status(404).json({
@@ -22,112 +27,132 @@ router.get('/consent/:token', async (req, res) => {
       });
     }
 
-    if (candidate.consent?.given) {
+    if (candidate.consent.consentStatus !== 'PENDING_CONFIRMATION') {
       return res.json({
         success: true,
-        message: 'Consent already provided',
-        data: { alreadyConsented: true }
+        message: 'Consent already recorded',
+        data: {
+          status: candidate.consent.consentStatus
+        }
+      });
+    }
+
+    candidate.consent.consentStatus = 'CONFIRMED';
+    candidate.consent.consentConfirmedAt = new Date();
+    candidate.consent.consentIp = req.ip;
+    await candidate.save();
+
+    // Notify partner
+    const notificationEngine = require('../services/notificationEngine');
+    const StaffingPartner = require('../models/StaffingPartner');
+    const partner = await StaffingPartner.findById(candidate.submittedBy)
+      .populate('user', '_id');
+
+    if (partner?.user?._id) {
+      await notificationEngine.send({
+        recipientId: partner.user._id,
+        type: 'CANDIDATE_CONSENT_CONFIRMED',
+        title: '✅ Candidate consent confirmed',
+        message: `${candidate.firstName} ${candidate.lastName} has confirmed consent for their profile submission.`,
+        data: {
+          entityType: 'Candidate',
+          entityId: candidate._id,
+          actionUrl: `/partner/submissions/${candidate._id}`
+        },
+        channels: { inApp: true },
+        priority: 'low'
       });
     }
 
     res.json({
       success: true,
-      data: {
-        candidateName: `${candidate.firstName} ${candidate.lastName}`,
-        jobTitle: candidate.job?.title,
-        companyName: candidate.company?.companyName,
-        jobLocation: candidate.job?.location
-      }
+      message: 'Thank you! Your consent has been confirmed.',
+      data: { status: 'CONFIRMED' }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch consent data',
+      message: 'Failed to confirm consent',
       error: error.message
     });
   }
 });
 
-// @desc    Submit consent (public route using token)
-// @route   POST /api/candidates/consent/:token
-router.post('/consent/:token', async (req, res) => {
+// @desc    Candidate denies consent via token link
+// @route   GET /api/candidates/consent/deny
+router.get('/consent/deny', async (req, res) => {
   try {
-    const { consent, signature } = req.body;
+    const { token } = req.query;
 
-    // Again, token should ideally be a secure token / JWT
-    const candidate = await Candidate.findById(req.params.token);
-
-    if (!candidate) {
-      return res.status(404).json({
+    if (!token) {
+      return res.status(400).json({
         success: false,
         message: 'Invalid consent link'
       });
     }
 
-    candidate.consent = {
-      given: consent === true,
-      givenAt: new Date(),
-      ipAddress: req.ip || req.headers['x-forwarded-for'],
-      signature: signature
-    };
-
-    await candidate.save();
-
-    res.json({
-      success: true,
-      message: consent
-        ? 'Thank you! Your consent has been recorded.'
-        : 'You have declined to provide consent.'
+    const candidate = await Candidate.findOne({
+      'consent.consentToken': token
     });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to record consent',
-      error: error.message
-    });
-  }
-});
-
-// @desc    Get candidate details (for authorized users)
-// @route   GET /api/candidates/:id
-router.get('/:id', protect, async (req, res) => {
-  try {
-    const candidate = await Candidate.findById(req.params.id)
-      .populate('submittedBy', 'firstName lastName firmName user')
-      .populate('job', 'title commission company')
-      .populate('company', 'companyName');
 
     if (!candidate) {
       return res.status(404).json({
         success: false,
-        message: 'Candidate not found'
+        message: 'Invalid or expired consent link'
       });
     }
 
-    // Check authorization - only admin, the company, or the submitting partner can view
-    const isAdmin = req.user.role === 'admin';
-    const isCompany =
-      req.user.role === 'company' &&
-      candidate.company?.user?.toString() === req.user._id.toString();
-    const isPartner =
-      req.user.role === 'staffing_partner' &&
-      candidate.submittedBy?.user?.toString() === req.user._id.toString();
+    if (candidate.consent.consentStatus !== 'PENDING_CONFIRMATION') {
+      return res.json({
+        success: true,
+        message: 'Consent already recorded',
+        data: { status: candidate.consent.consentStatus }
+      });
+    }
 
-    if (!isAdmin && !isCompany && !isPartner) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to view this candidate'
+    candidate.consent.consentStatus = 'DENIED';
+    candidate.consent.consentDeniedAt = new Date();
+    candidate.consent.consentIp = req.ip;
+    // Flag the submission
+    candidate.status = 'WITHDRAWN';
+    candidate.statusHistory.push({
+      status: 'WITHDRAWN',
+      changedAt: new Date(),
+      notes: 'Candidate denied consent — auto-withdrawn'
+    });
+    await candidate.save();
+
+    // Notify partner
+    const notificationEngine = require('../services/notificationEngine');
+    const StaffingPartner = require('../models/StaffingPartner');
+    const partner = await StaffingPartner.findById(candidate.submittedBy)
+      .populate('user', '_id');
+
+    if (partner?.user?._id) {
+      await notificationEngine.send({
+        recipientId: partner.user._id,
+        type: 'CANDIDATE_CONSENT_DENIED',
+        title: '❌ Candidate denied consent',
+        message: `${candidate.firstName} ${candidate.lastName} has denied consent. The submission has been automatically withdrawn.`,
+        data: {
+          entityType: 'Candidate',
+          entityId: candidate._id,
+          actionUrl: `/partner/submissions/${candidate._id}`
+        },
+        channels: { inApp: true, email: true },
+        priority: 'high'
       });
     }
 
     res.json({
       success: true,
-      data: candidate
+      message: 'Your consent denial has been recorded. The submission has been withdrawn.',
+      data: { status: 'DENIED' }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch candidate',
+      message: 'Failed to record consent denial',
       error: error.message
     });
   }

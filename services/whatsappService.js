@@ -133,24 +133,83 @@ class WhatsAppService {
    */
   async sendOTP(phoneNumber, otp) {
     const otpStr = String(otp);
+    const formattedPhone = this._formatPhone(phoneNumber);
 
     console.log('═══════════════════════════════════════');
     console.log('🔐 WhatsApp OTP');
-    console.log(`   Phone: +${this._formatPhone(phoneNumber)}`);
+    console.log(`   Phone: +${formattedPhone}`);
     console.log(`   OTP:   ${otpStr}`);
     console.log('═══════════════════════════════════════');
 
-    // Authentication template format:
-    // body parameter = OTP
-    // button parameter = OTP (same value, required for copy code button)
-    return this.sendTemplate(
-      phoneNumber,
-      process.env.WHATSAPP_TEMPLATE_OTP || 'syncro1_otp',
-      [otpStr],      // body params
-      otpStr         // button param (for copy code button)
-    );
-  }
+    if (!this.enabled) {
+      return { success: true, mock: true };
+    }
 
+    try {
+      // Authentication template format
+      // OTP must go in BOTH body parameters AND button parameters
+      const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: formattedPhone,
+        type: 'template',
+        template: {
+          name: process.env.WHATSAPP_TEMPLATE_OTP || 'authtest',
+          language: {
+            code: 'en_US'
+          },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                {
+                  type: 'text',
+                  text: otpStr
+                }
+              ]
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                {
+                  type: 'text',
+                  text: otpStr
+                }
+              ]
+            }
+          ]
+        }
+      };
+
+      const response = await axios.post(
+        `${this.baseUrl}/${this.phoneNumberId}/messages`,
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+
+      const messageId = response.data?.messages?.[0]?.id;
+      console.log(`[WHATSAPP] ✅ OTP sent to +${formattedPhone} | ID: ${messageId}`);
+
+      return {
+        success: true,
+        messageId,
+        data: response.data
+      };
+    } catch (error) {
+      const errMsg = error.response?.data?.error?.message || error.message;
+      const errCode = error.response?.data?.error?.code;
+      console.error(`[WHATSAPP] ❌ OTP failed: ${errMsg} (Code: ${errCode})`);
+      return { success: false, error: errMsg, errorCode: errCode };
+    }
+  }
   /**
    * Send profile verified notification
    * Params: [name]
