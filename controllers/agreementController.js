@@ -308,9 +308,8 @@ exports.acceptAgreement = async (req, res) => {
 // ADMIN ROUTES
 // ================================================================
 
-// @desc    Admin gets all pending agreement queries
+// @desc    Admin gets all agreement queries (with full context)
 // @route   GET /api/agreements/admin/queries
-// @access  Admin / Sub-Admin
 exports.getAllQueries = async (req, res) => {
     try {
         const { status, page = 1, limit = 20 } = req.query;
@@ -326,7 +325,9 @@ exports.getAllQueries = async (req, res) => {
             AgreementQuery.find(query)
                 .populate({
                     path: 'partner',
-                    select: 'firstName lastName firmName city state verificationStatus'
+                    select:
+                        'firstName lastName firmName city state verificationStatus ' +
+                        'agreement profileCompletion uniqueId'
                 })
                 .populate('user', 'email mobile')
                 .populate('respondedBy', 'email role')
@@ -336,20 +337,33 @@ exports.getAllQueries = async (req, res) => {
             AgreementQuery.countDocuments(query)
         ]);
 
-        // Summary
-        const summary = await AgreementQuery.aggregate([
-            {
-                $group: {
-                    _id: '$status',
-                    count: { $sum: 1 }
-                }
+        // ✅ Enrich each query with status flags and response details
+        const enriched = queries.map(q => ({
+            ...q.toObject(),
+            _meta: {
+                isPending: q.status === 'PENDING',
+                isResponded: q.status === 'RESPONDED',
+                isClosed: q.status === 'CLOSED',
+                hasResponse: !!q.response,
+                response: q.response || null,
+                respondedBy: q.respondedBy || null,
+                respondedAt: q.respondedAt || null,
+                partnerHasAgreed: !!q.partner?.agreement?.agreed,
+                ageHours: Math.floor(
+                    (Date.now() - new Date(q.createdAt)) / (1000 * 60 * 60)
+                )
             }
+        }));
+
+        // ✅ Summary counts
+        const summary = await AgreementQuery.aggregate([
+            { $group: { _id: '$status', count: { $sum: 1 } } }
         ]);
 
         res.json({
             success: true,
             data: {
-                queries,
+                queries: enriched,
                 summary: summary.reduce((acc, item) => {
                     acc[item._id] = item.count;
                     return acc;
@@ -361,10 +375,151 @@ exports.getAllQueries = async (req, res) => {
                 }
             }
         });
+
     } catch (error) {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch queries',
+            error: error.message
+        });
+    }
+};
+
+
+// @desc    Admin responds to (approve/reject/close) a query
+// @route   PUT /api/agreements/admin/queries/:id/respond
+exports.respondToQuery = async (req, res) => {
+    try {
+        const { response, action } = req.body;
+
+        // ✅ action can be: 'respond' | 'close' | 'reopen'
+        const validActions = ['respond', 'close', 'reopen'];
+        const resolvedAction = action || 'respond';
+
+        if (!validActions.includes(resolvedAction)) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid action. Use: ${validActions.join(', ')}`
+            });
+        }
+
+        // Response text is required for 'respond' action
+        if (resolvedAction === 'respond' && (!response || response.trim().length < 5)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Response is required (minimum 5 characters)'
+            });
+        }
+
+        const agreementQuery = await AgreementQuery.findById(req.params.id)
+            .populate('partner', 'firstName lastName firmName')
+            .populate('user', 'email');
+
+        if (!agreementQuery) {
+            return res.status(404).json({
+                success: false,
+                message: 'Query not found'
+            });
+        }
+
+        // ✅ Handle different actions
+        if (resolvedAction === 'close') {
+            if (agreementQuery.status === 'PENDING' && !agreementQuery.response) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Please respond to the query before closing it'
+                });
+            }
+            agreementQuery.status = 'CLOSED';
+
+        } else if (resolvedAction === 'reopen') {
+            if (agreementQuery.status !== 'CLOSED') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Only CLOSED queries can be reopened'
+                });
+            }
+            agreementQuery.status = 'RESPONDED';
+
+        } else {
+            // respond
+            if (agreementQuery.status === 'CLOSED') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Cannot respond to a closed query. Reopen it first.'
+                });
+            }
+
+            agreementQuery.response = response.trim();
+            agreementQuery.respondedBy = req.user._id;
+            agreementQuery.respondedAt = new Date();
+            agreementQuery.status = 'RESPONDED';
+        }
+
+        await agreementQuery.save();
+
+        // Notify partner (fire and forget)
+        const notifyPartner = async () => {
+            try {
+                const notificationEngine = require('../services/notificationEngine');
+
+                const messageMap = {
+                    respond: `Your query on "${agreementQuery.clauseReference}" has been responded to. Please review and accept the agreement when ready.`,
+                    close: `Your query on "${agreementQuery.clauseReference}" has been closed by admin.`,
+                    reopen: `Your query on "${agreementQuery.clauseReference}" has been reopened.`
+                };
+
+                await notificationEngine.send({
+                    recipientId: agreementQuery.user._id || agreementQuery.user,
+                    type: 'AGREEMENT_QUERY_RESPONDED',
+                    title:
+                        resolvedAction === 'respond'
+                            ? 'Your agreement query has been answered'
+                            : resolvedAction === 'close'
+                                ? 'Agreement query closed'
+                                : 'Agreement query reopened',
+                    message: messageMap[resolvedAction],
+                    data: {
+                        entityType: 'AgreementQuery',
+                        entityId: agreementQuery._id,
+                        actionUrl: '/partner/agreement'
+                    },
+                    channels: { inApp: true, email: resolvedAction === 'respond' },
+                    priority: 'high'
+                });
+
+            } catch (err) {
+                console.error('[AGREEMENT QUERY] Partner notification failed:', err.message);
+            }
+        };
+
+        notifyPartner();
+
+        res.json({
+            success: true,
+            message:
+                resolvedAction === 'respond'
+                    ? 'Response submitted. Partner has been notified.'
+                    : resolvedAction === 'close'
+                        ? 'Query closed successfully.'
+                        : 'Query reopened successfully.',
+            data: {
+                queryId: agreementQuery._id,
+                status: agreementQuery.status,
+                response: agreementQuery.response || null,
+                respondedAt: agreementQuery.respondedAt || null,
+                respondedBy: agreementQuery.respondedBy || null,
+                clauseReference: agreementQuery.clauseReference,
+                partnerName: `${agreementQuery.partner.firstName} ${agreementQuery.partner.lastName}`,
+                firmName: agreementQuery.partner.firmName
+            }
+        });
+
+    } catch (error) {
+        console.error('[AGREEMENT QUERY] Respond error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to process query action',
             error: error.message
         });
     }

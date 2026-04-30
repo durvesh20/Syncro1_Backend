@@ -156,6 +156,92 @@ router.post('/profile/submit', submitProfile);
 router.get('/jobs', getAvailableJobs);
 router.get('/jobs/:id', getJobDetails);
 
+// ✅ PRE-SUBMISSION DUPLICATE CHECK
+router.post('/jobs/:jobId/check-duplicate', async (req, res) => {
+  try {
+    const duplicateDetection = require('../services/duplicateDetectionService');
+    const StaffingPartner = require('../models/StaffingPartner');
+
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner not found'
+      });
+    }
+
+    const { email, mobile } = req.body;
+
+    if (!email || !mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide both email and mobile'
+      });
+    }
+
+    const result = await duplicateDetection.checkBeforeSubmission(
+      { email, mobile },
+      req.params.jobId,
+      partner._id
+    );
+
+    res.json({
+      success: true,
+      data: result
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Duplicate check failed',
+      error: error.message
+    });
+  }
+});
+
+
+// ✅ PRE-SUBMISSION JOB FIT CHECK
+router.post('/jobs/:jobId/check-fit', async (req, res) => {
+  try {
+    const candidateScoringService = require('../services/candidateScoringService');
+    const Job = require('../models/Job');
+
+    const job = await Job.findById(req.params.jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    if (!req.body.profile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Profile data required'
+      });
+    }
+
+    const result = candidateScoringService.preSubmissionCheck(
+      req.body.profile,
+      job
+    );
+
+    res.json({
+      success: true,
+      data: result
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Fit check failed',
+      error: error.message
+    });
+  }
+});
+
 // Pre-submission candidate-job fit check
 router.post('/jobs/:jobId/check-fit', async (req, res) => {
   try {

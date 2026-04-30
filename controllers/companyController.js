@@ -922,6 +922,8 @@ exports.createJob = async (req, res) => {
 
 // @desc    Get Company Jobs
 // @route   GET /api/companies/jobs
+// @desc    Get Company Jobs
+// @route   GET /api/companies/jobs
 exports.getJobs = async (req, res) => {
   try {
     const company = await Company.findOne({ user: req.user._id });
@@ -929,45 +931,71 @@ exports.getJobs = async (req, res) => {
     if (!company) {
       return res.status(404).json({
         success: false,
-        message: "Company not found",
+        message: 'Company not found'
       });
     }
 
-    // ✅ FIX #10: Sanitize pagination
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
-    const { status, approvalStatus } = req.query; // ✅ Added approvalStatus
+    const { status, approvalStatus } = req.query;
 
     const query = { company: company._id };
     if (status) query.status = status;
-    if (approvalStatus) query.approvalStatus = approvalStatus; // ✅ NEW LINE
+    if (approvalStatus) query.approvalStatus = approvalStatus;
 
     const skip = (page - 1) * limit;
 
     const jobs = await Job.find(query)
+      .populate(
+        'company',
+        'companyName kyc.industry kyc.logo kyc.companyType kyc.employeeCount city state verificationStatus'
+      )
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
     const total = await Job.countDocuments(query);
 
+    // ✅ Enrich each job with safe company snapshot
+    const enrichedJobs = jobs.map(job => {
+      const jobObj = job.toObject();
+      const comp = job.company;
+
+      return {
+        ...jobObj,
+        companyDetails: comp
+          ? {
+            companyName: comp.companyName,
+            industry: comp.kyc?.industry || null,
+            logo: comp.kyc?.logo || null,
+            companyType: comp.kyc?.companyType || null,
+            employeeCount: comp.kyc?.employeeCount || null,
+            city: comp.city || null,
+            state: comp.state || null,
+            verificationStatus: comp.verificationStatus || null
+          }
+          : null
+      };
+    });
+
     res.json({
       success: true,
       data: {
-        jobs,
+        jobs: enrichedJobs,
         pagination: {
           current: page,
           pages: Math.ceil(total / limit),
           total,
           limit
-        },
-      },
+        }
+      }
     });
+
   } catch (error) {
     console.error('[COMPANY] Get jobs error:', error);
     res.status(500).json({
       success: false,
-      message: "Failed to fetch jobs",
-      error: error.message,
+      message: 'Failed to fetch jobs',
+      error: error.message
     });
   }
 };

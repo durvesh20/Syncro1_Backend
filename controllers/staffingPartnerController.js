@@ -696,6 +696,7 @@ exports.getProfileCompletion = async (req, res) => {
   }
 };
 
+
 // @desc    Submit Profile for Verification
 // @route   POST /api/staffing-partners/profile/submit
 exports.submitProfile = async (req, res) => {
@@ -709,7 +710,8 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    if (['PENDING', 'UNDER_REVIEW', 'APPROVED'].includes(partner.verificationStatus)) {
+    // ✅ FIXED: Added 'VERIFIED' to blocked statuses
+    if (['VERIFIED', 'UNDER_REVIEW', 'APPROVED'].includes(partner.verificationStatus)) {
       return res.status(400).json({
         success: false,
         message: 'Profile already submitted for verification'
@@ -750,10 +752,7 @@ exports.submitProfile = async (req, res) => {
 
     // Documents check
     const requiredDocs = ['panCard', 'gstCertificate'];
-
-    const missingDocs = requiredDocs.filter(
-      doc => !partner.documents?.[doc]
-    );
+    const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
 
     if (missingDocs.length > 0) {
       return res.status(400).json({
@@ -789,36 +788,23 @@ exports.submitProfile = async (req, res) => {
     user.status = 'UNDER_VERIFICATION';
     await user.save();
 
-
-    // ================= EMAIL (non-blocking safe execution) =================
+    // fire-and-forget email
     const sendAgreementEmail = async () => {
       try {
         const emailService = require('../services/emailService');
-
         await emailService.sendEmail({
           to: user.email,
           subject: '📋 Syncro1 — Your Signed Agreement Copy',
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              
               <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                           color: white; padding: 30px; border-radius: 10px 10px 0 0;">
                 <h1 style="margin: 0; font-size: 22px;">Syncro1</h1>
-                <p style="margin: 5px 0 0 0; opacity: 0.9;">
-                  Master Staffing Partner Agreement
-                </p>
+                <p style="margin: 5px 0 0 0; opacity: 0.9;">Master Staffing Partner Agreement</p>
               </div>
-
               <div style="padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb;">
-                
                 <p>Dear ${partner.firstName} ${partner.lastName},</p>
-
-                <p>
-                  Thank you for accepting the Master Staffing Partner Agreement and submitting your profile for verification.
-                </p>
-
-                <p>Please find your signed agreement copy below:</p>
-
+                <p>Thank you for accepting the Master Staffing Partner Agreement and submitting your profile for verification.</p>
                 <div style="text-align: center; margin: 30px 0;">
                   <a href="${partner.agreement.pdfUrl}"
                      style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -828,47 +814,27 @@ exports.submitProfile = async (req, res) => {
                     📥 Download Agreement
                   </a>
                 </div>
-
-                <div style="background: #dbeafe; border-left: 4px solid #3b82f6;
-                            padding: 15px; margin: 20px 0; border-radius: 4px;">
-                  <strong>Agreement Details</strong><br><br>
-
-                  <strong>Firm:</strong> ${partner.firmName}<br>
-                  <strong>Signed by:</strong> ${partner.agreement.digitalSignature}<br>
-                  <strong>Date:</strong> ${new Date(partner.agreement.agreedAt).toLocaleDateString('en-IN', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric'
-          })}<br>
-                  <strong>IP Address:</strong> ${partner.agreement.agreedIp || 'N/A'}
-                </div>
-
                 <div style="background: #fef3c7; border-left: 4px solid #f59e0b;
                             padding: 15px; margin: 20px 0; border-radius: 4px;">
                   <strong>What happens next?</strong><br>
                   Our verification team will review your profile within 24–48 hours.
                 </div>
-
                 <p>Best regards,<br><strong>Team Syncro1</strong></p>
               </div>
-
               <div style="text-align: center; padding: 20px;
                           color: #6b7280; font-size: 12px;
                           background: #f3f4f6; border-radius: 0 0 10px 10px;">
                 <p>© ${new Date().getFullYear()} Syncro1 Technologies Pvt Ltd.</p>
               </div>
-
             </div>
           `
         });
-
         console.log(`[AGREEMENT] Email sent → ${user.email}`);
       } catch (err) {
         console.error(`[AGREEMENT] Email failed: ${err.message}`);
       }
     };
 
-    // fire-and-forget (non-blocking)
     sendAgreementEmail();
 
     return res.json({

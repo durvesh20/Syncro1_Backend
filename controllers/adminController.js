@@ -60,7 +60,7 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
-// @desc    Get Pending Verifications
+// @desc    Get Pending Verifications (with full details + history)
 // @route   GET /api/admin/verifications
 exports.getPendingVerifications = async (req, res) => {
   try {
@@ -71,21 +71,89 @@ exports.getPendingVerifications = async (req, res) => {
 
     if (!type || type === 'partners') {
       partners = await StaffingPartner.find({
-        verificationStatus: { $in: ['PENDING', 'UNDER_REVIEW'] }
-      }).populate('user', 'email mobile createdAt')
-        .sort({ createdAt: 1 });
+        verificationStatus: { $in: ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
+      })
+        .populate('user', 'email mobile createdAt status')
+        .populate('verifiedBy', 'email role')
+        .sort({ createdAt: 1 })
+        .select(
+          'firstName lastName firmName designation city state ' +
+          'verificationStatus verificationNotes rejectionReason ' +
+          'verifiedAt verifiedBy submittedAt profileCompletion ' +
+          'agreement documents uniqueId'
+        );
     }
 
     if (!type || type === 'companies') {
-      companies = await Company.find({ verificationStatus: 'UNDER_REVIEW' })
-        .populate('user', 'email mobile createdAt')
-        .sort({ createdAt: 1 });
+      companies = await Company.find({
+        verificationStatus: { $in: ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
+      })
+        .populate('user', 'email mobile createdAt status')
+        .populate('verifiedBy', 'email role')
+        .sort({ createdAt: 1 })
+        .select(
+          'companyName decisionMakerName designation city state ' +
+          'verificationStatus verificationNotes rejectionReason ' +
+          'verifiedAt verifiedBy profileCompletion documents ' +
+          'kyc.industry kyc.companyType uniqueId'
+        );
     }
+
+    // ✅ Enrich with summary flags
+    const enrichPartner = (p) => ({
+      ...p.toObject(),
+      _summary: {
+        isApproved: p.verificationStatus === 'APPROVED',
+        isRejected: p.verificationStatus === 'REJECTED',
+        isPending: ['PENDING', 'UNDER_REVIEW'].includes(p.verificationStatus),
+        rejectionReason: p.rejectionReason || null,
+        verificationNotes: p.verificationNotes || null,
+        verifiedAt: p.verifiedAt || null,
+        verifiedBy: p.verifiedBy || null,
+        hasAgreement: !!p.agreement?.agreed,
+        agreementUrl: p.agreement?.pdfUrl || null
+      }
+    });
+
+    const enrichCompany = (c) => ({
+      ...c.toObject(),
+      _summary: {
+        isApproved: c.verificationStatus === 'APPROVED',
+        isRejected: c.verificationStatus === 'REJECTED',
+        isPending: ['PENDING', 'UNDER_REVIEW'].includes(c.verificationStatus),
+        rejectionReason: c.rejectionReason || null,
+        verificationNotes: c.verificationNotes || null,
+        verifiedAt: c.verifiedAt || null,
+        verifiedBy: c.verifiedBy || null
+      }
+    });
 
     res.json({
       success: true,
-      data: { partners, companies }
+      data: {
+        partners: partners.map(enrichPartner),
+        companies: companies.map(enrichCompany),
+        counts: {
+          partners: {
+            total: partners.length,
+            pending: partners.filter(p =>
+              ['PENDING', 'UNDER_REVIEW'].includes(p.verificationStatus)
+            ).length,
+            approved: partners.filter(p => p.verificationStatus === 'APPROVED').length,
+            rejected: partners.filter(p => p.verificationStatus === 'REJECTED').length
+          },
+          companies: {
+            total: companies.length,
+            pending: companies.filter(c =>
+              ['PENDING', 'UNDER_REVIEW'].includes(c.verificationStatus)
+            ).length,
+            approved: companies.filter(c => c.verificationStatus === 'APPROVED').length,
+            rejected: companies.filter(c => c.verificationStatus === 'REJECTED').length
+          }
+        }
+      }
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -917,48 +985,92 @@ exports.getAnalytics = async (req, res) => {
 };
 
 // ==================== JOB APPROVAL WORKFLOW ====================
-
-// @desc    Get pending jobs for approval
+// @desc    Get pending jobs for approval (with full details)
 // @route   GET /api/admin/jobs/pending
 exports.getPendingJobs = async (req, res) => {
   try {
-    const { page = 1, limit = 20, sortBy = 'createdAt' } = req.query;
+    const { page = 1, limit = 20, sortBy = 'createdAt', approvalStatus } = req.query;
 
-    const query = { approvalStatus: 'PENDING_APPROVAL' };
+    // ✅ Allow filtering by multiple approval statuses
+    const statusFilter = approvalStatus
+      ? [approvalStatus]
+      : ['PENDING_APPROVAL', 'EDIT_REQUESTED'];
+
+    const query = { approvalStatus: { $in: statusFilter } };
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
 
     const jobs = await Job.find(query)
-      .populate('company', 'companyName kyc.industry kyc.employeeCount')
+      .populate('company', 'companyName kyc.industry kyc.employeeCount city state')
       .populate('postedBy', 'email')
+      .populate('approvedBy', 'email role')
+      .populate('discontinuedBy', 'email role')
       .sort({ createdAt: sortBy === 'oldest' ? 1 : -1 })
       .skip((sanitizedPage - 1) * sanitizedLimit)
       .limit(sanitizedLimit);
 
     const total = await Job.countDocuments(query);
 
-    const jobsWithAge = jobs.map(job => ({
+    // ✅ Enrich jobs with age, staleness, approval/rejection history
+    const jobsWithMeta = jobs.map(job => ({
       ...job.toObject(),
-      submittedAge: Math.floor((Date.now() - job.createdAt) / (1000 * 60 * 60)),
-      isStale: (Date.now() - job.createdAt) > (7 * 24 * 60 * 60 * 1000)
+      _meta: {
+        submittedAgeHours: Math.floor(
+          (Date.now() - job.createdAt) / (1000 * 60 * 60)
+        ),
+        isStale: (Date.now() - job.createdAt) > (7 * 24 * 60 * 60 * 1000),
+        approvalStatus: job.approvalStatus,
+        rejectionReason: job.rejectionReason || null,
+        rejectedAt: job.rejectedAt || null,
+        approvedAt: job.approvedAt || null,
+        approvedBy: job.approvedBy || null,
+        discontinuedReason: job.discontinuedReason || null,
+        discontinuedAt: job.discontinuedAt || null,
+        editStats: job.getEditStats(),
+        changeHistory: job.changeHistory
+          ? job.changeHistory
+            .slice(-5) // last 5 changes
+            .sort((a, b) => b.changedAt - a.changedAt)
+          : []
+      }
     }));
+
+    // ✅ Summary by approvalStatus
+    const statusSummary = await Job.aggregate([
+      {
+        $group: {
+          _id: '$approvalStatus',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
 
     res.json({
       success: true,
       data: {
-        jobs: jobsWithAge,
+        jobs: jobsWithMeta,
         pagination: {
           current: sanitizedPage,
           pages: Math.ceil(total / sanitizedLimit),
           total
         },
         stats: {
-          pending: total,
-          stale: jobsWithAge.filter(j => j.isStale).length
+          pending: jobsWithMeta.filter(
+            j => j.approvalStatus === 'PENDING_APPROVAL'
+          ).length,
+          editRequested: jobsWithMeta.filter(
+            j => j.approvalStatus === 'EDIT_REQUESTED'
+          ).length,
+          stale: jobsWithMeta.filter(j => j._meta.isStale).length,
+          byStatus: statusSummary.reduce((acc, item) => {
+            acc[item._id] = item.count;
+            return acc;
+          }, {})
         }
       }
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -1317,44 +1429,44 @@ exports.approveEditRequest = async (req, res) => {
         currentStatus: editRequest.status
       });
     }
+
     const job = editRequest.job;
     const changes = editRequest.requestedChanges;
     const appliedChanges = {};
 
     for (const [field, change] of Object.entries(changes)) {
       try {
-        const keys = field.split('.');
-        let target = job;
+        // ✅ Use Mongoose's built-in getter to safely fetch deeply nested/array old values
+        const oldValue = job.get(field);
+        const parsedOldValue = JSON.parse(JSON.stringify(oldValue ?? null));
 
-        for (let i = 0; i < keys.length - 1; i++) {
-          if (!target[keys[i]]) target[keys[i]] = {};
-          target = target[keys[i]];
-        }
-
-        const lastKey = keys[keys.length - 1];
-        const oldValue = target[lastKey];
+        // ✅ Use Mongoose's built-in setter to apply and natively track exactly what changed
+        job.set(field, change.new);
 
         appliedChanges[field] = {
-          old: oldValue,
+          old: parsedOldValue,
           new: change.new
         };
 
-        target[lastKey] = change.new;
+        // ✅ Tell Mongoose directly that this specific path was modified (fixes Array staleness)
+        job.markModified(field);
+
       } catch (err) {
         console.error(`Failed to apply change for field ${field}:`, err);
       }
     }
 
-    job.applyEditChanges(appliedChanges);
-
-    // Also mark all top level keys as modified
-    const topLevelKeys = [...new Set(Object.keys(changes).map(f => f.split('.')[0]))];
-    topLevelKeys.forEach(key => job.markModified(key));
+    // ✅ REMOVED: topLevelKeys loop (was causing double-mark issues)
 
     job.applyEditChanges(appliedChanges);
     job.approvalStatus = 'ACTIVE';
     job.approvedEditCount += 1;
-    job.addToHistory('EDIT_APPROVED', req.user._id, appliedChanges, notes || 'Edit request approved');
+    job.addToHistory(
+      'EDIT_APPROVED',
+      req.user._id,
+      appliedChanges,
+      notes || 'Edit request approved'
+    );
     await job.save();
 
     editRequest.status = 'APPROVED';
@@ -1365,6 +1477,19 @@ exports.approveEditRequest = async (req, res) => {
     editRequest.appliedChanges = appliedChanges;
     await editRequest.save();
 
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'EDIT_REQUEST_APPROVED',
+      entityType: 'JobEditRequest',
+      entityId: editRequest._id,
+      description: `Edit request approved for job: ${job.title}`,
+      notes,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
     const notificationEngine = require('../services/notificationEngine');
 
     if (editRequest.company.user) {
@@ -1372,7 +1497,8 @@ exports.approveEditRequest = async (req, res) => {
         recipientId: editRequest.company.user,
         type: 'JOB_EDIT_APPROVED',
         title: `Edit approved for "${job.title}"`,
-        message: `Your requested changes to "${job.title}" have been approved and applied.${notes ? `\n\nAdmin note: ${notes}` : ''}`,
+        message: `Your requested changes to "${job.title}" have been approved and applied.${notes ? `\n\nAdmin note: ${notes}` : ''
+          }`,
         data: {
           entityType: 'Job',
           entityId: job._id,
@@ -1408,6 +1534,7 @@ exports.approveEditRequest = async (req, res) => {
         jobStats: job.getEditStats()
       }
     });
+
   } catch (error) {
     console.error('Approve edit request error:', error);
     res.status(500).json({
