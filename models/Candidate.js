@@ -39,6 +39,14 @@ const candidateSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  middleName: { type: String, required: true },
+  location: { type: String, required: true },
+  totalExperience: { type: Number, required: true }, // in years
+  relevantExperience: { type: Number, required: true }, // in years
+  noticePeriod: { type: String, required: true }, // e.g., "30 Days"
+  currentSalary: { type: Number, required: true },
+  expectedSalary: { type: Number, required: true },
+  writeup: { type: String }, 
 
   consent: {
     given: {
@@ -57,9 +65,10 @@ const candidateSchema = new mongoose.Schema({
     },
     consentStatus: {
       type: String,
-      enum: ['PENDING_CONFIRMATION', 'CONFIRMED', 'DENIED'],
-      default: 'PENDING_CONFIRMATION'
+      enum: ['PENDING', 'PENDING_CONFIRMATION', 'AGREED', 'DENIED'], 
+      default: 'PENDING' 
     },
+    consentExpiry: Date,
     consentConfirmedAt: Date,
     consentDeniedAt: Date,
     consentIp: String
@@ -97,7 +106,10 @@ const candidateSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: [
-      'SUBMITTED',
+      'CONSENT_SENT',    // Initial submission
+      'SUBMITTED',       // Consent Agreed
+      'REJECTED',        // Consent Denied
+      'FORWARDED_TO_CLIENT', 
       'UNDER_REVIEW',
       'SHORTLISTED',
       'INTERVIEW_SCHEDULED',

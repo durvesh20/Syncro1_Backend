@@ -1,8 +1,13 @@
 // backend/services/whatsappService.js
+require('dotenv').config();
 const axios = require('axios');
 
 class WhatsAppService {
   constructor() {
+    this.refreshConfig();
+  }
+
+  refreshConfig() {
     this.enabled = process.env.WHATSAPP_ENABLED === 'true';
     this.phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '';
     this.accessToken = process.env.WHATSAPP_ACCESS_TOKEN || '';
@@ -30,7 +35,7 @@ class WhatsAppService {
   async sendTemplate(phoneNumber, templateName, bodyParameters = [], buttonParameters = null) {
     const formattedPhone = this._formatPhone(phoneNumber);
 
-    if (!this.enabled) {
+    if (process.env.WHATSAPP_ENABLED !== 'true') {
       console.log('═══════════════════════════════════════');
       console.log('📱 WhatsApp Template (MOCK - Disabled)');
       console.log(`   Phone:    +${formattedPhone}`);
@@ -141,7 +146,7 @@ class WhatsAppService {
     console.log(`   OTP:   ${otpStr}`);
     console.log('═══════════════════════════════════════');
 
-    if (!this.enabled) {
+    if (process.env.WHATSAPP_ENABLED !== 'true') {
       return { success: true, mock: true };
     }
 
@@ -210,6 +215,136 @@ class WhatsAppService {
       return { success: false, error: errMsg, errorCode: errCode };
     }
   }
+
+
+  /**
+ * Send Consent Request via WhatsApp
+ * 
+ * Template Configuration:
+ * - 3 Body Variables: {{1}}=Name, {{2}}=Job Title, {{3}}=Firm Name
+ * - 2 Buttons: Static URLs (no variables)
+ */
+  async sendConsent(phoneNumber, candidateName, jobTitle, firmName, consentToken) {
+    const formattedPhone = this._formatPhone(phoneNumber);
+    const templateName = process.env.WHATSAPP_TEMPLATE_CONSENT || 'candidate_consent_request';
+
+    // Build full URLs with token
+    const confirmUrl = `${process.env.FRONTEND_URL}/consent/candidate/agree/${consentToken}`;
+    const denyUrl = `${process.env.FRONTEND_URL}/consent/candidate/disagree/${consentToken}`;
+
+    console.log('═══════════════════════════════════════');
+    console.log('✅ WhatsApp Consent Request (Static URLs)');
+    console.log(`   Phone:       +${formattedPhone}`);
+    console.log(`   Candidate:   ${candidateName}`);
+    console.log(`   Job:         ${jobTitle}`);
+    console.log(`   Firm:        ${firmName}`);
+    console.log(`   Token:       ${consentToken}`);
+    console.log(`   Confirm URL: ${confirmUrl}`);
+    console.log(`   Deny URL:    ${denyUrl}`);
+    console.log('═══════════════════════════════════════');
+
+    if (process.env.WHATSAPP_ENABLED !== 'true') {
+      return { success: true, mock: true };
+    }
+
+    try {
+      const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: formattedPhone,
+        type: 'template',
+        template: {
+          name: templateName,
+          language: {
+            code: 'en_GB'
+          },
+          components: [
+            // ✅ Body with 3 variables (MUST match template exactly)
+            {
+              type: 'body',
+              parameters: [
+                {
+                  type: 'text',
+                  text: candidateName        // {{1}}
+                },
+                {
+                  type: 'text',
+                  text: jobTitle             // {{2}}
+                },
+                {
+                  type: 'text',
+                  text: firmName             // {{3}}
+                }
+              ]
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: 0,  // ✅ MUST be number, NOT string
+              parameters: [
+                {
+                  type: 'text',
+                  text: consentToken   // This fills {{1}} in button URL
+                }
+              ]
+            },
+            // ✅ Button 2: I Disagree (Dynamic URL)
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: 1,  // ✅ MUST be number, NOT string
+              parameters: [
+                {
+                  type: 'text',
+                  text: consentToken   // This fills {{1}} in button URL
+                }
+              ]
+            }
+          ]
+        }
+      };
+
+      // Debug logging
+      console.log('📤 WhatsApp Payload:', JSON.stringify(payload, null, 2));
+
+      const response = await axios.post(
+        `${this.baseUrl}/${this.phoneNumberId}/messages`,
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+
+      const messageId = response.data?.messages?.[0]?.id;
+      console.log(`[WHATSAPP] ✅ Consent sent to +${formattedPhone} | ID: ${messageId}`);
+
+      return {
+        success: true,
+        messageId,
+        waId: response.data?.contacts?.[0]?.wa_id,
+        data: response.data
+      };
+    } catch (error) {
+      const errMsg = error.response?.data?.error?.message || error.message;
+      const errCode = error.response?.data?.error?.code;
+
+      console.error('═══════════════════════════════════════');
+      console.error('❌ WhatsApp Consent Error:');
+      console.error(`   Template: ${templateName}`);
+      console.error(`   Phone:    +${formattedPhone}`);
+      console.error(`   Code:     ${errCode}`);
+      console.error(`   Message:  ${errMsg}`);
+      console.error(`   Details:  ${JSON.stringify(error.response?.data)}`);
+      console.error('═══════════════════════════════════════');
+
+      return { success: false, error: errMsg, errorCode: errCode };
+    }
+  }
+
   /**
    * Send profile verified notification
    * Params: [name]
@@ -310,7 +445,7 @@ class WhatsAppService {
   async sendMessage(phoneNumber, message) {
     const formattedPhone = this._formatPhone(phoneNumber);
 
-    if (!this.enabled) {
+    if (process.env.WHATSAPP_ENABLED !== 'true') {
       console.log(`[WHATSAPP MOCK] Message → +${formattedPhone}: ${message}`);
       return { success: true, mock: true };
     }

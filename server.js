@@ -1,4 +1,4 @@
-
+require('dotenv').config();
 const cookieParser = require('cookie-parser');
 const express = require('express');
 const cors = require('cors');
@@ -41,11 +41,6 @@ require('./models/LimitExtensionRequest');
 
 // (IMPORTANT: app must exist before using app.use)
 const app = express();
-
-// Mount new routes
-app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
-app.use('/api/agreements', require('./routes/agreementRoutes'));
-app.use('/api/ai', require('./routes/aiRoutes'));
 
 /* =========================================================
    SECURITY MIDDLEWARE
@@ -180,9 +175,10 @@ app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/invoices', require('./routes/invoiceRoutes'));
 app.use('/api/ai', require('./routes/aiRoutes'));
-
+app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
 app.use('/api/agreements', require('./routes/agreementRoutes'));
-
+app.use('/api/ai', require('./routes/aiRoutes'));
+app.use('/', require('./routes/consentRoute'))
 
 /* =========================================================
    ERROR HANDLER

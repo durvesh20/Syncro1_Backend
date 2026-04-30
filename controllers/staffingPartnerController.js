@@ -9,6 +9,7 @@ const notificationEngine = require("../services/notificationEngine");
 const jobAccessService = require("../services/jobAccessService");
 const candidateScoringService = require("../services/candidateScoringService");
 const JobInterest = require('../models/JobInterest');
+const whatsappService = require("../services/whatsappService");
 // @desc    Get Staffing Partner Profile
 // @route   GET /api/staffing-partners/profile
 exports.getProfile = async (req, res) => {
@@ -1122,15 +1123,22 @@ exports.submitCandidate = async (req, res) => {
 
     const {
       firstName,
+      middleName,
       lastName,
       email,
       mobile,
-      consent,
-      profile,
+      location,
+      totalExperience,
+      relevantExperience,
+      noticePeriod,
+      currentSalary,
+      expectedSalary,
+      writeup,
+      consent, // Boolean checkbox from UI
       forceSubmit,
     } = req.body;
 
-    if (!firstName || !lastName || !email || !mobile) {
+    if (!firstName || !middleName || !lastName || !email || !mobile || !location || !totalExperience || !relevantExperience || !noticePeriod || !currentSalary || !expectedSalary || !writeup) {
       return res.status(400).json({
         success: false,
         message: "Please provide firstName, lastName, email, and mobile",
@@ -1183,24 +1191,32 @@ exports.submitCandidate = async (req, res) => {
       job: job._id,
       company: job.company,
       firstName,
+       middleName: middleName || '',
       lastName,
       email: email.toLowerCase(),
       mobile,
+        location: location || '',
+  totalExperience: totalExperience || 0,
+  relevantExperience: relevantExperience || 0,
+  noticePeriod: noticePeriod || '',
+  currentSalary: currentSalary || 0,
+  expectedSalary: expectedSalary || 0,
+  writeup: writeup || '',
       consent: {
         given: consent,
+        consentStatus: 'PENDING',
         givenAt: new Date(),
         ipAddress: req.ip,
       },
-      profile: profile || {},
-      status: "SUBMITTED",
+      status: "CONSENT_SENT",
       statusHistory: [
         {
-          status: "SUBMITTED",
+          status: "CONSENT_SENT",
           changedBy: req.user._id,
           notes:
             duplicateCheck.warnings.length > 0
               ? `Submitted with ${duplicateCheck.warnings.length} warning(s)`
-              : "Initial submission",
+              : "Awaiting candidate consent",
         },
       ],
     });
@@ -1233,15 +1249,16 @@ exports.submitCandidate = async (req, res) => {
         // Save token to candidate
         await Candidate.findByIdAndUpdate(candidate._id, {
           'consent.consentToken': consentToken,
-          'consent.consentStatus': 'PENDING_CONFIRMATION'
+          'consent.consentStatus': 'PENDING_CONFIRMATION',
+          'consent.consentExpiry': consentExpiry
         });
 
-        const confirmUrl = `${process.env.FRONTEND_URL}/consent/confirm?token=${consentToken}`;
-        const denyUrl = `${process.env.FRONTEND_URL}/consent/deny?token=${consentToken}`;
+        const confirmUrl = `${process.env.FRONTEND_URL}/consent/candidate/agree/${consentToken}`;
+        const denyUrl = `${process.env.FRONTEND_URL}/consent/candidate/disagree/${consentToken}`;
 
         await emailService.sendEmail({
           to: email.toLowerCase(),
-          subject: `Your profile has been submitted for ${job.title} — Action Required`,
+          subject: `Action Required: Consent for ${job.title} Submission`,
           html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px 10px 0 0;">
@@ -1276,6 +1293,19 @@ exports.submitCandidate = async (req, res) => {
       `
         });
 
+        try {
+          await whatsappService.sendConsent(
+            mobile,
+            firstName,
+            job.title,
+            partner.firmName,
+            consentToken
+          );
+          console.log(`[CONSENT] ✅ WhatsApp consent sent to: ${mobile}`);
+        } catch (waError) {
+          console.error('[CONSENT] WhatsApp failed:', waError.message);
+        }
+
         console.log(`[CONSENT] ✅ Consent email sent to: ${email}`);
       } catch (err) {
         console.error('[CONSENT] Failed:', err.message);
@@ -1283,10 +1313,6 @@ exports.submitCandidate = async (req, res) => {
     };
 
     sendCandidateConsent();
-
-    // fire-and-forget
-    sendCandidateConsent();
-
 
     const company = await Company.findById(job.company).populate("user", "_id");
 
@@ -1304,8 +1330,8 @@ exports.submitCandidate = async (req, res) => {
             partnerName: `${partner.firstName} ${partner.lastName}`,
             firmName: partner.firmName,
             candidateName: `${firstName} ${lastName}`,
-            candidateExperience: profile?.totalExperience,
-            candidateLocation: profile?.currentLocation,
+            candidateExperience: totalExperience,
+            candidateLocation: location,
           },
         },
         channels: {

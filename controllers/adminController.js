@@ -1848,6 +1848,103 @@ exports.getJobDetail = async (req, res) => {
   }
 };
 
+// @desc    Admin: Get Candidates for Review
+// @route   GET /api/admin/jobs/:jobId/candidates
+exports.getCandidatesForReview = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    // Only Admins should access this (Ensure Middleware)
+    
+    const candidates = await Candidate.find({ job: jobId })
+      .populate('submittedBy', 'firmName')
+      .select('firstName lastName email mobile status consent.consentStatus resume totalExperience location')
+      .sort({ createdAt: -1 });
+
+    res.json({ success: true, count: candidates.length, data: candidates });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// @desc    Admin: Select Candidates & Share with Client
+// @route   POST /api/admin/candidates/forward-to-client
+exports.forwardCandidatesToClient = async (req, res) => {
+  try {
+    const { candidateIds } = req.body; // Array of IDs
+
+    if (!candidateIds || !Array.isArray(candidateIds) || candidateIds.length === 0) {
+      return res.status(400).json({ success: false, message: "Please select at least one candidate" });
+    }
+
+    const candidates = await Candidate.find({ _id: { $in: candidateIds } }).populate('job company');
+
+    const validCandidates = [];
+    const errors = [];
+
+    for (const candidate of candidates) {
+      // CONSTRAINT: Resume must be uploaded before sharing with client
+      if (!candidate.resume || !candidate.resume.url) {
+        errors.push({
+          id: candidate._id,
+          name: `${candidate.firstName} ${candidate.lastName}`,
+          reason: "Resume not uploaded. Cannot share with client."
+        });
+        continue;
+      }
+
+      // CONSTRAINT: Consent must be Agreed
+      if (candidate.status !== 'SUBMITTED') {
+        errors.push({
+          id: candidate._id,
+          name: `${candidate.firstName} ${candidate.lastName}`,
+          reason: `Invalid status: ${candidate.status}. Only agreed candidates can be shared.`
+        });
+        continue;
+      }
+
+      validCandidates.push(candidate);
+    }
+
+    if (validCandidates.length === 0) {
+      return res.status(400).json({ success: false, message: "No candidates eligible for forwarding", errors });
+    }
+
+    // Update Status & Notify Client
+    const updatePromises = validCandidates.map(async (cand) => {
+      cand.status = 'FORWARDED_TO_CLIENT';
+      cand.statusHistory.push({
+        status: 'FORWARDED_TO_CLIENT',
+        changedBy: req.user._id, // Admin ID
+        notes: 'Selected by Admin for Client Review'
+      });
+      await cand.save();
+
+      // Notify Company/Client
+      if (cand.company) {
+        await notificationEngine.send({
+          recipientId: cand.company.user, // Assuming company has user ref
+          type: "NEW_CANDIDATE_FROM_ADMIN",
+          title: `Shortlisted Candidate: ${cand.firstName} ${cand.lastName}`,
+          message: `Admin has forwarded a candidate for ${cand.job.title}. Resume attached.`,
+          data: { entityId: cand._id, actionUrl: `/company/jobs/${cand.job._id}/candidates` },
+          channels: { inApp: true, email: true }
+        });
+      }
+    });
+
+    await Promise.all(updatePromises);
+
+    res.json({
+      success: true,
+      message: `${validCandidates.length} candidates forwarded to client successfully.`,
+      data: { forwarded: validCandidates.length, failed: errors }
+    });
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // @desc    Get all candidates (admin registry)
 // @route   GET /api/admin/candidates
 exports.getAllCandidates = async (req, res) => {
