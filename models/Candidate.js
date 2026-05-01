@@ -25,6 +25,11 @@ const candidateSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  middleName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   lastName: {
     type: String,
     required: true,
@@ -33,13 +38,14 @@ const candidateSchema = new mongoose.Schema({
   email: {
     type: String,
     required: true,
-    lowercase: true
+    lowercase: true,
+    trim: true
   },
   mobile: {
     type: String,
-    required: true
+    required: true,
+    trim: true
   },
-
   consent: {
     given: {
       type: Boolean,
@@ -73,15 +79,32 @@ const candidateSchema = new mongoose.Schema({
 
   // Profile
   profile: {
+    // ✅ NEW FIELDS from submission form
+    middleName: String,
+    location: String,               // current location / city
+    totalExperience: Number,        // total years of experience
+    relevantExperience: Number,     // relevant years of experience
+    noticePeriod: {
+      type: String,
+      enum: [
+        'Immediate',
+        '15 days',
+        '30 days',
+        '45 days',
+        '60 days',
+        '90 days',
+        'More than 90 days'
+      ]
+    },
+    currentSalary: Number,          // in INR per annum
+    expectedSalary: Number,         // in INR per annum
+    writeup: String,                // small writeup / summary by partner
+
+    // ✅ EXISTING FIELDS (kept)
     currentCompany: String,
     currentDesignation: String,
-    totalExperience: Number,
-    relevantExperience: Number,
-    currentLocation: String,
+    currentLocation: String,        // kept for backward compatibility
     preferredLocations: [String],
-    currentSalary: Number,
-    expectedSalary: Number,
-    noticePeriod: String,
     canRelocate: Boolean,
     education: [{
       degree: String,

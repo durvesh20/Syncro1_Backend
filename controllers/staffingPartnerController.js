@@ -1,38 +1,43 @@
 // backend/controllers/staffingPartnerController.js
-const StaffingPartner = require("../models/StaffingPartner");
-const User = require("../models/User");
-const Job = require("../models/Job");
-const Candidate = require("../models/Candidate");
-const Company = require("../models/Company");
-const duplicateDetection = require("../services/duplicateDetectionService");
-const notificationEngine = require("../services/notificationEngine");
-const jobAccessService = require("../services/jobAccessService");
-const candidateScoringService = require("../services/candidateScoringService");
+const StaffingPartner = require('../models/StaffingPartner');
+const User = require('../models/User');
+const Job = require('../models/Job');
+const Candidate = require('../models/Candidate');
+const Company = require('../models/Company');
+const duplicateDetection = require('../services/duplicateDetectionService');
+const notificationEngine = require('../services/notificationEngine');
+const jobAccessService = require('../services/jobAccessService');
+const candidateScoringService = require('../services/candidateScoringService');
 const JobInterest = require('../models/JobInterest');
+
+// ============================================================
+// PROFILE ROUTES
+// ============================================================
+
 // @desc    Get Staffing Partner Profile
 // @route   GET /api/staffing-partners/profile
 exports.getProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({
-      user: req.user._id,
-    }).populate("user", "email mobile status");
+      user: req.user._id
+    }).populate('user', 'email mobile status');
 
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
     res.json({
       success: true,
-      data: partner,
+      data: partner
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to fetch profile",
-      error: error.message,
+      message: 'Failed to fetch profile',
+      error: error.message
     });
   }
 };
@@ -46,7 +51,7 @@ exports.updateBasicInfo = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
@@ -57,7 +62,7 @@ exports.updateBasicInfo = async (req, res) => {
       designation,
       linkedinProfile,
       city,
-      state,
+      state
     } = req.body;
 
     if (firstName) partner.firstName = firstName;
@@ -73,14 +78,14 @@ exports.updateBasicInfo = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Basic info updated",
-      data: partner,
+      message: 'Basic info updated',
+      data: partner
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Update failed",
-      error: error.message,
+      message: 'Update failed',
+      error: error.message
     });
   }
 };
@@ -94,7 +99,7 @@ exports.updateFirmDetails = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
@@ -110,14 +115,14 @@ exports.updateFirmDetails = async (req, res) => {
       gstNumber,
       cinNumber,
       llpinNumber,
-      employeeCount,
+      employeeCount
     } = req.body;
 
     let finalOperatingAddress = operatingAddress;
     if (operatingAddress?.sameAsRegistered && registeredOfficeAddress) {
       finalOperatingAddress = {
         ...registeredOfficeAddress,
-        sameAsRegistered: true,
+        sameAsRegistered: true
       };
     }
 
@@ -134,7 +139,7 @@ exports.updateFirmDetails = async (req, res) => {
       gstNumber,
       cinNumber,
       llpinNumber,
-      employeeCount,
+      employeeCount
     };
 
     partner.profileCompletion.firmDetails = true;
@@ -142,14 +147,14 @@ exports.updateFirmDetails = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Firm details updated",
-      data: partner.firmDetails,
+      message: 'Firm details updated',
+      data: partner.firmDetails
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Update failed",
-      error: error.message,
+      message: 'Update failed',
+      error: error.message
     });
   }
 };
@@ -163,7 +168,7 @@ exports.updateSyncro1Competency = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
@@ -173,14 +178,14 @@ exports.updateSyncro1Competency = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Syncro1 competency updated",
-      data: partner.Syncro1Competency,
+      message: 'Syncro1 competency updated',
+      data: partner.Syncro1Competency
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Update failed",
-      error: error.message,
+      message: 'Update failed',
+      error: error.message
     });
   }
 };
@@ -194,7 +199,7 @@ exports.updateGeographicReach = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
@@ -204,14 +209,14 @@ exports.updateGeographicReach = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Geographic reach updated",
-      data: partner.geographicReach,
+      message: 'Geographic reach updated',
+      data: partner.geographicReach
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Update failed",
-      error: error.message,
+      message: 'Update failed',
+      error: error.message
     });
   }
 };
@@ -225,52 +230,50 @@ exports.updateCompliance = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
     const { syncrotechAgreement, digitalSignature } = req.body;
 
     const ipAddress =
-      req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress;
+      req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
     const timestamp = new Date();
 
     const requiredClauses = [
-      "noCvRecycling",
-      "noFakeProfiles",
-      "noDoubleRepresentation",
-      "vendorCodeOfConduct",
-      "dataPrivacyPolicy",
-      "candidateConsentPolicy",
-      "nonCircumventionClause",
-      "commissionPayoutTerms",
-      "replacementBackoutLiability",
+      'noCvRecycling',
+      'noFakeProfiles',
+      'noDoubleRepresentation',
+      'vendorCodeOfConduct',
+      'dataPrivacyPolicy',
+      'candidateConsentPolicy',
+      'nonCircumventionClause',
+      'commissionPayoutTerms',
+      'replacementBackoutLiability'
     ];
 
     const allAccepted = requiredClauses.every(
-      (clause) => syncrotechAgreement && syncrotechAgreement[clause] === true,
+      clause => syncrotechAgreement && syncrotechAgreement[clause] === true
     );
 
     if (!allAccepted) {
       return res.status(400).json({
         success: false,
-        message: "All compliance clauses must be accepted",
+        message: 'All compliance clauses must be accepted',
         data: {
           required: requiredClauses,
-          received: syncrotechAgreement,
-        },
+          received: syncrotechAgreement
+        }
       });
     }
 
-    const complianceData = {
-      syncrotechAgreement: {},
-    };
+    const complianceData = { syncrotechAgreement: {} };
 
-    requiredClauses.forEach((clause) => {
+    requiredClauses.forEach(clause => {
       complianceData.syncrotechAgreement[clause] = {
         accepted: true,
         acceptedAt: timestamp,
-        acceptedIp: ipAddress,
+        acceptedIp: ipAddress
       };
     });
 
@@ -289,14 +292,14 @@ exports.updateCompliance = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Compliance updated successfully",
-      data: partner.compliance,
+      message: 'Compliance updated successfully',
+      data: partner.compliance
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Update failed",
-      error: error.message,
+      message: 'Update failed',
+      error: error.message
     });
   }
 };
@@ -310,7 +313,7 @@ exports.updateCommercialDetails = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
@@ -321,7 +324,7 @@ exports.updateCommercialDetails = async (req, res) => {
       bankAccountHolderName,
       bankName,
       accountNumber,
-      ifscCode,
+      ifscCode
     } = req.body;
 
     partner.commercialDetails = {
@@ -332,7 +335,7 @@ exports.updateCommercialDetails = async (req, res) => {
       bankAccountHolderName,
       bankName,
       accountNumber,
-      ifscCode,
+      ifscCode
     };
 
     partner.profileCompletion.commercialDetails = true;
@@ -340,14 +343,14 @@ exports.updateCommercialDetails = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Commercial details updated successfully",
-      data: partner.commercialDetails,
+      message: 'Commercial details updated successfully',
+      data: partner.commercialDetails
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Update failed",
-      error: error.message,
+      message: 'Update failed',
+      error: error.message
     });
   }
 };
@@ -361,14 +364,14 @@ exports.updateTeamAccess = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
-    if (partner.verificationStatus !== "APPROVED") {
+    if (partner.verificationStatus !== 'APPROVED') {
       return res.status(403).json({
         success: false,
-        message: "Partner must be verified to manage team members",
+        message: 'Partner must be verified to manage team members'
       });
     }
 
@@ -379,14 +382,14 @@ exports.updateTeamAccess = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Team access updated",
-      data: partner.teamAccess,
+      message: 'Team access updated',
+      data: partner.teamAccess
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Update failed",
-      error: error.message,
+      message: 'Update failed',
+      error: error.message
     });
   }
 };
@@ -400,14 +403,14 @@ exports.addTeamMember = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
-    if (partner.verificationStatus !== "APPROVED") {
+    if (partner.verificationStatus !== 'APPROVED') {
       return res.status(403).json({
         success: false,
-        message: "Partner must be verified to add team members",
+        message: 'Partner must be verified to add team members'
       });
     }
 
@@ -416,18 +419,18 @@ exports.addTeamMember = async (req, res) => {
     if (!name || !email) {
       return res.status(400).json({
         success: false,
-        message: "Name and email are required",
+        message: 'Name and email are required'
       });
     }
 
     const existingMember = partner.teamAccess.teamMembers.find(
-      (m) => m.email === email,
+      m => m.email === email
     );
 
     if (existingMember) {
       return res.status(400).json({
         success: false,
-        message: "Team member with this email already exists",
+        message: 'Team member with this email already exists'
       });
     }
 
@@ -436,29 +439,29 @@ exports.addTeamMember = async (req, res) => {
       name,
       email,
       mobile,
-      role: role || "Recruiter",
+      role: role || 'Recruiter',
       permissions: permissions || {
         canViewJobs: true,
         canSubmitCandidates: true,
         canViewEarnings: false,
-        canManageTeam: false,
+        canManageTeam: false
       },
       addedAt: new Date(),
-      isActive: true,
+      isActive: true
     });
 
     await partner.save();
 
     res.json({
       success: true,
-      message: "Team member added successfully",
-      data: partner.teamAccess,
+      message: 'Team member added successfully',
+      data: partner.teamAccess
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to add team member",
-      error: error.message,
+      message: 'Failed to add team member',
+      error: error.message
     });
   }
 };
@@ -472,14 +475,14 @@ exports.updateTeamMember = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
-    if (partner.verificationStatus !== "APPROVED") {
+    if (partner.verificationStatus !== 'APPROVED') {
       return res.status(403).json({
         success: false,
-        message: "Partner must be verified to update team members",
+        message: 'Partner must be verified to update team members'
       });
     }
 
@@ -487,25 +490,25 @@ exports.updateTeamMember = async (req, res) => {
     const { name, email, mobile, role, permissions, isActive } = req.body;
 
     const memberIndex = partner.teamAccess.teamMembers.findIndex(
-      (m) => m._id.toString() === memberId,
+      m => m._id.toString() === memberId
     );
 
     if (memberIndex === -1) {
       return res.status(404).json({
         success: false,
-        message: "Team member not found",
+        message: 'Team member not found'
       });
     }
 
     if (email) {
       const existingMember = partner.teamAccess.teamMembers.find(
-        (m) => m.email === email && m._id.toString() !== memberId,
+        m => m.email === email && m._id.toString() !== memberId
       );
 
       if (existingMember) {
         return res.status(400).json({
           success: false,
-          message: "Another team member with this email already exists",
+          message: 'Another team member with this email already exists'
         });
       }
     }
@@ -514,23 +517,23 @@ exports.updateTeamMember = async (req, res) => {
     if (email) partner.teamAccess.teamMembers[memberIndex].email = email;
     if (mobile) partner.teamAccess.teamMembers[memberIndex].mobile = mobile;
     if (role) partner.teamAccess.teamMembers[memberIndex].role = role;
-    if (permissions)
-      partner.teamAccess.teamMembers[memberIndex].permissions = permissions;
-    if (typeof isActive === "boolean")
+    if (permissions) partner.teamAccess.teamMembers[memberIndex].permissions = permissions;
+    if (typeof isActive === 'boolean') {
       partner.teamAccess.teamMembers[memberIndex].isActive = isActive;
+    }
 
     await partner.save();
 
     res.json({
       success: true,
-      message: "Team member updated successfully",
-      data: partner.teamAccess,
+      message: 'Team member updated successfully',
+      data: partner.teamAccess
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to update team member",
-      error: error.message,
+      message: 'Failed to update team member',
+      error: error.message
     });
   }
 };
@@ -544,32 +547,32 @@ exports.removeTeamMember = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
-    if (partner.verificationStatus !== "APPROVED") {
+    if (partner.verificationStatus !== 'APPROVED') {
       return res.status(403).json({
         success: false,
-        message: "Partner must be verified to remove team members",
+        message: 'Partner must be verified to remove team members'
       });
     }
 
     const { memberId } = req.params;
 
     const memberExists = partner.teamAccess.teamMembers.some(
-      (m) => m._id.toString() === memberId,
+      m => m._id.toString() === memberId
     );
 
     if (!memberExists) {
       return res.status(404).json({
         success: false,
-        message: "Team member not found",
+        message: 'Team member not found'
       });
     }
 
     partner.teamAccess.teamMembers = partner.teamAccess.teamMembers.filter(
-      (m) => m._id.toString() !== memberId,
+      m => m._id.toString() !== memberId
     );
 
     if (partner.teamAccess.teamMembers.length === 0) {
@@ -580,14 +583,14 @@ exports.removeTeamMember = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Team member removed successfully",
-      data: partner.teamAccess,
+      message: 'Team member removed successfully',
+      data: partner.teamAccess
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to remove team member",
-      error: error.message,
+      message: 'Failed to remove team member',
+      error: error.message
     });
   }
 };
@@ -601,7 +604,7 @@ exports.getTeamMembers = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
@@ -611,45 +614,14 @@ exports.getTeamMembers = async (req, res) => {
         isTeamEnabled: partner.teamAccess.isTeamEnabled,
         teamMembers: partner.teamAccess.teamMembers,
         totalMembers: partner.teamAccess.teamMembers.length,
-        activeMembers: partner.teamAccess.teamMembers.filter((m) => m.isActive)
-          .length,
-      },
+        activeMembers: partner.teamAccess.teamMembers.filter(m => m.isActive).length
+      }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to fetch team members",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Upload Documents
-// @route   PUT /api/staffing-partners/profile/documents
-exports.uploadDocuments = async (req, res) => {
-  try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
-
-    if (!partner) {
-      return res.status(404).json({
-        success: false,
-        message: "Profile not found",
-      });
-    }
-
-    partner.documents = { ...partner.documents, ...req.body };
-    await partner.save();
-
-    res.json({
-      success: true,
-      message: "Documents uploaded",
-      data: partner.documents,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Upload failed",
-      error: error.message,
+      message: 'Failed to fetch team members',
+      error: error.message
     });
   }
 };
@@ -663,7 +635,7 @@ exports.getProfileCompletion = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
@@ -684,18 +656,17 @@ exports.getProfileCompletion = async (req, res) => {
           completion.firmDetails &&
           completion.Syncro1Competency &&
           completion.geographicReach &&
-          completion.compliance,
-      },
+          completion.compliance
+      }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to fetch completion status",
-      error: error.message,
+      message: 'Failed to fetch completion status',
+      error: error.message
     });
   }
 };
-
 
 // @desc    Submit Profile for Verification
 // @route   POST /api/staffing-partners/profile/submit
@@ -710,7 +681,6 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // ✅ FIXED: Added 'VERIFIED' to blocked statuses
     if (['VERIFIED', 'UNDER_REVIEW', 'APPROVED'].includes(partner.verificationStatus)) {
       return res.status(400).json({
         success: false,
@@ -718,7 +688,6 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // Check all required sections
     const required = [
       'basicInfo',
       'firmDetails',
@@ -742,7 +711,6 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // Bank check
     if (!partner.commercialDetails?.accountNumber) {
       return res.status(400).json({
         success: false,
@@ -750,7 +718,6 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // Documents check
     const requiredDocs = ['panCard', 'gstCertificate'];
     const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
 
@@ -763,7 +730,6 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // Agreement check
     if (!partner.agreement?.agreed) {
       return res.status(400).json({
         success: false,
@@ -778,17 +744,15 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    // Update status
     partner.verificationStatus = 'UNDER_REVIEW';
     partner.submittedAt = new Date();
     await partner.save();
 
-    // Update user
     const user = await User.findById(req.user._id);
     user.status = 'UNDER_VERIFICATION';
     await user.save();
 
-    // fire-and-forget email
+    // Send agreement copy email (fire and forget)
     const sendAgreementEmail = async () => {
       try {
         const emailService = require('../services/emailService');
@@ -804,7 +768,8 @@ exports.submitProfile = async (req, res) => {
               </div>
               <div style="padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb;">
                 <p>Dear ${partner.firstName} ${partner.lastName},</p>
-                <p>Thank you for accepting the Master Staffing Partner Agreement and submitting your profile for verification.</p>
+                <p>Thank you for accepting the Master Staffing Partner Agreement
+                   and submitting your profile for verification.</p>
                 <div style="text-align: center; margin: 30px 0;">
                   <a href="${partner.agreement.pdfUrl}"
                      style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -857,6 +822,9 @@ exports.submitProfile = async (req, res) => {
   }
 };
 
+// ============================================================
+// JOBS ROUTES
+// ============================================================
 
 // @desc    Get Available Jobs
 // @route   GET /api/staffing-partners/jobs
@@ -867,11 +835,11 @@ exports.getAvailableJobs = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
-    const partnerPlan = partner.subscription?.plan || "FREE";
+    const partnerPlan = partner.subscription?.plan || 'FREE';
 
     const result = await jobAccessService.getAccessibleJobs(
       partner._id,
@@ -887,15 +855,15 @@ exports.getAvailableJobs = async (req, res) => {
         salaryMax: req.query.salaryMax,
         search: req.query.search,
         sortBy: req.query.sortBy,
-        isUrgent: req.query.urgentOnly,
-      },
+        isUrgent: req.query.urgentOnly
+      }
     );
 
     if (result.jobs.length === 0) {
-      const totalActiveJobs = await Job.countDocuments({ status: "ACTIVE" });
+      const totalActiveJobs = await Job.countDocuments({ status: 'ACTIVE' });
       const jobsForPlan = await Job.countDocuments({
-        status: "ACTIVE",
-        eligiblePlans: { $in: result.partnerAccess.accessiblePlans },
+        status: 'ACTIVE',
+        eligiblePlans: { $in: result.partnerAccess.accessiblePlans }
       });
 
       return res.json({
@@ -908,57 +876,56 @@ exports.getAvailableJobs = async (req, res) => {
             yourPlan: partnerPlan,
             plansYouCanAccess: result.partnerAccess.accessiblePlans,
             filtersApplied: Object.keys(req.query).filter(
-              (k) => !["page", "limit"].includes(k) && req.query[k],
+              k => !['page', 'limit'].includes(k) && req.query[k]
             ),
             suggestion:
               totalActiveJobs > 0 && jobsForPlan === 0
-                ? `There are ${totalActiveJobs} active jobs, but none are available for the ${partnerPlan} plan. Consider upgrading your plan.`
+                ? `There are ${totalActiveJobs} active jobs, but none are available for the ${partnerPlan} plan.`
                 : jobsForPlan > 0
-                  ? "Jobs exist for your plan but your filters are too restrictive. Try removing some filters."
-                  : "No active jobs on the platform at the moment. Check back later.",
-          },
-        },
+                  ? 'Jobs exist for your plan but filters are too restrictive. Try removing some filters.'
+                  : 'No active jobs on the platform at the moment. Check back later.'
+          }
+        }
       });
     }
 
     res.json({
       success: true,
-      data: result,
+      data: result
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to fetch jobs",
-      error: error.message,
+      message: 'Failed to fetch jobs',
+      error: error.message
     });
   }
 };
 
-// @desc    Get Job Details with Shareable Link
+// @desc    Get Job Details
 // @route   GET /api/staffing-partners/jobs/:id
 exports.getJobDetails = async (req, res) => {
   try {
-    const job = await Job.findById(req.params.id)
-      .populate(
-        'company',
-        [
-          'companyName',
-          'kyc.logo',
-          'kyc.industry',
-          'kyc.companyType',
-          'kyc.yearEstablished',
-          'kyc.employeeCount',
-          'kyc.description',
-          'kyc.website',
-          'city',
-          'state',
-          'hiringPreferences.workModePreference',
-          'hiringPreferences.typicalCtcBand',
-          'hiringPreferences.avgMonthlyHiringVolume',
-          'metrics.totalHires',
-          'metrics.totalJobsPosted'
-        ].join(' ')
-      );
+    const job = await Job.findById(req.params.id).populate(
+      'company',
+      [
+        'companyName',
+        'kyc.logo',
+        'kyc.industry',
+        'kyc.companyType',
+        'kyc.yearEstablished',
+        'kyc.employeeCount',
+        'kyc.description',
+        'kyc.website',
+        'city',
+        'state',
+        'hiringPreferences.workModePreference',
+        'hiringPreferences.typicalCtcBand',
+        'hiringPreferences.avgMonthlyHiringVolume',
+        'metrics.totalHires',
+        'metrics.totalJobsPosted'
+      ].join(' ')
+    );
 
     if (!job) {
       return res.status(404).json({
@@ -970,41 +937,38 @@ exports.getJobDetails = async (req, res) => {
     job.metrics.views += 1;
     await job.save();
 
-    // Build safe company profile for vendor
     const company = job.company;
-    const safeCompanyInfo = company ? {
-      companyName: company.companyName,
-      logo: company.kyc?.logo || null,
-      industry: company.kyc?.industry || null,
-      companyType: company.kyc?.companyType || null,
-      yearEstablished: company.kyc?.yearEstablished || null,
-      employeeCount: company.kyc?.employeeCount || null,
-      description: company.kyc?.description || null,
-      website: company.kyc?.website || null,
-      location: {
-        city: company.city || null,
-        state: company.state || null
-      },
-      workMode: company.hiringPreferences?.workModePreference || null,
-      typicalCtcBand: company.hiringPreferences?.typicalCtcBand || null,
-      hiringVolume: company.hiringPreferences?.avgMonthlyHiringVolume || null,
-      platformStats: {
-        totalHires: company.metrics?.totalHires || 0,
-        totalJobsPosted: company.metrics?.totalJobsPosted || 0
+    const safeCompanyInfo = company
+      ? {
+        companyName: company.companyName,
+        logo: company.kyc?.logo || null,
+        industry: company.kyc?.industry || null,
+        companyType: company.kyc?.companyType || null,
+        yearEstablished: company.kyc?.yearEstablished || null,
+        employeeCount: company.kyc?.employeeCount || null,
+        description: company.kyc?.description || null,
+        website: company.kyc?.website || null,
+        location: {
+          city: company.city || null,
+          state: company.state || null
+        },
+        workMode: company.hiringPreferences?.workModePreference || null,
+        typicalCtcBand: company.hiringPreferences?.typicalCtcBand || null,
+        hiringVolume: company.hiringPreferences?.avgMonthlyHiringVolume || null,
+        platformStats: {
+          totalHires: company.metrics?.totalHires || 0,
+          totalJobsPosted: company.metrics?.totalJobsPosted || 0
+        }
       }
-    } : null;
+      : null;
 
-    // Build clean job response
     const jobData = job.toObject();
-    delete jobData.company; // remove full company object
+    delete jobData.company;
 
     res.json({
       success: true,
       data: {
-        job: {
-          ...jobData,
-          company: safeCompanyInfo // replace with safe version
-        },
+        job: { ...jobData, company: safeCompanyInfo },
         shareableLink: job.shareableLink
       }
     });
@@ -1016,8 +980,27 @@ exports.getJobDetails = async (req, res) => {
     });
   }
 };
-// @desc    Submit Candidate for a Job (NEW FLOW)
+
+// ============================================================
+// CANDIDATE SUBMISSION
+// ============================================================
+
+// @desc    Submit candidate WITH resume — single multipart/form-data request
 // @route   POST /api/staffing-partners/jobs/:jobId/candidates
+//
+// Request:  multipart/form-data
+// Required fields:
+//   firstName, lastName, email, mobile, location,
+//   totalExperience, relevantExperience, noticePeriod,
+//   currentSalary, expectedSalary
+//   resume  ← file (PDF / DOC / DOCX, max 10MB)
+// Optional fields:
+//   middleName, writeup, profile (JSON), forceSubmit
+//
+// Flow:
+//   multer uploads file → Cloudinary
+//   req.file.path = Cloudinary URL
+//   req.file.originalname = original filename
 exports.submitCandidate = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -1044,7 +1027,7 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // ✅ STEP 1: Check partner has shown interest
+    // ✅ STEP 1: Check partner has shown interest in this job
     const interest = await JobInterest.findOne({
       partner: partner._id,
       job: job._id,
@@ -1087,37 +1070,175 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
+    // ✅ STEP 4: Extract form fields
+    // NOTE: Request is multipart/form-data — text fields come from req.body
+    //       Resume file comes from req.file (processed by multer middleware)
     const {
       firstName,
+      middleName,
       lastName,
       email,
       mobile,
+      location,
+      totalExperience,
+      relevantExperience,
+      noticePeriod,
+      currentSalary,
+      expectedSalary,
+      writeup,
       profile,
-      resumeUrl,
-      resumeFileName,
       forceSubmit
     } = req.body;
 
-    // ✅ STEP 4: Validate required fields
-    if (!firstName || !lastName || !email || !mobile) {
+    // Resume comes from multer (uploaded to Cloudinary before this runs)
+    const resumeFile = req.file;
+    const resumeUrl = resumeFile?.path || null;           // Cloudinary URL
+    const resumeFileName = resumeFile?.originalname || null;
+
+    // ✅ STEP 5: Validate required text fields
+    const missingFields = [];
+    if (!firstName) missingFields.push('firstName');
+    if (!lastName) missingFields.push('lastName');
+    if (!email) missingFields.push('email');
+    if (!mobile) missingFields.push('mobile');
+    if (!location) missingFields.push('location');
+    if (totalExperience === undefined || totalExperience === null) {
+      missingFields.push('totalExperience');
+    }
+    if (relevantExperience === undefined || relevantExperience === null) {
+      missingFields.push('relevantExperience');
+    }
+    if (!noticePeriod) missingFields.push('noticePeriod');
+    if (!currentSalary) missingFields.push('currentSalary');
+    if (!expectedSalary) missingFields.push('expectedSalary');
+
+    if (missingFields.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'firstName, lastName, email and mobile are required'
+        message: 'Please fill all required fields',
+        missingFields
       });
     }
 
-    if (!resumeUrl) {
+    // ✅ STEP 6: Validate resume file (uploaded via multer)
+    if (!resumeFile || !resumeUrl) {
       return res.status(400).json({
         success: false,
-        message: 'Resume is required. Please upload resume first.',
-        hint: 'Use POST /api/staffing-partners/candidates/:id/resume to upload'
+        message: 'Resume is required. Please attach a PDF, DOC or DOCX file.',
+        hint: 'Send request as multipart/form-data with field name "resume"'
       });
     }
 
-    const normalizedEmail = email.toLowerCase().trim();
+    // Validate file type via mimetype
+    const allowedMimes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+
+    if (!allowedMimes.includes(resumeFile.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid file type. Only PDF, DOC and DOCX are allowed.',
+        receivedType: resumeFile.mimetype
+      });
+    }
+
+    // Validate file size (max 10MB)
+    const maxSize = 10 * 1024 * 1024;
+    if (resumeFile.size > maxSize) {
+      return res.status(400).json({
+        success: false,
+        message: 'File too large. Maximum size is 10MB.',
+        receivedSize: `${(resumeFile.size / (1024 * 1024)).toFixed(2)} MB`
+      });
+    }
+
+    // ✅ STEP 7: Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format'
+      });
+    }
+
+    // ✅ STEP 8: Validate and normalize mobile (keep last 10 digits)
     const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+    if (normalizedMobile.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid mobile number. Must be 10 digits.'
+      });
+    }
 
-    // ✅ STEP 5: Duplicate check
+    // ✅ STEP 9: Validate experience values
+    if (isNaN(totalExperience) || Number(totalExperience) < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Total experience must be a valid number (years)'
+      });
+    }
+
+    if (isNaN(relevantExperience) || Number(relevantExperience) < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Relevant experience must be a valid number (years)'
+      });
+    }
+
+    if (Number(relevantExperience) > Number(totalExperience)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Relevant experience cannot be greater than total experience'
+      });
+    }
+
+    // ✅ STEP 10: Validate salary
+    if (isNaN(currentSalary) || Number(currentSalary) < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current salary must be a valid number'
+      });
+    }
+
+    if (isNaN(expectedSalary) || Number(expectedSalary) < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Expected salary must be a valid number'
+      });
+    }
+
+    // ✅ STEP 11: Validate notice period
+    const validNoticePeriods = [
+      'Immediate',
+      '15 days',
+      '30 days',
+      '45 days',
+      '60 days',
+      '90 days',
+      'More than 90 days'
+    ];
+
+    if (!validNoticePeriods.includes(noticePeriod)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid notice period. Must be one of: ${validNoticePeriods.join(', ')}`
+      });
+    }
+
+    // ✅ STEP 12: Validate writeup length if provided
+    if (writeup && writeup.trim().length > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Writeup cannot exceed 1000 characters'
+      });
+    }
+
+    // Normalize email
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // ✅ STEP 13: Duplicate check
     const duplicateCheck = await duplicateDetection.checkBeforeSubmission(
       { email: normalizedEmail, mobile: normalizedMobile },
       job._id,
@@ -1135,7 +1256,7 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // High severity warnings block unless forceSubmit
+    // High severity warnings block unless forceSubmit is true
     const highWarnings = duplicateCheck.warnings.filter(w => w.severity === 'high');
     if (highWarnings.length > 0 && !forceSubmit) {
       return res.status(200).json({
@@ -1146,28 +1267,60 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // ✅ STEP 6: Generate WhatsApp consent token
+    // ✅ STEP 14: Generate WhatsApp consent token (valid 48 hours)
     const crypto = require('crypto');
     const consentToken = crypto.randomBytes(32).toString('hex');
-    const consentExpiry = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
+    const consentExpiry = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
-    // ✅ STEP 7: Create candidate in DRAFT status
+    // Parse profile JSON string if sent as string from form-data
+    let parsedProfile = {};
+    if (profile) {
+      try {
+        parsedProfile = typeof profile === 'string' ? JSON.parse(profile) : profile;
+      } catch {
+        parsedProfile = {};
+      }
+    }
+
+    // ✅ STEP 15: Create candidate in DRAFT status with resume from Cloudinary
     const candidate = await Candidate.create({
       submittedBy: partner._id,
       job: job._id,
       company: job.company,
-      firstName,
-      lastName,
+
+      firstName: firstName.trim(),
+      middleName: middleName?.trim() || '',
+      lastName: lastName.trim(),
       email: normalizedEmail,
       mobile: normalizedMobile,
 
+      // Resume URL comes from Cloudinary via multer
       resume: {
         url: resumeUrl,
-        fileName: resumeFileName || 'resume',
+        fileName: resumeFileName,
         uploadedAt: new Date()
       },
 
-      profile: profile || {},
+      // Build profile from individual form fields
+      profile: {
+        middleName: middleName?.trim() || '',
+        location: location.trim(),
+        currentLocation: location.trim(),
+        totalExperience: parseFloat(totalExperience),
+        relevantExperience: parseFloat(relevantExperience),
+        noticePeriod,
+        currentSalary: parseInt(currentSalary),
+        expectedSalary: parseInt(expectedSalary),
+        writeup: writeup?.trim() || '',
+        currentCompany: parsedProfile?.currentCompany || '',
+        currentDesignation: parsedProfile?.currentDesignation || '',
+        skills: parsedProfile?.skills || [],
+        education: parsedProfile?.education || [],
+        preferredLocations: parsedProfile?.preferredLocations || [],
+        canRelocate: parsedProfile?.canRelocate || false,
+        linkedinProfile: parsedProfile?.linkedinProfile || '',
+        portfolioUrl: parsedProfile?.portfolioUrl || ''
+      },
 
       consent: {
         given: false,
@@ -1191,80 +1344,71 @@ exports.submitCandidate = async (req, res) => {
       }]
     });
 
-    // ✅ STEP 8: Increment interest submission count
+    // ✅ STEP 16: Increment interest submission count
     await JobInterest.findByIdAndUpdate(interest._id, {
       $inc: { submissionCount: 1 }
     });
 
-    // ✅ STEP 9: Update job metrics
+    // ✅ STEP 17: Update job metrics
     await Job.findByIdAndUpdate(job._id, {
       $inc: { 'metrics.applications': 1 }
     });
 
-    // ✅ STEP 10: Update partner metrics
+    // ✅ STEP 18: Update partner metrics
     await StaffingPartner.findByIdAndUpdate(partner._id, {
       $inc: { 'metrics.totalSubmissions': 1 }
     });
 
-    // ✅ STEP 11: Send WhatsApp consent using approved template
+    // ✅ STEP 19: Send WhatsApp consent message (fire and forget)
+    // Uses approved template: candidate_consent
+    // Button URLs use consentToken as dynamic suffix
     const sendWhatsAppConsent = async () => {
       try {
         const whatsappService = require('../services/whatsappService');
-        const Company = require('../models/Company');
 
-        // Get company name for the template
-        const company = await Company.findById(job.company)
-          .select('companyName');
-
+        const company = await Company.findById(job.company).select('companyName');
         const companyName = company?.companyName || 'a leading company';
 
-        // ✅ Use approved template: candidate_consent
-        // Token in URL buttons will be: consentToken
         const result = await whatsappService.sendCandidateConsent(
           normalizedMobile,
-          firstName,               // {{1}} candidate name
-          job.title,               // {{2}} job role
-          companyName,             // {{3}} company name
-          consentToken             // dynamic URL suffix for both buttons
+          firstName.trim(),   // {{1}} candidate name
+          job.title,          // {{2}} job role
+          companyName,        // {{3}} company name
+          consentToken        // dynamic URL suffix for both buttons
         );
 
         if (result.success) {
-          // Update candidate status to CONSENT_PENDING
+          // Move candidate to CONSENT_PENDING after WhatsApp sent
           await Candidate.findByIdAndUpdate(candidate._id, {
             status: 'CONSENT_PENDING',
             $push: {
               statusHistory: {
                 status: 'CONSENT_PENDING',
                 changedAt: new Date(),
-                notes: `WhatsApp consent template sent to ${normalizedMobile}`
+                notes: `WhatsApp consent template sent to +91${normalizedMobile}`
               }
             }
           });
-
-          console.log(`[CONSENT] ✅ Template sent to: +${normalizedMobile}`);
+          console.log(`[CONSENT] ✅ Sent to +91${normalizedMobile}`);
         } else {
-          console.error(
-            `[CONSENT] ❌ Template failed: ${result.error}`
-          );
-          // Still keep candidate in DRAFT — admin can manually follow up
+          console.error(`[CONSENT] ❌ Failed: ${result.error}`);
+          // Candidate stays in DRAFT — admin can manually follow up
         }
-
       } catch (err) {
-        console.error('[CONSENT] WhatsApp consent failed:', err.message);
+        console.error('[CONSENT] WhatsApp error:', err.message);
       }
     };
 
     sendWhatsAppConsent();
 
-
-    // ✅ STEP 12: Notify partner
+    // ✅ STEP 20: Notify partner in-app (fire and forget)
     const notifyPartner = async () => {
       try {
         await notificationEngine.send({
           recipientId: req.user._id,
           type: 'SYSTEM_ANNOUNCEMENT',
           title: '✅ Candidate profile created',
-          message: `${firstName} ${lastName}'s profile has been created for "${job.title}". WhatsApp consent sent to candidate. Profile will be processed once consent is received.`,
+          message: `${firstName} ${lastName}'s profile has been created for "${job.title}". WhatsApp consent sent. Profile will be processed once candidate confirms.`,
           data: {
             entityType: 'Candidate',
             entityId: candidate._id,
@@ -1280,13 +1424,18 @@ exports.submitCandidate = async (req, res) => {
 
     notifyPartner();
 
+    // ✅ Success response
     res.status(201).json({
       success: true,
       message: 'Candidate profile created. WhatsApp consent request sent to candidate.',
       data: {
         candidateId: candidate._id,
-        candidateName: `${firstName} ${lastName}`,
+        candidateName: `${firstName.trim()} ${lastName.trim()}`,
         status: 'CONSENT_PENDING',
+        resume: {
+          fileName: resumeFileName,
+          uploadedAt: candidate.resume.uploadedAt
+        },
         whatsapp: {
           sentTo: normalizedMobile,
           expiresAt: consentExpiry
@@ -1306,11 +1455,25 @@ exports.submitCandidate = async (req, res) => {
   }
 };
 
-// @desc    Upload Resume for Candidate
-// @desc    Upload Resume for Candidate
+// ============================================================
+// RESUME UPDATE (after submission — separate route)
+// ============================================================
+
+// @desc    Update resume for an existing candidate
 // @route   POST /api/staffing-partners/candidates/:id/resume
+// @body    multipart/form-data — field name: "resume"
+// @note    Only the partner who submitted the candidate can update
 exports.uploadResume = async (req, res) => {
   try {
+    // Resume file must be attached (processed by multer before this runs)
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded. Please attach a PDF, DOC or DOCX file.',
+        hint: 'Send as multipart/form-data with field name "resume"'
+      });
+    }
+
     const partner = await StaffingPartner.findOne({ user: req.user._id });
 
     if (!partner) {
@@ -1320,9 +1483,10 @@ exports.uploadResume = async (req, res) => {
       });
     }
 
+    // Ownership check — partner can only update their own submissions
     const candidate = await Candidate.findOne({
       _id: req.params.id,
-      submittedBy: partner._id   // ✅ Ownership check
+      submittedBy: partner._id
     });
 
     if (!candidate) {
@@ -1332,16 +1496,20 @@ exports.uploadResume = async (req, res) => {
       });
     }
 
-    if (!req.file) {
-      return res.status(400).json({
+    // Cloudinary URL from multer
+    const resumeUrl = req.file.path;
+    const fileName = req.file.originalname;
+
+    if (!resumeUrl) {
+      return res.status(500).json({
         success: false,
-        message: 'Please upload a file'
+        message: 'File upload to Cloudinary failed. Please try again.'
       });
     }
 
     candidate.resume = {
-      url: req.file.path,
-      fileName: req.file.originalname,
+      url: resumeUrl,
+      fileName: fileName,
       uploadedAt: new Date()
     };
 
@@ -1349,18 +1517,27 @@ exports.uploadResume = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Resume uploaded successfully',
-      data: candidate.resume
+      message: 'Resume updated successfully',
+      data: {
+        url: resumeUrl,
+        fileName: fileName,
+        uploadedAt: candidate.resume.uploadedAt
+      }
     });
 
   } catch (error) {
+    console.error('[RESUME] Upload error:', error.message);
     res.status(500).json({
       success: false,
-      message: 'Upload failed',
+      message: 'Resume upload failed',
       error: error.message
     });
   }
 };
+
+// ============================================================
+// SUBMISSIONS
+// ============================================================
 
 // @desc    Get My Submissions
 // @route   GET /api/staffing-partners/submissions
@@ -1371,7 +1548,7 @@ exports.getMySubmissions = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Profile not found",
+        message: 'Profile not found'
       });
     }
 
@@ -1382,15 +1559,22 @@ exports.getMySubmissions = async (req, res) => {
     if (cursor) query._id = { $lt: cursor };
 
     const submissions = await Candidate.find(query)
-      .populate("job", "title company commission")
-      .populate("company", "companyName")
+      .populate('job', 'title company commission')
+      .populate('company', 'companyName')
       .sort({ _id: -1 })
-      .limit(parseInt(limit) + 1);
+      .limit(parseInt(limit) + 1)
+      .select(
+        'firstName middleName lastName email mobile status ' +
+        'profile.location profile.totalExperience profile.relevantExperience ' +
+        'profile.noticePeriod profile.currentSalary profile.expectedSalary ' +
+        'profile.writeup profile.currentCompany profile.currentDesignation ' +
+        'resume whatsappConsent.status resumeAnalysis.profileScore ' +
+        'resumeAnalysis.matchLevel createdAt job company'
+      );
 
     const hasMore = submissions.length > limit;
     const results = hasMore ? submissions.slice(0, limit) : submissions;
-    const nextCursor =
-      results.length > 0 ? results[results.length - 1]._id : null;
+    const nextCursor = results.length > 0 ? results[results.length - 1]._id : null;
 
     res.json({
       success: true,
@@ -1399,15 +1583,15 @@ exports.getMySubmissions = async (req, res) => {
         pagination: {
           nextCursor,
           hasMore,
-          limit: parseInt(limit),
-        },
-      },
+          limit: parseInt(limit)
+        }
+      }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to fetch submissions",
-      error: error.message,
+      message: 'Failed to fetch submissions',
+      error: error.message
     });
   }
 };
@@ -1420,30 +1604,140 @@ exports.getSubmission = async (req, res) => {
 
     const submission = await Candidate.findOne({
       _id: req.params.id,
-      submittedBy: partner._id,
+      submittedBy: partner._id
     })
-      .populate("job", "title company commission")
-      .populate("company", "companyName");
+      .populate('job', 'title company commission')
+      .populate('company', 'companyName');
 
     if (!submission) {
       return res.status(404).json({
         success: false,
-        message: "Submission not found",
+        message: 'Submission not found'
       });
     }
 
     res.json({
       success: true,
-      data: submission,
+      data: submission
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to fetch submission",
-      error: error.message,
+      message: 'Failed to fetch submission',
+      error: error.message
     });
   }
 };
+
+// ============================================================
+// WITHDRAW CANDIDATE
+// ============================================================
+
+// @desc    Withdraw Candidate
+// @route   PUT /api/staffing-partners/submissions/:id/withdraw
+exports.withdrawCandidate = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const { reason } = req.body;
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner profile not found'
+      });
+    }
+
+    const candidate = await Candidate.findOne({
+      _id: req.params.id,
+      submittedBy: partner._id
+    });
+
+    if (!candidate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Submission not found or does not belong to you'
+      });
+    }
+
+    // Early-stage candidates bypass lifecycle service
+    // These statuses haven't reached the company yet
+    const earlyStageStatuses = [
+      'DRAFT',
+      'CONSENT_PENDING',
+      'CONSENT_CONFIRMED',
+      'ADMIN_REVIEW',
+      'ADMIN_REJECTED',
+      'CONSENT_DENIED'
+    ];
+
+    if (earlyStageStatuses.includes(candidate.status)) {
+      const previousStatus = candidate.status;
+
+      candidate.status = 'WITHDRAWN';
+      candidate.statusHistory.push({
+        status: 'WITHDRAWN',
+        changedBy: req.user._id,
+        changedAt: new Date(),
+        notes: reason || 'Withdrawn by staffing partner'
+      });
+      await candidate.save();
+
+      return res.json({
+        success: true,
+        message: 'Candidate withdrawn successfully',
+        data: {
+          candidateId: candidate._id,
+          previousStatus,
+          newStatus: 'WITHDRAWN'
+        }
+      });
+    }
+
+    // For candidates already visible to company — use lifecycle service
+    const candidateLifecycleService = require('../services/candidateLifecycleService');
+
+    try {
+      const updated = await candidateLifecycleService.updateStatus(
+        candidate._id,
+        'WITHDRAWN',
+        req.user._id,
+        'staffing_partner',
+        reason || 'Withdrawn by staffing partner'
+      );
+
+      res.json({
+        success: true,
+        message: 'Candidate withdrawn successfully',
+        data: {
+          candidateId: updated._id,
+          previousStatus: candidate.status,
+          newStatus: 'WITHDRAWN'
+        }
+      });
+    } catch (error) {
+      if (error.statusCode === 400) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+          currentStatus: candidate.status,
+          allowedTransitions: error.allowedTransitions
+        });
+      }
+      throw error;
+    }
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Withdrawal failed',
+      error: error.message
+    });
+  }
+};
+
+// ============================================================
+// DASHBOARD
+// ============================================================
 
 // @desc    Get Dashboard Stats
 // @route   GET /api/staffing-partners/dashboard
@@ -1480,6 +1774,7 @@ exports.getDashboard = async (req, res) => {
     const completionPercentage = Math.round((completedSections / totalSections) * 100);
 
     const Payout = require('../models/Payout');
+
     const earningsSummary = {
       totalEarnings: partner.metrics.totalEarnings || 0,
       pendingPayouts: partner.metrics.pendingPayouts || 0,
@@ -1557,9 +1852,12 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
-// @desc    Get Earnings/Payouts
+// ============================================================
+// EARNINGS & PAYOUTS
+// ============================================================
+
+// @desc    Get Earnings / Payouts list
 // @route   GET /api/staffing-partners/earnings
-// ✅ SINGLE KEPT VERSION - payout model based
 exports.getEarnings = async (req, res) => {
   try {
     const Payout = require('../models/Payout');
@@ -1718,7 +2016,11 @@ exports.getPayoutDetails = async (req, res) => {
   }
 };
 
-// @desc    Get partner invoices
+// ============================================================
+// INVOICES
+// ============================================================
+
+// @desc    Get partner invoices list
 // @route   GET /api/staffing-partners/invoices
 exports.getInvoices = async (req, res) => {
   try {
@@ -1812,104 +2114,6 @@ exports.getInvoice = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch invoice',
-      error: error.message
-    });
-  }
-};
-
-// @desc    Withdraw Candidate
-// @route   PUT /api/staffing-partners/submissions/:id/withdraw
-exports.withdrawCandidate = async (req, res) => {
-  try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
-    const { reason } = req.body;
-
-    if (!partner) {
-      return res.status(404).json({
-        success: false,
-        message: "Partner profile not found",
-      });
-    }
-
-    const candidate = await Candidate.findOne({
-      _id: req.params.id,
-      submittedBy: partner._id,
-    });
-
-    if (!candidate) {
-      return res.status(404).json({
-        success: false,
-        message: "Submission not found or does not belong to you",
-      });
-    }
-
-    // ✅ For early stage candidates (DRAFT, CONSENT_PENDING, etc.)
-    // handle directly without lifecycle service
-    const earlyStageStatuses = [
-      'DRAFT',
-      'CONSENT_PENDING',
-      'CONSENT_CONFIRMED',
-      'ADMIN_REVIEW',
-      'ADMIN_REJECTED',
-      'CONSENT_DENIED'
-    ];
-
-    if (earlyStageStatuses.includes(candidate.status)) {
-      candidate.status = 'WITHDRAWN';
-      candidate.statusHistory.push({
-        status: 'WITHDRAWN',
-        changedBy: req.user._id,
-        changedAt: new Date(),
-        notes: reason || 'Withdrawn by staffing partner'
-      });
-      await candidate.save();
-
-      return res.json({
-        success: true,
-        message: 'Candidate withdrawn successfully',
-        data: {
-          candidateId: candidate._id,
-          previousStatus: candidate.status,
-          newStatus: 'WITHDRAWN'
-        }
-      });
-    }
-
-    const candidateLifecycleService = require("../services/candidateLifecycleService");
-
-    try {
-      const updated = await candidateLifecycleService.updateStatus(
-        candidate._id,
-        "WITHDRAWN",
-        req.user._id,
-        "staffing_partner",
-        reason || "Withdrawn by staffing partner",
-      );
-
-      res.json({
-        success: true,
-        message: 'Candidate withdrawn successfully',
-        data: {
-          candidateId: updated._id,
-          previousStatus: candidate.status,
-          newStatus: 'WITHDRAWN'
-        }
-      });
-    } catch (error) {
-      if (error.statusCode === 400) {
-        return res.status(400).json({
-          success: false,
-          message: error.message,
-          currentStatus: candidate.status,
-          allowedTransitions: error.allowedTransitions
-        });
-      }
-      throw error;
-    }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Withdrawal failed',
       error: error.message
     });
   }
