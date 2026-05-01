@@ -235,11 +235,12 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
     await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
+    // ✅ Use user.mobile (already in DB) and otp (just generated above)
     await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
-      action: 'verifying',
+      action: 'creating',
       platform: 'Syncro1',
       merchantName: 'Syncro1',
-      supportContact: process.env.SUPPORT_PHONE || 'support@syncro1.com'
+      supportContact: process.env.SUPPORT_PHONE || '+919920468129'
     });
     const verificationState = getVerificationState(user);
 
@@ -388,11 +389,12 @@ exports.initCompanyRegistration = async (req, res) => {
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
     await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
+    // ✅ Use user.mobile (already in DB) and otp (just generated above)
     await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
-      action: 'verifying',
+      action: 'creating',
       platform: 'Syncro1',
       merchantName: 'Syncro1',
-      supportContact: process.env.SUPPORT_PHONE || 'support@syncro1.com'
+      supportContact: process.env.SUPPORT_PHONE || '+919920468129'
     });
 
     const verificationState = getVerificationState(user);
@@ -1002,11 +1004,12 @@ exports.resendOTP = async (req, res) => {
         expiresAt: otpService.getExpiryTime()
       };
       await user.save();
-      await whatsappService.sendOTP(user.mobile, otp, {
-        action: 'verifying',
+      // ✅ Use user.mobile (already in DB) and otp (just generated above)
+      await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
+        action: 'creating',
         platform: 'Syncro1',
         merchantName: 'Syncro1',
-        supportContact: process.env.SUPPORT_PHONE || 'support@syncro1.com'
+        supportContact: process.env.SUPPORT_PHONE || '+919920468129'
       });
       return res.json({
         success: true,
@@ -1126,12 +1129,12 @@ exports.resendMobileOTP = async (req, res) => {
       expiresAt: otpService.getExpiryTime()
     };
     await user.save();
-
-    await whatsappService.sendOTP(user.mobile, otp, {
-      action: 'verifying',
+    // ✅ Use user.mobile (already in DB) and otp (just generated above)
+    await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
+      action: 'creating',
       platform: 'Syncro1',
       merchantName: 'Syncro1',
-      supportContact: process.env.SUPPORT_PHONE || 'support@syncro1.com'
+      supportContact: process.env.SUPPORT_PHONE || '+919920468129'
     });
     res.json({
       success: true,

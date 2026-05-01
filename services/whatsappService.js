@@ -122,18 +122,22 @@ class WhatsAppService {
     }
   }
   /**
-   * Send OTP using approved template: account_otp_verify
-   * Body: "This code is for {{1}} your {{2}} account and linking it to {{3}}. Code: {{4}}"
-   * Params:
-   *   {{1}} = action (e.g. "verifying")
-   *   {{2}} = platform (e.g. "Syncro1")
-   *   {{3}} = name or merchant (e.g. partner firm name or "Syncro1")
-   *   {{4}} = OTP code
-   *   {{5}} = support contact
-   */
+ * Send OTP via approved template
+ *
+ * Uses template defined in WHATSAPP_TEMPLATE_OTP env variable
+ *
+ * authtest template:
+ *   Body: "*{{1}}* is your verification code."
+ *   Button: Copy code (OTP)
+ *   Params: 1 body param (OTP only)
+ *
+ * account_otp_verify template:
+ *   Body: 5 params (action, platform, merchant, otp, support)
+ *   Button: Copy code (OTP)
+ */
   async sendOTP(phoneNumber, otp, options = {}) {
     const {
-      action = 'verifying',
+      action = 'creating',
       platform = 'Syncro1',
       merchantName = 'Syncro1',
       supportContact = process.env.SUPPORT_PHONE || 'support@syncro1.com'
@@ -141,51 +145,102 @@ class WhatsAppService {
 
     const otpStr = String(otp);
     const formattedPhone = this._formatPhone(phoneNumber);
+    const templateName = process.env.WHATSAPP_TEMPLATE_OTP || 'authtest';
+    const templateLang = process.env.WHATSAPP_TEMPLATE_OTP_LANG || 'en_US';
 
     console.log('═══════════════════════════════════════');
-    console.log('🔐 WhatsApp OTP (account_otp_verify)');
+    console.log(`🔐 WhatsApp OTP (${templateName})`);
     console.log(`   Phone:    +${formattedPhone}`);
     console.log(`   OTP:      ${otpStr}`);
-    console.log(`   Action:   ${action}`);
-    console.log(`   Platform: ${platform}`);
+    console.log(`   Template: ${templateName}`);
     console.log('═══════════════════════════════════════');
 
     if (!this.enabled) {
+      console.log('   [Mock - WhatsApp disabled]');
       return { success: true, mock: true };
     }
 
     try {
+      // ✅ Build components based on which template is active
+      let components = [];
+
+      if (templateName === 'authtest') {
+        components = [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: otpStr }  // {{1}} OTP only
+            ]
+          },
+          {
+            type: 'button',
+            sub_type: 'url',        // ✅ URL type
+            index: '0',
+            parameters: [
+              {
+                type: 'text',       // ✅ text type for URL buttons
+                text: otpStr        // ✅ OTP as URL suffix
+              }
+            ]
+          }
+        ];
+
+
+      } else if (templateName === 'account_otp_verify') {
+        // Template body:
+        // "This code is for {{1}} your {{2}} account and linking it to {{3}}.
+        //  Code: {{4}}
+        //  contact us at {{5}}"
+        // Button: URL type — requires OTP as suffix parameter
+        components = [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: action },          // {{1}} = "creating"
+              { type: 'text', text: platform },         // {{2}} = "Syncro1"
+              { type: 'text', text: merchantName },     // {{3}} = "Syncro1"
+              { type: 'text', text: otpStr },           // {{4}} = "611923"
+              { type: 'text', text: supportContact }    // {{5}} = "+919920468129"
+            ]
+          },
+          // ✅ URL button — must pass OTP as the dynamic URL suffix
+          {
+            type: 'button',
+            sub_type: 'url',
+            index: '0',
+            parameters: [
+              {
+                type: 'text',
+                text: otpStr    // OTP appended to button URL
+              }
+            ]
+          }
+        ];
+      } else {
+        // ✅ Fallback: assume 1 body param (OTP only) — no button
+        components = [
+          {
+            type: 'body',
+            parameters: [
+              { type: 'text', text: otpStr }
+            ]
+          }
+        ];
+      }
+
       const payload = {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
         to: formattedPhone,
         type: 'template',
         template: {
-          name: 'account_otp_verify',
-          language: { code: 'en_US' },
-          components: [
-            {
-              type: 'body',
-              parameters: [
-                { type: 'text', text: action },         // {{1}} verifying
-                { type: 'text', text: platform },        // {{2}} Syncro1
-                { type: 'text', text: merchantName },    // {{3}} Syncro1
-                { type: 'text', text: otpStr },          // {{4}} 123456
-                { type: 'text', text: supportContact }   // {{5}} support
-              ]
-            },
-            // Copy code button
-            {
-              type: 'button',
-              sub_type: 'url',
-              index: '0',
-              parameters: [
-                { type: 'text', text: otpStr }
-              ]
-            }
-          ]
+          name: templateName,
+          language: { code: templateLang },
+          components
         }
       };
+
+      console.log('[WHATSAPP] Payload:', JSON.stringify(payload, null, 2));
 
       const response = await axios.post(
         `${this.baseUrl}/${this.phoneNumberId}/messages`,
@@ -211,7 +266,11 @@ class WhatsAppService {
     } catch (error) {
       const errMsg = error.response?.data?.error?.message || error.message;
       const errCode = error.response?.data?.error?.code;
+
+      // ✅ Log full error response for debugging
       console.error(`[WHATSAPP] ❌ OTP failed: ${errMsg} (Code: ${errCode})`);
+      console.error('[WHATSAPP] Full error:', JSON.stringify(error.response?.data, null, 2));
+
       return { success: false, error: errMsg, errorCode: errCode };
     }
   }
