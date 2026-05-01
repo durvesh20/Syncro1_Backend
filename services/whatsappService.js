@@ -121,24 +121,33 @@ class WhatsAppService {
       };
     }
   }
-
   /**
-   * Send OTP via Authentication template
-   *
-   * Uses Meta's authentication template format
-   * OTP must be sent in BOTH body parameters AND button parameters
-   *
-   * Template type: AUTHENTICATION (copy code button)
-   * Template name: whatever Parag named it on Meta/WAPI
+   * Send OTP using approved template: account_otp_verify
+   * Body: "This code is for {{1}} your {{2}} account and linking it to {{3}}. Code: {{4}}"
+   * Params:
+   *   {{1}} = action (e.g. "verifying")
+   *   {{2}} = platform (e.g. "Syncro1")
+   *   {{3}} = name or merchant (e.g. partner firm name or "Syncro1")
+   *   {{4}} = OTP code
+   *   {{5}} = support contact
    */
-  async sendOTP(phoneNumber, otp) {
+  async sendOTP(phoneNumber, otp, options = {}) {
+    const {
+      action = 'verifying',
+      platform = 'Syncro1',
+      merchantName = 'Syncro1',
+      supportContact = process.env.SUPPORT_PHONE || 'support@syncro1.com'
+    } = options;
+
     const otpStr = String(otp);
     const formattedPhone = this._formatPhone(phoneNumber);
 
     console.log('═══════════════════════════════════════');
-    console.log('🔐 WhatsApp OTP');
-    console.log(`   Phone: +${formattedPhone}`);
-    console.log(`   OTP:   ${otpStr}`);
+    console.log('🔐 WhatsApp OTP (account_otp_verify)');
+    console.log(`   Phone:    +${formattedPhone}`);
+    console.log(`   OTP:      ${otpStr}`);
+    console.log(`   Action:   ${action}`);
+    console.log(`   Platform: ${platform}`);
     console.log('═══════════════════════════════════════');
 
     if (!this.enabled) {
@@ -146,37 +155,32 @@ class WhatsAppService {
     }
 
     try {
-      // Authentication template format
-      // OTP must go in BOTH body parameters AND button parameters
       const payload = {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
         to: formattedPhone,
         type: 'template',
         template: {
-          name: process.env.WHATSAPP_TEMPLATE_OTP || 'authtest',
-          language: {
-            code: 'en_US'
-          },
+          name: 'account_otp_verify',
+          language: { code: 'en_US' },
           components: [
             {
               type: 'body',
               parameters: [
-                {
-                  type: 'text',
-                  text: otpStr
-                }
+                { type: 'text', text: action },         // {{1}} verifying
+                { type: 'text', text: platform },        // {{2}} Syncro1
+                { type: 'text', text: merchantName },    // {{3}} Syncro1
+                { type: 'text', text: otpStr },          // {{4}} 123456
+                { type: 'text', text: supportContact }   // {{5}} support
               ]
             },
+            // Copy code button
             {
               type: 'button',
               sub_type: 'url',
               index: '0',
               parameters: [
-                {
-                  type: 'text',
-                  text: otpStr
-                }
+                { type: 'text', text: otpStr }
               ]
             }
           ]
@@ -196,13 +200,14 @@ class WhatsAppService {
       );
 
       const messageId = response.data?.messages?.[0]?.id;
-      console.log(`[WHATSAPP] ✅ OTP sent to +${formattedPhone} | ID: ${messageId}`);
+      console.log(`[WHATSAPP] ✅ OTP sent to +${formattedPhone} | MsgID: ${messageId}`);
 
       return {
         success: true,
         messageId,
         data: response.data
       };
+
     } catch (error) {
       const errMsg = error.response?.data?.error?.message || error.message;
       const errCode = error.response?.data?.error?.code;
@@ -214,6 +219,129 @@ class WhatsAppService {
    * Send profile verified notification
    * Params: [name]
    */
+  /**
+ * Send candidate consent using approved template: candidate_consent
+ *
+ * Template body:
+ * "Hi {{1}}, We have an opportunity that matches your profile
+ *  for the role of {{2}} at {{3}}..."
+ *
+ * Buttons (Dynamic URL):
+ *   "I Agree"    → https://syncro1.com/consent/candidate/agree/{{token}}
+ *   "I Disagree" → https://syncro1.com/consent/candidate/disagree/{{token}}
+ *
+ * @param {string} phoneNumber  - candidate mobile
+ * @param {string} candidateName - candidate first name
+ * @param {string} jobTitle     - job role
+ * @param {string} companyName  - hiring company name
+ * @param {string} consentToken - unique token (candidateId or crypto token)
+ */
+  async sendCandidateConsent(
+    phoneNumber,
+    candidateName,
+    jobTitle,
+    companyName,
+    consentToken
+  ) {
+    const formattedPhone = this._formatPhone(phoneNumber);
+
+    console.log('═══════════════════════════════════════');
+    console.log('📋 WhatsApp Candidate Consent');
+    console.log(`   Phone:   +${formattedPhone}`);
+    console.log(`   Name:    ${candidateName}`);
+    console.log(`   Job:     ${jobTitle}`);
+    console.log(`   Company: ${companyName}`);
+    console.log(`   Token:   ${consentToken}`);
+    console.log('═══════════════════════════════════════');
+
+    if (!this.enabled) {
+      console.log('   [Mock - WhatsApp disabled]');
+      return { success: true, mock: true };
+    }
+
+    try {
+      const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: formattedPhone,
+        type: 'template',
+        template: {
+          name: 'candidate_consent',
+          language: { code: 'en_GB' },
+          components: [
+            // ✅ Body parameters
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: candidateName },  // {{1}} name
+                { type: 'text', text: jobTitle },        // {{2}} role
+                { type: 'text', text: companyName }      // {{3}} company
+              ]
+            },
+
+            // ✅ Button 0: "I Agree" → dynamic URL suffix = consentToken
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: consentToken }
+              ]
+            },
+
+            // ✅ Button 1: "I Disagree" → dynamic URL suffix = consentToken
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '1',
+              parameters: [
+                { type: 'text', text: consentToken }
+              ]
+            }
+          ]
+        }
+      };
+
+      const response = await axios.post(
+        `${this.baseUrl}/${this.phoneNumberId}/messages`,
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+
+      const messageId = response.data?.messages?.[0]?.id;
+      console.log(
+        `[WHATSAPP] ✅ Consent sent to +${formattedPhone} | MsgID: ${messageId}`
+      );
+
+      return {
+        success: true,
+        messageId,
+        waId: response.data?.contacts?.[0]?.wa_id,
+        data: response.data
+      };
+
+    } catch (error) {
+      const errMsg =
+        error.response?.data?.error?.message || error.message;
+      const errCode = error.response?.data?.error?.code;
+
+      console.error(
+        `[WHATSAPP] ❌ Consent failed → +${formattedPhone}`
+      );
+      console.error(
+        `[WHATSAPP] Error Code: ${errCode} | Message: ${errMsg}`
+      );
+
+      return { success: false, error: errMsg, errorCode: errCode };
+    }
+  }
+
   async sendProfileVerified(phoneNumber, name) {
     return this.sendTemplate(
       phoneNumber,

@@ -10,27 +10,36 @@
  */
 
 const CANDIDATE_TRANSITIONS = {
-  'SUBMITTED':            ['UNDER_REVIEW', 'SHORTLISTED', 'REJECTED', 'WITHDRAWN'],
-  'UNDER_REVIEW':         ['SHORTLISTED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN'],
-  'SHORTLISTED':          ['INTERVIEW_SCHEDULED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN'],
-  'INTERVIEW_SCHEDULED':  ['INTERVIEWED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN'],
-  'INTERVIEWED':          ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'OFFERED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN'],
-  'OFFERED':              ['OFFER_ACCEPTED', 'OFFER_DECLINED', 'WITHDRAWN'],
-  'OFFER_ACCEPTED':       ['JOINED', 'WITHDRAWN'],
-  'OFFER_DECLINED':       ['SHORTLISTED'],
-  'JOINED':               [],               // Terminal
-  'REJECTED':             ['SHORTLISTED'],   // Can be reconsidered
-  'WITHDRAWN':            [],                // Terminal
-  'ON_HOLD':              ['UNDER_REVIEW', 'SHORTLISTED', 'REJECTED', 'WITHDRAWN']
+  // ✅ NEW STATES
+  'DRAFT': ['CONSENT_PENDING', 'WITHDRAWN'],
+  'CONSENT_PENDING': ['CONSENT_CONFIRMED', 'CONSENT_DENIED', 'WITHDRAWN'],
+  'CONSENT_CONFIRMED': ['ADMIN_REVIEW', 'WITHDRAWN'],
+  'CONSENT_DENIED': [],                             // terminal
+  'ADMIN_REVIEW': ['SUBMITTED', 'ADMIN_REJECTED'],
+  'ADMIN_REJECTED': [],                             // terminal
+
+  // ✅ EXISTING STATES (unchanged)
+  'SUBMITTED': ['UNDER_REVIEW', 'SHORTLISTED', 'REJECTED', 'WITHDRAWN'],
+  'UNDER_REVIEW': ['SHORTLISTED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN'],
+  'SHORTLISTED': ['INTERVIEW_SCHEDULED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN'],
+  'INTERVIEW_SCHEDULED': ['INTERVIEWED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN'],
+  'INTERVIEWED': ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'OFFERED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN'],
+  'OFFERED': ['OFFER_ACCEPTED', 'OFFER_DECLINED', 'WITHDRAWN'],
+  'OFFER_ACCEPTED': ['JOINED', 'WITHDRAWN'],
+  'OFFER_DECLINED': ['SHORTLISTED'],
+  'JOINED': [],               // Terminal
+  'REJECTED': ['SHORTLISTED'],   // Can be reconsidered
+  'WITHDRAWN': [],                // Terminal
+  'ON_HOLD': ['UNDER_REVIEW', 'SHORTLISTED', 'REJECTED', 'WITHDRAWN']
 };
 
 const JOB_TRANSITIONS = {
-  'DRAFT':              ['PENDING_APPROVAL', 'ACTIVE'],
-  'PENDING_APPROVAL':   ['ACTIVE', 'DRAFT'],
-  'ACTIVE':             ['PAUSED', 'CLOSED', 'FILLED'],
-  'PAUSED':             ['ACTIVE', 'CLOSED'],
-  'CLOSED':             [],
-  'FILLED':             ['ACTIVE']
+  'DRAFT': ['PENDING_APPROVAL', 'ACTIVE'],
+  'PENDING_APPROVAL': ['ACTIVE', 'DRAFT'],
+  'ACTIVE': ['PAUSED', 'CLOSED', 'FILLED'],
+  'PAUSED': ['ACTIVE', 'CLOSED'],
+  'CLOSED': [],
+  'FILLED': ['ACTIVE']
 };
 
 // What each role is allowed to change
@@ -115,7 +124,7 @@ class StatusMachine {
 
       if (!roleAllowed.includes(target)) {
         const validForRole = allowedStatuses.filter(s => roleAllowed.includes(s));
-        
+
         return {
           allowed: false,
           message: `Your role (${userRole}) cannot set status to "${target}"`,
@@ -151,6 +160,12 @@ class StatusMachine {
    */
   static getStatusLabel(status) {
     const labels = {
+      'DRAFT': 'Draft',
+      'CONSENT_PENDING': 'Awaiting Candidate Consent',
+      'CONSENT_CONFIRMED': 'Consent Confirmed',
+      'CONSENT_DENIED': 'Consent Denied',
+      'ADMIN_REVIEW': 'Under Admin Review',
+      'ADMIN_REJECTED': 'Not Approved',
       'SUBMITTED': 'Submitted',
       'UNDER_REVIEW': 'Under Review',
       'SHORTLISTED': 'Shortlisted',
@@ -164,17 +179,17 @@ class StatusMachine {
       'WITHDRAWN': 'Withdrawn',
       'ON_HOLD': 'On Hold',
       // Job statuses
-      'DRAFT': 'Draft',
       'PENDING_APPROVAL': 'Pending Approval',
       'ACTIVE': 'Active',
       'PAUSED': 'Paused',
       'CLOSED': 'Closed',
       'FILLED': 'Filled'
     };
-    
+
     const normalized = status?.toString().toUpperCase().trim();
     return labels[normalized] || status;
   }
+
 
   /**
    * ✅ NEW: Get all possible transitions as a map (for documentation/debugging)
@@ -205,7 +220,7 @@ class StatusMachine {
 
     Object.entries(transitions).forEach(([from, toList]) => {
       const allowedForRole = toList.filter(s => rolePerms.includes(s));
-      
+
       map[from] = {
         label: this.getStatusLabel(from),
         canMoveTo: allowedForRole,
@@ -230,7 +245,7 @@ class StatusMachine {
 
     Object.entries(transitions).forEach(([from, toList]) => {
       const label = this.getStatusLabel(from);
-      
+
       if (toList.length === 0) {
         console.log(`  ${from.padEnd(20)} → [TERMINAL]`);
       } else {

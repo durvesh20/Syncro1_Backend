@@ -1016,7 +1016,7 @@ exports.getJobDetails = async (req, res) => {
     });
   }
 };
-// @desc    Submit Candidate for a Job
+// @desc    Submit Candidate for a Job (NEW FLOW)
 // @route   POST /api/staffing-partners/jobs/:jobId/candidates
 exports.submitCandidate = async (req, res) => {
   try {
@@ -1026,25 +1026,25 @@ exports.submitCandidate = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: "Partner profile not found",
+        message: 'Partner profile not found'
       });
     }
 
     if (!job) {
       return res.status(404).json({
         success: false,
-        message: "Job not found",
+        message: 'Job not found'
       });
     }
 
-    if (job.status !== "ACTIVE") {
+    if (job.status !== 'ACTIVE') {
       return res.status(400).json({
         success: false,
-        message: "This job is no longer accepting applications",
+        message: 'This job is no longer accepting applications'
       });
     }
 
-    // Check if partner has shown interest in this job
+    // ✅ STEP 1: Check partner has shown interest
     const interest = await JobInterest.findOne({
       partner: partner._id,
       job: job._id,
@@ -1059,11 +1059,11 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // Check submission limit
+    // ✅ STEP 2: Check submission limit
     if (interest.submissionCount >= interest.submissionLimit) {
       return res.status(403).json({
         success: false,
-        message: `You have reached your submission limit of ${interest.submissionLimit} for this job. Request a limit extension from admin.`,
+        message: `You have reached your submission limit of ${interest.submissionLimit} for this job`,
         data: {
           submissionCount: interest.submissionCount,
           submissionLimit: interest.submissionLimit,
@@ -1072,7 +1072,8 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    const partnerPlan = partner.subscription?.plan || "FREE";
+    // ✅ STEP 3: Check plan eligibility
+    const partnerPlan = partner.subscription?.plan || 'FREE';
     if (
       job.eligiblePlans &&
       job.eligiblePlans.length > 0 &&
@@ -1080,9 +1081,9 @@ exports.submitCandidate = async (req, res) => {
     ) {
       return res.status(403).json({
         success: false,
-        message: `This job requires ${job.eligiblePlans.join(" or ")} plan. You are on ${partnerPlan} plan.`,
+        message: `This job requires ${job.eligiblePlans.join(' or ')} plan`,
         requiredPlans: job.eligiblePlans,
-        currentPlan: partnerPlan,
+        currentPlan: partnerPlan
       });
     }
 
@@ -1091,255 +1092,272 @@ exports.submitCandidate = async (req, res) => {
       lastName,
       email,
       mobile,
-      consent,
       profile,
-      forceSubmit,
+      resumeUrl,
+      resumeFileName,
+      forceSubmit
     } = req.body;
 
+    // ✅ STEP 4: Validate required fields
     if (!firstName || !lastName || !email || !mobile) {
       return res.status(400).json({
         success: false,
-        message: "Please provide firstName, lastName, email, and mobile",
+        message: 'firstName, lastName, email and mobile are required'
       });
     }
 
-    if (!consent) {
+    if (!resumeUrl) {
       return res.status(400).json({
         success: false,
-        message: "Candidate consent is required before submission",
+        message: 'Resume is required. Please upload resume first.',
+        hint: 'Use POST /api/staffing-partners/candidates/:id/resume to upload'
       });
     }
 
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+    // ✅ STEP 5: Duplicate check
     const duplicateCheck = await duplicateDetection.checkBeforeSubmission(
-      { email, mobile },
+      { email: normalizedEmail, mobile: normalizedMobile },
       job._id,
-      partner._id,
+      partner._id
     );
 
     if (!duplicateCheck.canSubmit) {
       return res.status(409).json({
         success: false,
-        message:
-          duplicateCheck.blocks[0]?.message || "Duplicate submission blocked",
+        message: duplicateCheck.blocks[0]?.message || 'Duplicate submission blocked',
         data: {
           blocks: duplicateCheck.blocks,
-          warnings: duplicateCheck.warnings,
-        },
+          warnings: duplicateCheck.warnings
+        }
       });
     }
 
-    const highSeverityWarnings = duplicateCheck.warnings.filter(
-      (w) => w.severity === "high",
-    );
-
-    if (highSeverityWarnings.length > 0 && !forceSubmit) {
+    // High severity warnings block unless forceSubmit
+    const highWarnings = duplicateCheck.warnings.filter(w => w.severity === 'high');
+    if (highWarnings.length > 0 && !forceSubmit) {
       return res.status(200).json({
         success: true,
         requiresConfirmation: true,
-        message:
-          "Potential issues detected. Review warnings and resubmit with forceSubmit: true to proceed.",
-        data: {
-          warnings: duplicateCheck.warnings,
-        },
+        message: 'Potential issues detected. Set forceSubmit: true to proceed.',
+        data: { warnings: duplicateCheck.warnings }
       });
     }
 
+    // ✅ STEP 6: Generate WhatsApp consent token
+    const crypto = require('crypto');
+    const consentToken = crypto.randomBytes(32).toString('hex');
+    const consentExpiry = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
+
+    // ✅ STEP 7: Create candidate in DRAFT status
     const candidate = await Candidate.create({
       submittedBy: partner._id,
       job: job._id,
       company: job.company,
       firstName,
       lastName,
-      email: email.toLowerCase(),
-      mobile,
-      consent: {
-        given: consent,
-        givenAt: new Date(),
-        ipAddress: req.ip,
+      email: normalizedEmail,
+      mobile: normalizedMobile,
+
+      resume: {
+        url: resumeUrl,
+        fileName: resumeFileName || 'resume',
+        uploadedAt: new Date()
       },
+
       profile: profile || {},
-      status: "SUBMITTED",
-      statusHistory: [
-        {
-          status: "SUBMITTED",
-          changedBy: req.user._id,
-          notes:
-            duplicateCheck.warnings.length > 0
-              ? `Submitted with ${duplicateCheck.warnings.length} warning(s)`
-              : "Initial submission",
-        },
-      ],
+
+      consent: {
+        given: false,
+        consentStatus: 'PENDING_CONFIRMATION'
+      },
+
+      whatsappConsent: {
+        sentAt: new Date(),
+        sentTo: normalizedMobile,
+        token: consentToken,
+        expiresAt: consentExpiry,
+        status: 'PENDING'
+      },
+
+      status: 'DRAFT',
+
+      statusHistory: [{
+        status: 'DRAFT',
+        changedBy: req.user._id,
+        notes: 'Candidate profile created by partner'
+      }]
     });
 
-    // Increment interest submission count
+    // ✅ STEP 8: Increment interest submission count
     await JobInterest.findByIdAndUpdate(interest._id, {
       $inc: { submissionCount: 1 }
     });
 
+    // ✅ STEP 9: Update job metrics
     await Job.findByIdAndUpdate(job._id, {
-      $inc: { "metrics.applications": 1 },
+      $inc: { 'metrics.applications': 1 }
     });
+
+    // ✅ STEP 10: Update partner metrics
     await StaffingPartner.findByIdAndUpdate(partner._id, {
-      $inc: { "metrics.totalSubmissions": 1 },
+      $inc: { 'metrics.totalSubmissions': 1 }
     });
 
-
-    // ================================
-    // Candidate Consent Notification
-    // ================================
-    const sendCandidateConsent = async () => {
+    // ✅ STEP 11: Send WhatsApp consent using approved template
+    const sendWhatsAppConsent = async () => {
       try {
-        const crypto = require('crypto');
-        const emailService = require('../services/emailService');
+        const whatsappService = require('../services/whatsappService');
+        const Company = require('../models/Company');
 
-        // Generate secure consent token
-        const consentToken = crypto.randomBytes(32).toString('hex');
-        const consentExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+        // Get company name for the template
+        const company = await Company.findById(job.company)
+          .select('companyName');
 
-        // Save token to candidate
-        await Candidate.findByIdAndUpdate(candidate._id, {
-          'consent.consentToken': consentToken,
-          'consent.consentStatus': 'PENDING_CONFIRMATION'
-        });
+        const companyName = company?.companyName || 'a leading company';
 
-        const confirmUrl = `${process.env.FRONTEND_URL}/consent/confirm?token=${consentToken}`;
-        const denyUrl = `${process.env.FRONTEND_URL}/consent/deny?token=${consentToken}`;
+        // ✅ Use approved template: candidate_consent
+        // Token in URL buttons will be: consentToken
+        const result = await whatsappService.sendCandidateConsent(
+          normalizedMobile,
+          firstName,               // {{1}} candidate name
+          job.title,               // {{2}} job role
+          companyName,             // {{3}} company name
+          consentToken             // dynamic URL suffix for both buttons
+        );
 
-        await emailService.sendEmail({
-          to: email.toLowerCase(),
-          subject: `Your profile has been submitted for ${job.title} — Action Required`,
-          html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px 10px 0 0;">
-            <h1 style="margin: 0; font-size: 20px;">Syncro1</h1>
-            <p style="margin: 5px 0 0 0; opacity: 0.9;">Profile Submission — Your Action Required</p>
-          </div>
-          <div style="padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb;">
-            <p>Dear ${firstName} ${lastName},</p>
-            <p>Your profile has been submitted for the following opportunity through Syncro1 platform:</p>
-            <div style="background: #dbeafe; border-left: 4px solid #3b82f6; padding: 15px; margin: 20px 0; border-radius: 4px;">
-              <p><strong>Position:</strong> ${job.title}</p>
-              <p><strong>Submitted by:</strong> ${partner.firmName}</p>
-              <p><strong>Platform:</strong> Syncro1 Private Limited</p>
-            </div>
-            <p>Please confirm whether you consent to this submission:</p>
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${confirmUrl}"
-                 style="background: #10b981; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-right: 15px;">
-                ✅ Yes, I Consent
-              </a>
-              <a href="${denyUrl}"
-                 style="background: #ef4444; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
-                ❌ No, I Do Not Consent
-              </a>
-            </div>
-            <p style="font-size: 12px; color: #666;">This link expires in 7 days. If you did not authorise this submission, please click "No, I Do Not Consent" immediately.</p>
-          </div>
-          <div style="text-align: center; padding: 15px; color: #6b7280; font-size: 11px;">
-            © ${new Date().getFullYear()} Syncro1 Private Limited
-          </div>
-        </div>
-      `
-        });
+        if (result.success) {
+          // Update candidate status to CONSENT_PENDING
+          await Candidate.findByIdAndUpdate(candidate._id, {
+            status: 'CONSENT_PENDING',
+            $push: {
+              statusHistory: {
+                status: 'CONSENT_PENDING',
+                changedAt: new Date(),
+                notes: `WhatsApp consent template sent to ${normalizedMobile}`
+              }
+            }
+          });
 
-        console.log(`[CONSENT] ✅ Consent email sent to: ${email}`);
+          console.log(`[CONSENT] ✅ Template sent to: +${normalizedMobile}`);
+        } else {
+          console.error(
+            `[CONSENT] ❌ Template failed: ${result.error}`
+          );
+          // Still keep candidate in DRAFT — admin can manually follow up
+        }
+
       } catch (err) {
-        console.error('[CONSENT] Failed:', err.message);
+        console.error('[CONSENT] WhatsApp consent failed:', err.message);
       }
     };
 
-    sendCandidateConsent();
-
-    // fire-and-forget
-    sendCandidateConsent();
+    sendWhatsAppConsent();
 
 
-    const company = await Company.findById(job.company).populate("user", "_id");
-
-    if (company?.user) {
-      await notificationEngine.send({
-        recipientId: company.user._id,
-        type: "NEW_CANDIDATE_SUBMITTED",
-        title: `New candidate for "${job.title}"`,
-        message: `${partner.firmName} submitted ${firstName} ${lastName} for the ${job.title} position. Review their profile in your dashboard.`,
-        data: {
-          entityType: "Candidate",
-          entityId: candidate._id,
-          actionUrl: `/company/jobs/${job._id}/candidates`,
-          metadata: {
-            partnerName: `${partner.firstName} ${partner.lastName}`,
-            firmName: partner.firmName,
-            candidateName: `${firstName} ${lastName}`,
-            candidateExperience: profile?.totalExperience,
-            candidateLocation: profile?.currentLocation,
+    // ✅ STEP 12: Notify partner
+    const notifyPartner = async () => {
+      try {
+        await notificationEngine.send({
+          recipientId: req.user._id,
+          type: 'SYSTEM_ANNOUNCEMENT',
+          title: '✅ Candidate profile created',
+          message: `${firstName} ${lastName}'s profile has been created for "${job.title}". WhatsApp consent sent to candidate. Profile will be processed once consent is received.`,
+          data: {
+            entityType: 'Candidate',
+            entityId: candidate._id,
+            actionUrl: `/partner/submissions/${candidate._id}`
           },
-        },
-        channels: {
-          inApp: true,
-          email: true,
-        },
-        priority: job.isUrgent ? "high" : "medium",
-      });
-    }
+          channels: { inApp: true },
+          priority: 'medium'
+        });
+      } catch (err) {
+        console.error('[NOTIFY] Partner notification failed:', err.message);
+      }
+    };
+
+    notifyPartner();
 
     res.status(201).json({
       success: true,
-      message:
-        duplicateCheck.warnings.length > 0
-          ? "Candidate submitted with warnings"
-          : "Candidate submitted successfully",
+      message: 'Candidate profile created. WhatsApp consent request sent to candidate.',
       data: {
-        candidate,
-        warnings: duplicateCheck.warnings,
-      },
+        candidateId: candidate._id,
+        candidateName: `${firstName} ${lastName}`,
+        status: 'CONSENT_PENDING',
+        whatsapp: {
+          sentTo: normalizedMobile,
+          expiresAt: consentExpiry
+        },
+        nextStep: 'Waiting for candidate WhatsApp consent',
+        warnings: duplicateCheck.warnings
+      }
     });
+
   } catch (error) {
+    console.error('[PARTNER] Submit candidate error:', error);
     res.status(500).json({
       success: false,
-      message: "Submission failed",
-      error: error.message,
+      message: 'Submission failed',
+      error: error.message
     });
   }
 };
 
 // @desc    Upload Resume for Candidate
+// @desc    Upload Resume for Candidate
 // @route   POST /api/staffing-partners/candidates/:id/resume
 exports.uploadResume = async (req, res) => {
   try {
-    const candidate = await Candidate.findById(req.params.id);
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner profile not found'
+      });
+    }
+
+    const candidate = await Candidate.findOne({
+      _id: req.params.id,
+      submittedBy: partner._id   // ✅ Ownership check
+    });
 
     if (!candidate) {
       return res.status(404).json({
         success: false,
-        message: "Candidate not found",
+        message: 'Candidate not found or does not belong to you'
       });
     }
 
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: "Please upload a file",
+        message: 'Please upload a file'
       });
     }
 
     candidate.resume = {
       url: req.file.path,
       fileName: req.file.originalname,
-      uploadedAt: new Date(),
+      uploadedAt: new Date()
     };
 
     await candidate.save();
 
     res.json({
       success: true,
-      message: "Resume uploaded successfully",
-      data: candidate.resume,
+      message: 'Resume uploaded successfully',
+      data: candidate.resume
     });
+
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Upload failed",
-      error: error.message,
+      message: 'Upload failed',
+      error: error.message
     });
   }
 };
@@ -1825,6 +1843,38 @@ exports.withdrawCandidate = async (req, res) => {
       });
     }
 
+    // ✅ For early stage candidates (DRAFT, CONSENT_PENDING, etc.)
+    // handle directly without lifecycle service
+    const earlyStageStatuses = [
+      'DRAFT',
+      'CONSENT_PENDING',
+      'CONSENT_CONFIRMED',
+      'ADMIN_REVIEW',
+      'ADMIN_REJECTED',
+      'CONSENT_DENIED'
+    ];
+
+    if (earlyStageStatuses.includes(candidate.status)) {
+      candidate.status = 'WITHDRAWN';
+      candidate.statusHistory.push({
+        status: 'WITHDRAWN',
+        changedBy: req.user._id,
+        changedAt: new Date(),
+        notes: reason || 'Withdrawn by staffing partner'
+      });
+      await candidate.save();
+
+      return res.json({
+        success: true,
+        message: 'Candidate withdrawn successfully',
+        data: {
+          candidateId: candidate._id,
+          previousStatus: candidate.status,
+          newStatus: 'WITHDRAWN'
+        }
+      });
+    }
+
     const candidateLifecycleService = require("../services/candidateLifecycleService");
 
     try {
@@ -1838,12 +1888,12 @@ exports.withdrawCandidate = async (req, res) => {
 
       res.json({
         success: true,
-        message: "Candidate withdrawn successfully",
+        message: 'Candidate withdrawn successfully',
         data: {
           candidateId: updated._id,
           previousStatus: candidate.status,
-          newStatus: "WITHDRAWN",
-        },
+          newStatus: 'WITHDRAWN'
+        }
       });
     } catch (error) {
       if (error.statusCode === 400) {
@@ -1851,7 +1901,7 @@ exports.withdrawCandidate = async (req, res) => {
           success: false,
           message: error.message,
           currentStatus: candidate.status,
-          allowedTransitions: error.allowedTransitions,
+          allowedTransitions: error.allowedTransitions
         });
       }
       throw error;
@@ -1859,8 +1909,8 @@ exports.withdrawCandidate = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Withdrawal failed",
-      error: error.message,
+      message: 'Withdrawal failed',
+      error: error.message
     });
   }
 };

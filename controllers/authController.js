@@ -235,8 +235,12 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
     await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
-    await whatsappService.sendOTP(normalizedMobile, mobileOTP);
-
+    await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
+      action: 'verifying',
+      platform: 'Syncro1',
+      merchantName: 'Syncro1',
+      supportContact: process.env.SUPPORT_PHONE || 'support@syncro1.com'
+    });
     const verificationState = getVerificationState(user);
 
     res.status(201).json({
@@ -384,7 +388,12 @@ exports.initCompanyRegistration = async (req, res) => {
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
     await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
-    await whatsappService.sendOTP(normalizedMobile, mobileOTP);
+    await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
+      action: 'verifying',
+      platform: 'Syncro1',
+      merchantName: 'Syncro1',
+      supportContact: process.env.SUPPORT_PHONE || 'support@syncro1.com'
+    });
 
     const verificationState = getVerificationState(user);
 
@@ -993,8 +1002,12 @@ exports.resendOTP = async (req, res) => {
         expiresAt: otpService.getExpiryTime()
       };
       await user.save();
-      await whatsappService.sendOTP(user.mobile, otp);
-
+      await whatsappService.sendOTP(user.mobile, otp, {
+        action: 'verifying',
+        platform: 'Syncro1',
+        merchantName: 'Syncro1',
+        supportContact: process.env.SUPPORT_PHONE || 'support@syncro1.com'
+      });
       return res.json({
         success: true,
         message: 'OTP sent to your mobile',
@@ -1114,8 +1127,12 @@ exports.resendMobileOTP = async (req, res) => {
     };
     await user.save();
 
-    await whatsappService.sendOTP(user.mobile, otp);
-
+    await whatsappService.sendOTP(user.mobile, otp, {
+      action: 'verifying',
+      platform: 'Syncro1',
+      merchantName: 'Syncro1',
+      supportContact: process.env.SUPPORT_PHONE || 'support@syncro1.com'
+    });
     res.json({
       success: true,
       message: 'Mobile OTP resent successfully.',

@@ -97,7 +97,16 @@ const candidateSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: [
-      'SUBMITTED',
+      // ✅ NEW STATUSES for new flow
+      'DRAFT',                    // Partner filled details, awaiting consent
+      'CONSENT_PENDING',          // WhatsApp consent sent to candidate
+      'CONSENT_CONFIRMED',        // Candidate confirmed on WhatsApp
+      'CONSENT_DENIED',           // Candidate denied — auto withdrawn
+      'ADMIN_REVIEW',             // In admin/subadmin queue for review
+      'ADMIN_REJECTED',           // Admin rejected before sending to company
+
+      // ✅ EXISTING STATUSES (after admin approves)
+      'SUBMITTED',                // Admin approved → visible to company
       'UNDER_REVIEW',
       'SHORTLISTED',
       'INTERVIEW_SCHEDULED',
@@ -110,7 +119,7 @@ const candidateSchema = new mongoose.Schema({
       'WITHDRAWN',
       'ON_HOLD'
     ],
-    default: 'SUBMITTED'
+    default: 'DRAFT'
   },
 
   // Submission Metadata
@@ -299,11 +308,59 @@ const candidateSchema = new mongoose.Schema({
     },
     checkedAt: Date,
     issues: [String]
+  },
+
+  // ✅ NEW: AI Resume Parsing Result
+  resumeAnalysis: {
+    parsed: { type: Boolean, default: false },
+    parsedAt: Date,
+    profileScore: { type: Number, default: 0 },
+    scoreBreakdown: mongoose.Schema.Types.Mixed,
+    matchLevel: String,           // STRONG_MATCH, GOOD_MATCH, etc
+    recommendation: String,
+    flags: [mongoose.Schema.Types.Mixed],
+    advice: [String],
+    aiData: mongoose.Schema.Types.Mixed  // full parsed resume data
+  },
+
+  // ✅ NEW: Admin Queue
+  adminQueue: {
+    assignedTo: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    assignedAt: Date,
+    reviewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    reviewedAt: Date,
+    reviewNotes: String,
+    action: {
+      type: String,
+      enum: ['APPROVED', 'REJECTED', 'PENDING']
+    },
+    rejectionReason: String
+  },
+
+  // ✅ NEW: Consent tracking (WhatsApp)
+  whatsappConsent: {
+    sentAt: Date,
+    sentTo: String,       // phone number
+    token: String,        // unique token
+    expiresAt: Date,
+    confirmedAt: Date,
+    deniedAt: Date,
+    status: {
+      type: String,
+      enum: ['PENDING', 'CONFIRMED', 'DENIED', 'EXPIRED'],
+      default: 'PENDING'
+    }
   }
+
 }, {
   timestamps: true
 });
-
 // ==================== INDEXES ====================
 candidateSchema.index({ job: 1, submittedBy: 1 });
 candidateSchema.index({ email: 1, job: 1 });

@@ -1,4 +1,3 @@
-
 const cookieParser = require('cookie-parser');
 const express = require('express');
 const cors = require('cors');
@@ -7,7 +6,6 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
-const onboardingRoutes = require('./routes/onboardingRoutes');
 
 // Load env vars
 dotenv.config();
@@ -19,33 +17,20 @@ connectDB();
 const { testConnection: testCloudinary } = require('./config/cloudinary');
 testCloudinary();
 
-
-// Initialize AI
 // Initialize AI
 const { initializeAI } = require('./config/ai');
 initializeAI();
 
-// ✅ Register Notification model BEFORE routes
+// ✅ Register ALL models BEFORE routes (prevents MissingSchemaError)
 require('./models/Notification');
-
-// ✅ Register AgreementQuery model  
 require('./models/AgreementQuery');
-
-// ===================== PART 10 FIX =====================
-// Register new models
 require('./models/AdminActionLog');
 require('./models/JobInterest');
 require('./models/LimitExtensionRequest');
+require('./models/Payout');
+require('./models/Invoice');
 
-// =======================================================
-
-// (IMPORTANT: app must exist before using app.use)
 const app = express();
-
-// Mount new routes
-app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
-app.use('/api/agreements', require('./routes/agreementRoutes'));
-app.use('/api/ai', require('./routes/aiRoutes'));
 
 /* =========================================================
    SECURITY MIDDLEWARE
@@ -53,23 +38,23 @@ app.use('/api/ai', require('./routes/aiRoutes'));
 
 app.use(
   helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" },
+    crossOriginResourcePolicy: { policy: 'cross-origin' }
   })
 );
 
-// =========================================================
-// RATE LIMITING
-// =========================================================
+/* =========================================================
+   RATE LIMITING
+========================================================= */
 
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 100,
   message: {
     success: false,
-    message: 'Too many requests from this IP, please try again after 15 minutes',
+    message: 'Too many requests from this IP, please try again after 15 minutes'
   },
   standardHeaders: true,
-  legacyHeaders: false,
+  legacyHeaders: false
 });
 
 const authLimiter = rateLimit({
@@ -77,8 +62,8 @@ const authLimiter = rateLimit({
   max: 20,
   message: {
     success: false,
-    message: 'Too many authentication attempts, please try again after 15 minutes',
-  },
+    message: 'Too many authentication attempts, please try again after 15 minutes'
+  }
 });
 
 const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== 'false';
@@ -99,13 +84,13 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 /* =========================================================
-   COOKIE PARSER (MUST BE BEFORE CORS)
+   COOKIE PARSER
 ========================================================= */
 
 app.use(cookieParser());
 
 /* =========================================================
-   CORS CONFIGURATION - UPDATED
+   CORS CONFIGURATION
 ========================================================= */
 
 const allowedOrigins = [
@@ -118,14 +103,8 @@ const allowedOrigins = [
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow Postman / server-to-server / requests without browser origin
-    if (!origin) {
-      return callback(null, true);
-    }
-
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error(`Not allowed by CORS: ${origin}`));
   },
   credentials: true,
@@ -135,12 +114,10 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
-// Respond quickly to preflight
 app.options('*', cors(corsOptions));
 
 /* =========================================================
-   STATIC UPLOADS
+   STATIC FILES
 ========================================================= */
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
@@ -148,6 +125,25 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   }
 }));
+
+
+// ✅ WhatsApp template consent redirect routes
+// Template buttons go to: https://syncro1.com/consent/candidate/agree/:token
+// These redirect to our API
+
+app.get('/consent/candidate/agree/:token', (req, res) => {
+  res.redirect(
+    `/api/candidates/consent/agree/${req.params.token}`
+  );
+});
+
+app.get('/consent/candidate/disagree/:token', (req, res) => {
+  res.redirect(
+    `/api/candidates/consent/disagree/${req.params.token}`
+  );
+});
+
+
 /* =========================================================
    HEALTH CHECK
 ========================================================= */
@@ -157,12 +153,12 @@ app.get('/api/health', (req, res) => {
     success: true,
     message: 'Server is running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
+    environment: process.env.NODE_ENV
   });
 });
 
 /* =========================================================
-   API ROUTES
+   API ROUTES — MOUNTED ONCE ONLY
 ========================================================= */
 
 app.use('/api/auth', require('./routes/authRoutes'));
@@ -173,17 +169,14 @@ app.use('/api/candidates', require('./routes/candidateRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/admin/sub-admins', require('./routes/adminSubAdminRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
-// Register routes
-app.use('/api/onboarding', onboardingRoutes);
-
-// ✅ Newly added routes
+app.use('/api/onboarding', require('./routes/onboardingRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/invoices', require('./routes/invoiceRoutes'));
-app.use('/api/ai', require('./routes/aiRoutes'));
 
+// ✅ These 3 were missing — now added ONCE
+app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
 app.use('/api/agreements', require('./routes/agreementRoutes'));
-
-
+app.use('/api/ai', require('./routes/aiRoutes'));
 
 /* =========================================================
    ERROR HANDLER
@@ -192,45 +185,35 @@ app.use('/api/agreements', require('./routes/agreementRoutes'));
 app.use((err, req, res, next) => {
   console.error('Error:', err);
 
-  // Mongoose validation error
   if (err.name === 'ValidationError') {
-    const messages = Object.values(err.errors).map((e) => e.message);
+    const messages = Object.values(err.errors).map(e => e.message);
     return res.status(400).json({
       success: false,
       message: 'Validation Error',
-      errors: messages,
+      errors: messages
     });
   }
 
-  // Duplicate key error
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue)[0];
     return res.status(400).json({
       success: false,
-      message: `${field} already exists`,
+      message: `${field} already exists`
     });
   }
 
-  // JWT errors
   if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid token',
-    });
+    return res.status(401).json({ success: false, message: 'Invalid token' });
   }
 
   if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Token expired',
-    });
+    return res.status(401).json({ success: false, message: 'Token expired' });
   }
 
-  // Default error
   res.status(err.statusCode || 500).json({
     success: false,
     message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
@@ -249,6 +232,11 @@ app.get('*', (req, res) => {
 /* =========================================================
    START SERVER
 ========================================================= */
+
+const cloudinaryConfigured =
+  !!process.env.CLOUDINARY_CLOUD_NAME &&
+  !!process.env.CLOUDINARY_API_KEY &&
+  !!process.env.CLOUDINARY_API_SECRET;
 
 const PORT = process.env.PORT || 5000;
 
@@ -274,9 +262,7 @@ const server = app.listen(PORT, () => {
   );
   console.log(
     '   Cloudinary: ' +
-    (cloudinaryConfigured
-      ? '☁️ Configured'
-      : '⚠️ Not configured (check .env)')
+    (cloudinaryConfigured ? '☁️  Configured' : '⚠️  Not configured')
   );
   console.log(
     '   AI:         ' +
@@ -284,17 +270,11 @@ const server = app.listen(PORT, () => {
       ? '🤖 Enabled (' + (process.env.GEMINI_MODEL || 'gemini-1.5-flash') + ')'
       : '⏸️  Disabled')
   );
-
   console.log('═══════════════════════════════════════════════════════');
   console.log('');
 });
 
-const cloudinaryConfigured =
-  !!process.env.CLOUDINARY_CLOUD_NAME &&
-  !!process.env.CLOUDINARY_API_KEY &&
-  !!process.env.CLOUDINARY_API_SECRET;
-
-/* ==================================== =====================
+/* =========================================================
    PROCESS ERROR HANDLING
 ========================================================= */
 

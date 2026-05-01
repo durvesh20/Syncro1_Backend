@@ -355,6 +355,179 @@ router.post('/whatsapp/test', async (req, res) => {
   }
 });
 
+// ==================== CANDIDATE QUEUE ====================
 
+// @desc    Get all candidates pending admin review
+// @route   GET /api/admin/candidates/queue
+router.get(
+  '/candidates/queue',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  async (req, res) => {
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+
+      const candidates = await candidateQueueService.getAdminQueue({
+        jobId: req.query.jobId,
+        partnerId: req.query.partnerId,
+        scoreMin: req.query.scoreMin
+      });
+
+      res.json({
+        success: true,
+        data: {
+          candidates,
+          total: candidates.length,
+          summary: {
+            strongMatch: candidates.filter(
+              c => c._queueMeta.score >= 80
+            ).length,
+            goodMatch: candidates.filter(
+              c => c._queueMeta.score >= 60 && c._queueMeta.score < 80
+            ).length,
+            partialMatch: candidates.filter(
+              c => c._queueMeta.score >= 40 && c._queueMeta.score < 60
+            ).length,
+            weakMatch: candidates.filter(
+              c => c._queueMeta.score < 40
+            ).length
+          }
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch candidate queue',
+        error: error.message
+      });
+    }
+  }
+);
+
+// @desc    Get single candidate in queue with full details
+// @route   GET /api/admin/candidates/queue/:id
+router.get(
+  '/candidates/queue/:id',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+
+      const candidate = await Candidate.findById(req.params.id)
+        .populate('job', 'title category location experienceLevel salary skills')
+        .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')
+        .populate('company', 'companyName kyc.industry')
+        .populate('statusHistory.changedBy', 'email role');
+
+      if (!candidate) {
+        return res.status(404).json({
+          success: false,
+          message: 'Candidate not found'
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          candidate,
+          queueInfo: {
+            score: candidate.resumeAnalysis?.profileScore || 0,
+            matchLevel: candidate.resumeAnalysis?.matchLevel || 'UNKNOWN',
+            recommendation: candidate.resumeAnalysis?.recommendation,
+            breakdown: candidate.resumeAnalysis?.scoreBreakdown,
+            flags: candidate.resumeAnalysis?.flags || [],
+            advice: candidate.resumeAnalysis?.advice || [],
+            aiParsedData: candidate.resumeAnalysis?.aiData,
+            resumeParsed: candidate.resumeAnalysis?.parsed || false
+          }
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch candidate',
+        error: error.message
+      });
+    }
+  }
+);
+
+// @desc    Admin approves candidate → send to company
+// @route   PUT /api/admin/candidates/queue/:id/approve
+router.put(
+  '/candidates/queue/:id/approve',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  async (req, res) => {
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+      const { notes } = req.body;
+
+      const candidate = await candidateQueueService.approveCandidate(
+        req.params.id,
+        req.user._id,
+        notes
+      );
+
+      res.json({
+        success: true,
+        message: 'Candidate approved and sent to company. Candidate notified.',
+        data: {
+          candidateId: candidate._id,
+          candidateName: `${candidate.firstName} ${candidate.lastName}`,
+          status: candidate.status,
+          approvedAt: candidate.adminQueue.reviewedAt
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to approve candidate',
+        error: error.message
+      });
+    }
+  }
+);
+
+// @desc    Admin rejects candidate → not sent to company
+// @route   PUT /api/admin/candidates/queue/:id/reject
+router.put(
+  '/candidates/queue/:id/reject',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  async (req, res) => {
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+      const { reason } = req.body;
+
+      if (!reason || reason.trim().length < 5) {
+        return res.status(400).json({
+          success: false,
+          message: 'Rejection reason is required (minimum 5 characters)'
+        });
+      }
+
+      const candidate = await candidateQueueService.rejectCandidate(
+        req.params.id,
+        req.user._id,
+        reason
+      );
+
+      res.json({
+        success: true,
+        message: 'Candidate rejected. Partner has been notified.',
+        data: {
+          candidateId: candidate._id,
+          candidateName: `${candidate.firstName} ${candidate.lastName}`,
+          status: candidate.status,
+          rejectionReason: reason
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to reject candidate',
+        error: error.message
+      });
+    }
+  }
+);
 
 module.exports = router;
