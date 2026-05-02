@@ -266,8 +266,8 @@ const server = app.listen(PORT, () => {
   );
   console.log(
     '   AI:         ' +
-    (process.env.AI_ENABLED === 'true' && process.env.GEMINI_API_KEY
-      ? '🤖 Enabled (' + (process.env.GEMINI_MODEL || 'gemini-1.5-flash') + ')'
+    (process.env.AI_ENABLED === 'true' && process.env.OPENAI_API_KEY
+      ? '🤖 Enabled (OpenAI ' + (process.env.OPENAI_MODEL || 'gpt-4o-mini') + ')'
       : '⏸️  Disabled')
   );
   console.log('═══════════════════════════════════════════════════════');

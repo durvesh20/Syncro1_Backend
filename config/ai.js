@@ -1,10 +1,11 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+// backend/config/ai.js
+const OpenAI = require('openai');
 
-let geminiClient = null;
+let openaiClient = null;
 
 const initializeAI = () => {
     const enabled = process.env.AI_ENABLED === 'true';
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.OPENAI_API_KEY;
 
     if (!enabled) {
         console.log('🤖 AI: Disabled');
@@ -12,29 +13,29 @@ const initializeAI = () => {
     }
 
     if (!apiKey) {
-        console.log('⚠️  AI: Gemini API key not configured');
+        console.log('⚠️  AI: OpenAI API key not configured');
         return null;
     }
 
     try {
-        geminiClient = new GoogleGenerativeAI(apiKey);
-        console.log('🤖 AI: Gemini configured successfully');
-        return geminiClient;
+        openaiClient = new OpenAI({ apiKey });
+        console.log('🤖 AI: OpenAI configured successfully');
+        return openaiClient;
     } catch (error) {
-        console.error('❌ AI: Gemini initialization failed:', error.message);
+        console.error('❌ AI: OpenAI initialization failed:', error.message);
         return null;
     }
 };
 
-const getGemini = () => {
-    if (!geminiClient) {
+const getOpenAI = () => {
+    if (!openaiClient) {
         initializeAI();
     }
-    return geminiClient;
+    return openaiClient;
 };
 
 const getModel = () => {
-    return process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+    return process.env.OPENAI_MODEL || 'gpt-4o-mini';
 };
 
-module.exports = { initializeAI, getGemini, getModel };
+module.exports = { initializeAI, getOpenAI, getModel };

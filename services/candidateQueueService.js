@@ -30,105 +30,154 @@ class CandidateQueueService {
             throw new Error('Candidate not found');
         }
 
-        // ✅ STEP 1: Parse resume with AI
-        let parsedData = null;
         let profileScore = 0;
         let scoreBreakdown = null;
         let matchLevel = 'UNKNOWN';
-        let recommendation = 'Unknown';
+        let recommendation = 'Manual Review Required';
         let flags = [];
         let advice = [];
+        let parsedData = null;
+        let aiParsed = false;
+        let fullAnalysis = null;
 
-        if (candidate.resume?.url) {
+        const aiEnabled = process.env.AI_ENABLED === 'true';
+
+        if (aiEnabled && candidate.resume?.url) {
             try {
-                console.log(`[QUEUE] Parsing resume for: ${candidate.firstName} ${candidate.lastName}`);
+                console.log(`[QUEUE] Starting AI analysis for: ${candidate.firstName} ${candidate.lastName}`);
+
                 const aiService = require('./aiService');
+
+                // ✅ Pass form data AND job description to AI
+                const formData = {
+                    firstName: candidate.firstName,
+                    lastName: candidate.lastName,
+                    email: candidate.email,
+                    mobile: candidate.mobile,
+                    location: candidate.profile?.location,
+                    totalExperience: candidate.profile?.totalExperience,
+                    relevantExperience: candidate.profile?.relevantExperience,
+                    noticePeriod: candidate.profile?.noticePeriod,
+                    currentSalary: candidate.profile?.currentSalary,
+                    expectedSalary: candidate.profile?.expectedSalary,
+                    writeup: candidate.profile?.writeup
+                };
+
                 const result = await aiService.parseResume(
                     candidate.resume.url,
-                    candidate.resume.fileName
+                    candidate.resume.fileName,
+                    formData,           // ← form data
+                    candidate.job       // ← full job document
                 );
 
-                if (result.success && result.data) {
+                if (result.success && result.fullAnalysis) {
                     parsedData = result.data;
+                    fullAnalysis = result.fullAnalysis;
+                    aiParsed = true;
 
-                    // ✅ STEP 2: Score profile against job
-                    const candidateScoringService = require('./candidateScoringService');
+                    const scoring = fullAnalysis.scoring || {};
+                    const rankingSignals = fullAnalysis.rankingSignals || {};
+                    const validation = fullAnalysis.validation || {};
+                    const rec = fullAnalysis.recommendation || {};
 
-                    // Merge partner-provided profile + AI parsed data
-                    const mergedProfile = {
-                        totalExperience: parsedData.profile?.totalExperience
-                            || candidate.profile?.totalExperience,
-                        skills: parsedData.profile?.skills?.length > 0
-                            ? parsedData.profile.skills
-                            : candidate.profile?.skills || [],
-                        expectedSalary: parsedData.profile?.expectedSalary
-                            || candidate.profile?.expectedSalary,
-                        currentSalary: parsedData.profile?.currentSalary
-                            || candidate.profile?.currentSalary,
-                        currentLocation: parsedData.profile?.currentLocation
-                            || candidate.profile?.currentLocation,
-                        preferredLocations: parsedData.profile?.preferredLocations || [],
-                        noticePeriod: parsedData.profile?.noticePeriod
-                            || candidate.profile?.noticePeriod,
-                        canRelocate: candidate.profile?.canRelocate,
-                        education: parsedData.profile?.education || candidate.profile?.education || []
+                    profileScore = scoring.finalAdjustedScore || 0;
+                    matchLevel = fullAnalysis.matchLevel || 'UNKNOWN';
+                    recommendation = rec.decision || 'HOLD';
+
+                    // Build score breakdown for our schema
+                    scoreBreakdown = {
+                        skills: {
+                            score: scoring.skillsMatch || 0,
+                            weight: 40,
+                            matchedRequired: rankingSignals.mustHaveSkillsMatched || [],
+                            missingRequired: rankingSignals.mustHaveSkillsMissing || [],
+                            matchedPreferred: rankingSignals.preferredSkillsMatched || [],
+                            coveragePercent: scoring.skillCoveragePercent || 0
+                        },
+                        experience: {
+                            score: scoring.experienceMatch || 0,
+                            weight: 25,
+                            detail: validation.experienceDiscrepancyDetail || '',
+                            relevancePercent: scoring.experienceRelevancePercent || 0
+                        },
+                        salary: {
+                            score: scoring.salaryFit || 0,
+                            weight: 10,
+                            deltaPercent: rankingSignals.salaryDeltaPercent || 0,
+                            withinBudget: rankingSignals.salaryWithinBudget || false
+                        },
+                        location: {
+                            score: scoring.locationMatch || 0,
+                            weight: 10,
+                            detail: validation.locationMatch || 'DIFFERENT'
+                        },
+                        noticePeriod: {
+                            score: scoring.noticePeriodFit || 0,
+                            weight: 15,
+                            days: rankingSignals.noticePeriodDays || 0
+                        }
                     };
 
-                    const scoreResult = candidateScoringService.scoreAgainstJob(
-                        mergedProfile,
-                        candidate.job
-                    );
+                    flags = validation.redFlags?.map(f => ({
+                        type: 'WARNING',
+                        message: f
+                    })) || [];
 
-                    profileScore = scoreResult.overallScore;
-                    scoreBreakdown = scoreResult.breakdown;
-                    matchLevel = scoreResult.matchLevel;
-                    recommendation = scoreResult.recommendation;
-                    flags = scoreResult.flags;
-                    advice = scoreResult.advice;
+                    advice = rec.suggestedActions || [];
 
-                    console.log(`[QUEUE] ✅ Score: ${profileScore}/100 — ${matchLevel}`);
+                    console.log(`[QUEUE] ✅ AI Analysis Complete:`);
+                    console.log(`   Score: ${profileScore}/100 | Level: ${matchLevel} | Decision: ${recommendation}`);
+                    console.log(`   Skills Coverage: ${scoring.skillCoveragePercent}%`);
+                    console.log(`   Risk Penalty: ${scoring.riskPenalty}`);
+
+                } else {
+                    console.log('[QUEUE] AI returned no analysis — using manual scoring');
+                    const result2 = this._manualScore(candidate);
+                    profileScore = result2.score;
+                    matchLevel = result2.matchLevel;
                 }
+
             } catch (aiError) {
-                console.error('[QUEUE] AI parsing failed:', aiError.message);
-                // Continue even if AI fails — human review will handle it
+                console.log(`[QUEUE] AI failed: ${aiError.message} — using manual score`);
+                const result2 = this._manualScore(candidate);
+                profileScore = result2.score;
+                matchLevel = result2.matchLevel;
             }
+        } else {
+            console.log('[QUEUE] AI disabled — using manual scoring');
+            const result2 = this._manualScore(candidate);
+            profileScore = result2.score;
+            matchLevel = result2.matchLevel;
         }
 
-        // ✅ STEP 3: Update candidate with AI data + score
+        // Save to candidate
         candidate.resumeAnalysis = {
-            parsed: !!parsedData,
-            parsedAt: new Date(),
+            parsed: aiParsed,
+            parsedAt: aiParsed ? new Date() : null,
             profileScore,
             scoreBreakdown,
             matchLevel,
             recommendation,
             flags,
             advice,
-            aiData: parsedData
+            aiData: parsedData,
+            fullAnalysis  // ← store complete AI analysis
         };
 
-        // Update profile with AI data if better
         if (parsedData?.profile) {
             candidate.profile = {
-                ...candidate.profile?.toObject?.() || candidate.profile || {},
-                currentCompany: parsedData.profile?.currentCompany
-                    || candidate.profile?.currentCompany,
-                currentDesignation: parsedData.profile?.currentDesignation
-                    || candidate.profile?.currentDesignation,
-                totalExperience: parsedData.profile?.totalExperience
-                    || candidate.profile?.totalExperience,
+                ...candidate.profile?.toObject?.() || {},
+                currentCompany: parsedData.profile?.currentCompany || candidate.profile?.currentCompany,
+                currentDesignation: parsedData.profile?.currentDesignation || candidate.profile?.currentDesignation,
                 skills: parsedData.profile?.skills?.length > 0
                     ? parsedData.profile.skills
                     : candidate.profile?.skills || [],
                 education: parsedData.profile?.education?.length > 0
                     ? parsedData.profile.education
-                    : candidate.profile?.education || [],
-                linkedinProfile: parsedData.profile?.linkedinProfile
-                    || candidate.profile?.linkedinProfile
+                    : candidate.profile?.education || []
             };
         }
 
-        // ✅ STEP 4: Move to admin queue
         candidate.status = 'ADMIN_REVIEW';
         candidate.adminQueue = {
             assignedAt: new Date(),
@@ -138,22 +187,54 @@ class CandidateQueueService {
         candidate.statusHistory.push({
             status: 'ADMIN_REVIEW',
             changedAt: new Date(),
-            notes: `Resume parsed. Score: ${profileScore}/100 (${matchLevel}). Awaiting admin review.`
+            notes: aiParsed
+                ? `AI analyzed. Score: ${profileScore}/100 (${matchLevel}). Decision: ${recommendation}.`
+                : `Manual review. Score: ${profileScore}/100 (${matchLevel}).`
         });
 
         await candidate.save();
 
-        // ✅ STEP 5: Notify admin/subadmin
-        await this._notifyAdmins(candidate, profileScore, matchLevel);
+        await this._notifyAdmins(candidate, profileScore, matchLevel, aiParsed, recommendation);
 
-        console.log(`[QUEUE] ✅ Candidate ${candidate._id} added to admin queue`);
+        console.log(`[QUEUE] ✅ Candidate ${candidate._id} in admin queue`);
 
         return {
             candidateId: candidate._id,
             profileScore,
             matchLevel,
+            recommendation,
+            aiParsed,
             status: 'ADMIN_REVIEW'
         };
+    }
+
+    /**
+     * Manual scoring when AI is disabled
+     */
+    _manualScore(candidate) {
+        const exp = candidate.profile?.totalExperience || 0;
+        const job = candidate.job;
+
+        let score = 40; // base score
+
+        if (job?.experienceRange) {
+            if (exp >= job.experienceRange.min && exp <= job.experienceRange.max) {
+                score += 20;
+            }
+        }
+
+        if (candidate.profile?.expectedSalary && job?.salary?.max) {
+            if (candidate.profile.expectedSalary <= job.salary.max) {
+                score += 15;
+            }
+        }
+
+        const matchLevel = score >= 80 ? 'STRONG_MATCH'
+            : score >= 65 ? 'GOOD_MATCH'
+                : score >= 50 ? 'PARTIAL_MATCH'
+                    : 'WEAK_MATCH';
+
+        return { score, matchLevel };
     }
 
     /**
