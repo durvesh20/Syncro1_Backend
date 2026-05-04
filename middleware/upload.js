@@ -6,14 +6,13 @@ const path = require('path');
 
 // ==================== CLOUDINARY STORAGE CONFIGS ====================
 
-// Resume storage
+// Resume storage — supports PDF, DOC, DOCX
 const resumeStorage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: 'syncro1/resumes',
-    resource_type: 'raw',
+    resource_type: 'raw',  // ✅ raw supports all file types
     allowed_formats: ['pdf', 'doc', 'docx'],
-    transformation: [],
     public_id: (req, file) => {
       const uniqueName = `resume_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
       return uniqueName;
@@ -32,8 +31,7 @@ const logoStorage = new CloudinaryStorage({
       { width: 500, height: 500, crop: 'limit', quality: 'auto' }
     ],
     public_id: (req, file) => {
-      const uniqueName = `logo_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
-      return uniqueName;
+      return `logo_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
     }
   }
 });
@@ -47,53 +45,47 @@ const documentStorage = new CloudinaryStorage({
     allowed_formats: ['pdf', 'jpg', 'jpeg', 'png'],
     public_id: (req, file) => {
       const fieldName = file.fieldname || 'doc';
-      const uniqueName = `${fieldName}_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
-      return uniqueName;
+      return `${fieldName}_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
     }
   }
 });
 
 // ==================== FILE FILTERS ====================
 
+// ✅ Resume filter — accepts PDF, DOC, DOCX
 const resumeFilter = (req, file, cb) => {
   const allowedMimes = [
     'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    'application/msword',                                                    // .doc
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document' // .docx
   ];
+
   const ext = path.extname(file.originalname).toLowerCase();
   const allowedExts = ['.pdf', '.doc', '.docx'];
 
   if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type for resume. Allowed: PDF, DOC, DOCX'), false);
+    cb(new Error('Invalid file type. Allowed: PDF, DOC, DOCX only'), false);
   }
 };
 
+// Logo filter
 const logoFilter = (req, file, cb) => {
-  const allowedMimes = [
-    'image/jpeg',
-    'image/png',
-    'image/svg+xml',
-    'image/webp'
-  ];
+  const allowedMimes = ['image/jpeg', 'image/png', 'image/svg+xml', 'image/webp'];
   const ext = path.extname(file.originalname).toLowerCase();
   const allowedExts = ['.jpg', '.jpeg', '.png', '.svg', '.webp'];
 
   if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type for logo. Allowed: JPG, PNG, SVG, WEBP'), false);
+    cb(new Error('Invalid file type. Allowed: JPG, PNG, SVG, WEBP'), false);
   }
 };
 
+// Document filter
 const documentFilter = (req, file, cb) => {
-  const allowedMimes = [
-    'application/pdf',
-    'image/jpeg',
-    'image/png'
-  ];
+  const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png'];
   const ext = path.extname(file.originalname).toLowerCase();
   const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png'];
 
@@ -109,7 +101,7 @@ const documentFilter = (req, file, cb) => {
 const uploadResume = multer({
   storage: resumeStorage,
   fileFilter: resumeFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 }).single('resume');
 
 const uploadLogo = multer({
@@ -123,7 +115,6 @@ const uploadDocument = multer({
   fileFilter: documentFilter,
   limits: { fileSize: 10 * 1024 * 1024 }
 }).single('document');
-
 
 const uploadPartnerDocuments = multer({
   storage: documentStorage,
@@ -183,7 +174,7 @@ const handleUploadError = (err, req, res, next) => {
   next();
 };
 
-// ==================== HELPER: DELETE FROM CLOUDINARY ====================
+// ==================== DELETE FROM CLOUDINARY ====================
 
 const deleteFromCloudinary = async (publicIdOrUrl) => {
   try {
@@ -191,15 +182,11 @@ const deleteFromCloudinary = async (publicIdOrUrl) => {
 
     let publicId = publicIdOrUrl;
 
-    // If it's a full URL, extract public_id
     if (publicIdOrUrl.startsWith('http')) {
-      // Extract public_id from Cloudinary URL
       const urlParts = publicIdOrUrl.split('/');
       const uploadIndex = urlParts.indexOf('upload');
       if (uploadIndex !== -1) {
-        // Get everything after version number
         const pathAfterUpload = urlParts.slice(uploadIndex + 2).join('/');
-        // Remove file extension
         publicId = pathAfterUpload.replace(/\.[^/.]+$/, '');
       }
     }

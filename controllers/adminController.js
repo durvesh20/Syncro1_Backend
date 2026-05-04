@@ -2373,3 +2373,463 @@ exports.getAuditLogs = async (req, res) => {
     });
   }
 };
+
+
+// ==================== ENHANCED JOB + CANDIDATE VIEWS ====================
+
+// @desc    Get all jobs WITH candidate counts
+// @route   GET /api/admin/jobs/with-candidates
+exports.getAllJobsWithCandidates = async (req, res) => {
+  try {
+    const {
+      status,
+      approvalStatus,
+      company,
+      page = 1,
+      limit = 20,
+      search
+    } = req.query;
+
+    const query = {};
+    if (status) query.status = status;
+    if (approvalStatus) query.approvalStatus = approvalStatus;
+    if (company) query.company = company;
+    if (search) {
+      query.$or = [
+        { title: new RegExp(search, 'i') },
+        { category: new RegExp(search, 'i') }
+      ];
+    }
+
+    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
+    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
+    const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    // ✅ Aggregate jobs with candidate counts and details
+    const jobs = await Job.aggregate([
+      { $match: query },
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: sanitizedLimit },
+
+      // ✅ Lookup company info
+      {
+        $lookup: {
+          from: 'companies',
+          localField: 'company',
+          foreignField: '_id',
+          as: 'companyInfo',
+          pipeline: [
+            { $project: { companyName: 1, 'kyc.industry': 1, city: 1, state: 1 } }
+          ]
+        }
+      },
+      { $unwind: { path: '$companyInfo', preserveNullAndEmptyArrays: true } },
+
+      // ✅ Lookup ALL candidates for this job
+      {
+        $lookup: {
+          from: 'candidates',
+          localField: '_id',
+          foreignField: 'job',
+          as: 'candidates',
+          pipeline: [
+            {
+              $project: {
+                firstName: 1,
+                lastName: 1,
+                email: 1,
+                mobile: 1,
+                status: 1,
+                'profile.totalExperience': 1,
+                'profile.expectedSalary': 1,
+                'profile.location': 1,
+                'profile.noticePeriod': 1,
+                'resumeAnalysis.profileScore': 1,
+                'resumeAnalysis.matchLevel': 1,
+                'resumeAnalysis.recommendation': 1,
+                submittedBy: 1,
+                createdAt: 1
+              }
+            },
+            { $sort: { createdAt: -1 } }
+          ]
+        }
+      },
+
+      // ✅ Lookup partner info for each candidate
+      {
+        $lookup: {
+          from: 'staffingpartners',
+          localField: 'candidates.submittedBy',
+          foreignField: '_id',
+          as: 'partnerDetails',
+          pipeline: [
+            { $project: { firmName: 1, firstName: 1, lastName: 1 } }
+          ]
+        }
+      },
+
+      // ✅ Count interested partners
+      {
+        $lookup: {
+          from: 'jobinterests',
+          localField: '_id',
+          foreignField: 'job',
+          as: 'interests',
+          pipeline: [
+            { $match: { status: 'ACTIVE' } },
+            {
+              $project: {
+                partner: 1,
+                submissionCount: 1,
+                submissionLimit: 1
+              }
+            }
+          ]
+        }
+      },
+
+      // ✅ Compute counts and stats
+      {
+        $addFields: {
+          // Total candidates submitted for this job
+          totalCandidates: { $size: '$candidates' },
+
+          // Candidate status breakdown
+          candidateStatusBreakdown: {
+            draft: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'DRAFT'] } } } },
+            consentPending: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'CONSENT_PENDING'] } } } },
+            adminReview: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'ADMIN_REVIEW'] } } } },
+            submitted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SUBMITTED'] } } } },
+            shortlisted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SHORTLISTED'] } } } },
+            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'INTERVIEW_SCHEDULED'] } } } },
+            interviewed: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'INTERVIEWED'] } } } },
+            offered: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFERED'] } } } },
+            offerAccepted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFER_ACCEPTED'] } } } },
+            joined: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'JOINED'] } } } },
+            rejected: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'REJECTED'] } } } },
+            withdrawn: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'WITHDRAWN'] } } } }
+          },
+
+          // ✅ Slot calculation: vacancies × 5
+          totalSlots: { $multiply: ['$vacancies', 5] },
+
+          // Slots used = total candidates (excluding withdrawn)
+          slotsUsed: {
+            $size: {
+              $filter: {
+                input: '$candidates',
+                cond: { $not: { $in: ['$$this.status', ['WITHDRAWN', 'ADMIN_REJECTED', 'CONSENT_DENIED']] } }
+              }
+            }
+          },
+
+          // Interested partners count
+          interestedPartnersCount: { $size: '$interests' }
+        }
+      },
+
+      // Add remaining slots
+      {
+        $addFields: {
+          slotsRemaining: { $subtract: ['$totalSlots', '$slotsUsed'] }
+        }
+      },
+
+      // ✅ Clean output — remove raw lookup arrays
+      {
+        $project: {
+          // Job info
+          title: 1,
+          slug: 1,
+          uniqueId: 1,
+          category: 1,
+          subCategory: 1,
+          employmentType: 1,
+          experienceLevel: 1,
+          experienceRange: 1,
+          salary: 1,
+          location: 1,
+          skills: 1,
+          vacancies: 1,
+          filledPositions: 1,
+          status: 1,
+          approvalStatus: 1,
+          isUrgent: 1,
+          isFeatured: 1,
+          eligiblePlans: 1,
+          createdAt: 1,
+
+          // Company
+          company: {
+            _id: '$companyInfo._id',
+            companyName: '$companyInfo.companyName',
+            industry: '$companyInfo.kyc.industry',
+            city: '$companyInfo.city',
+            state: '$companyInfo.state'
+          },
+
+          // ✅ Candidates array with partner info
+          candidates: {
+            $map: {
+              input: '$candidates',
+              as: 'c',
+              in: {
+                _id: '$$c._id',
+                firstName: '$$c.firstName',
+                lastName: '$$c.lastName',
+                email: '$$c.email',
+                mobile: '$$c.mobile',
+                status: '$$c.status',
+                totalExperience: '$$c.profile.totalExperience',
+                expectedSalary: '$$c.profile.expectedSalary',
+                location: '$$c.profile.location',
+                noticePeriod: '$$c.profile.noticePeriod',
+                profileScore: '$$c.resumeAnalysis.profileScore',
+                matchLevel: '$$c.resumeAnalysis.matchLevel',
+                aiDecision: '$$c.resumeAnalysis.recommendation',
+                submittedBy: '$$c.submittedBy',
+                submittedAt: '$$c.createdAt'
+              }
+            }
+          },
+
+          // ✅ Stats
+          totalCandidates: 1,
+          candidateStatusBreakdown: 1,
+          totalSlots: 1,
+          slotsUsed: 1,
+          slotsRemaining: 1,
+          interestedPartnersCount: 1,
+          metrics: 1
+        }
+      }
+    ]);
+
+    // ✅ Map partner names into candidates
+    const StaffingPartner = require('../models/StaffingPartner');
+    const partnerIds = [...new Set(
+      jobs.flatMap(j => j.candidates.map(c => c.submittedBy?.toString()))
+    )].filter(Boolean);
+
+    const partners = await StaffingPartner.find(
+      { _id: { $in: partnerIds } },
+      { firmName: 1, firstName: 1, lastName: 1 }
+    ).lean();
+
+    const partnerMap = {};
+    partners.forEach(p => {
+      partnerMap[p._id.toString()] = {
+        firmName: p.firmName,
+        name: `${p.firstName} ${p.lastName}`
+      };
+    });
+
+    // Enrich each job's candidates with partner names
+    const enrichedJobs = jobs.map(job => ({
+      ...job,
+      candidates: job.candidates.map(c => ({
+        ...c,
+        partner: partnerMap[c.submittedBy?.toString()] || {
+          firmName: 'Unknown',
+          name: 'Unknown'
+        }
+      }))
+    }));
+
+    const total = await Job.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        jobs: enrichedJobs,
+        pagination: {
+          current: sanitizedPage,
+          pages: Math.ceil(total / sanitizedLimit),
+          total,
+          limit: sanitizedLimit
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('[ADMIN] Get jobs with candidates error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch jobs with candidates',
+      error: error.message
+    });
+  }
+};
+
+
+// @desc    Get single job with ALL candidates details
+// @route   GET /api/admin/jobs/:id/candidates
+exports.getJobWithCandidates = async (req, res) => {
+  try {
+    const JobEditRequest = require('../models/JobEditRequest');
+
+    // Get job
+    const job = await Job.findById(req.params.id)
+      .populate('company', 'companyName kyc.industry kyc.logo city state verificationStatus')
+      .populate('postedBy', 'email')
+      .populate('approvedBy', 'email');
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // ✅ Get ALL candidates for this job with full details
+    const candidates = await Candidate.find({ job: job._id })
+      .populate('submittedBy', 'firmName firstName lastName uniqueId metrics user')
+      .sort({ createdAt: -1 })
+      .select(
+        'firstName lastName email mobile status profile resume ' +
+        'resumeAnalysis.profileScore resumeAnalysis.matchLevel ' +
+        'resumeAnalysis.recommendation resumeAnalysis.scoreBreakdown ' +
+        'resumeAnalysis.parsed resumeAnalysis.flags resumeAnalysis.advice ' +
+        'whatsappConsent.status consent.consentStatus ' +
+        'offer interviews statusHistory adminQueue ' +
+        'submittedBy createdAt updatedAt'
+      );
+
+    // ✅ Status breakdown
+    const statusBreakdown = {};
+    candidates.forEach(c => {
+      statusBreakdown[c.status] = (statusBreakdown[c.status] || 0) + 1;
+    });
+
+    // ✅ Per-partner submission count
+    const partnerSubmissions = {};
+    candidates.forEach(c => {
+      const partnerId = c.submittedBy?._id?.toString();
+      if (partnerId) {
+        if (!partnerSubmissions[partnerId]) {
+          partnerSubmissions[partnerId] = {
+            partnerId,
+            firmName: c.submittedBy?.firmName || 'Unknown',
+            partnerName: `${c.submittedBy?.firstName || ''} ${c.submittedBy?.lastName || ''}`.trim(),
+            count: 0,
+            statuses: {}
+          };
+        }
+        partnerSubmissions[partnerId].count++;
+        partnerSubmissions[partnerId].statuses[c.status] =
+          (partnerSubmissions[partnerId].statuses[c.status] || 0) + 1;
+      }
+    });
+
+    // ✅ Get interested partners with slot info
+    const JobInterest = require('../models/JobInterest');
+    const interests = await JobInterest.find({
+      job: job._id,
+      status: 'ACTIVE'
+    })
+      .populate('partner', 'firmName firstName lastName')
+      .select('partner submissionCount submissionLimit createdAt');
+
+    // ✅ Slot calculation
+    const totalSlots = job.vacancies * 5;
+    const activeCandidates = candidates.filter(
+      c => !['WITHDRAWN', 'ADMIN_REJECTED', 'CONSENT_DENIED'].includes(c.status)
+    );
+    const slotsUsed = activeCandidates.length;
+    const slotsRemaining = Math.max(0, totalSlots - slotsUsed);
+
+    // ✅ Enrich candidates with additional computed fields
+    const enrichedCandidates = candidates.map(c => {
+      const cObj = c.toObject();
+      return {
+        ...cObj,
+        _meta: {
+          profileScore: c.resumeAnalysis?.profileScore || 0,
+          matchLevel: c.resumeAnalysis?.matchLevel || 'UNKNOWN',
+          aiDecision: c.resumeAnalysis?.recommendation || 'HOLD',
+          aiParsed: c.resumeAnalysis?.parsed || false,
+          hasResume: !!c.resume?.url,
+          consentStatus: c.whatsappConsent?.status || c.consent?.consentStatus || 'UNKNOWN',
+          daysInPipeline: Math.floor(
+            (Date.now() - new Date(c.createdAt)) / (1000 * 60 * 60 * 24)
+          ),
+          partner: {
+            firmName: c.submittedBy?.firmName || 'Unknown',
+            name: `${c.submittedBy?.firstName || ''} ${c.submittedBy?.lastName || ''}`.trim()
+          }
+        }
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        job: {
+          ...job.toObject(),
+          // ✅ Slot info
+          slots: {
+            vacancies: job.vacancies,
+            slotsPerVacancy: 5,
+            totalSlots,
+            slotsUsed,
+            slotsRemaining,
+            filledPositions: job.filledPositions || 0
+          }
+        },
+
+        // ✅ All candidates with AI scores
+        candidates: enrichedCandidates,
+
+        // ✅ Summary stats
+        stats: {
+          totalCandidates: candidates.length,
+          activeCandidates: activeCandidates.length,
+          statusBreakdown,
+          averageScore: activeCandidates.length > 0
+            ? Math.round(
+              activeCandidates.reduce(
+                (sum, c) => sum + (c.resumeAnalysis?.profileScore || 0), 0
+              ) / activeCandidates.length
+            )
+            : 0,
+          scoreDistribution: {
+            strong: activeCandidates.filter(c => (c.resumeAnalysis?.profileScore || 0) >= 80).length,
+            good: activeCandidates.filter(c => {
+              const s = c.resumeAnalysis?.profileScore || 0;
+              return s >= 65 && s < 80;
+            }).length,
+            partial: activeCandidates.filter(c => {
+              const s = c.resumeAnalysis?.profileScore || 0;
+              return s >= 50 && s < 65;
+            }).length,
+            weak: activeCandidates.filter(c => (c.resumeAnalysis?.profileScore || 0) < 50).length
+          }
+        },
+
+        // ✅ Per-partner breakdown
+        partnerSubmissions: Object.values(partnerSubmissions),
+
+        // ✅ Interested partners with slot usage
+        interestedPartners: interests.map(i => ({
+          partnerId: i.partner?._id,
+          firmName: i.partner?.firmName,
+          partnerName: `${i.partner?.firstName || ''} ${i.partner?.lastName || ''}`.trim(),
+          submissionCount: i.submissionCount,
+          submissionLimit: i.submissionLimit,
+          slotsRemaining: i.submissionLimit - i.submissionCount,
+          registeredAt: i.createdAt
+        }))
+      }
+    });
+
+  } catch (error) {
+    console.error('[ADMIN] Get job with candidates error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch job with candidates',
+      error: error.message
+    });
+  }
+};

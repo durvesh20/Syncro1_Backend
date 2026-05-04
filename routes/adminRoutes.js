@@ -530,4 +530,21 @@ router.put(
   }
 );
 
+// ==================== JOBS WITH CANDIDATES ====================
+
+// All jobs with candidate counts and arrays
+router.get(
+  '/jobs-with-candidates',
+  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
+  require('../controllers/adminController').getAllJobsWithCandidates
+);
+
+// Single job with all candidates
+router.get(
+  '/jobs/:id/candidates',
+  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
+  require('../controllers/adminController').getJobWithCandidates
+);
+
+
 module.exports = router;

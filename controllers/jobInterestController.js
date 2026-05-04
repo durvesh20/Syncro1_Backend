@@ -65,6 +65,9 @@ exports.showInterest = async (req, res) => {
             });
         }
 
+        // ✅ Dynamic slots: 5 per vacancy
+        const submissionLimit = (job.vacancies || 1) * 5;
+
         // Create new interest
         const interest = await JobInterest.create({
             partner: partner._id,
@@ -72,7 +75,7 @@ exports.showInterest = async (req, res) => {
             user: req.user._id,
             status: 'ACTIVE',
             submissionCount: 0,
-            submissionLimit: 5
+            submissionLimit: submissionLimit  // ✅ Dynamic based on vacancies
         });
 
         // Update job interest count
@@ -86,17 +89,18 @@ exports.showInterest = async (req, res) => {
         });
 
         console.log(`[INTEREST] ✅ ${partner.firmName} interested in: ${job.title}`);
-
         res.status(201).json({
             success: true,
-            message: 'Interest registered successfully. You can now submit up to 5 candidates.',
+            message: `Interest registered. You can submit up to ${submissionLimit} candidates (${job.vacancies} position${job.vacancies > 1 ? 's' : ''} × 5 slots).`,
             data: {
                 interestId: interest._id,
                 jobId: job._id,
                 jobTitle: job.title,
+                vacancies: job.vacancies,
                 submissionLimit: interest.submissionLimit,
                 submissionCount: interest.submissionCount,
-                remainingSlots: interest.submissionLimit - interest.submissionCount
+                remainingSlots: interest.submissionLimit - interest.submissionCount,
+                slotFormula: `${job.vacancies} vacancy × 5 = ${submissionLimit} slots`
             }
         });
     } catch (error) {

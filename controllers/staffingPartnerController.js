@@ -1097,20 +1097,31 @@ exports.submitCandidate = async (req, res) => {
 
     // ✅ STEP 5: Validate required text fields
     const missingFields = [];
-    if (!firstName) missingFields.push('firstName');
-    if (!lastName) missingFields.push('lastName');
-    if (!email) missingFields.push('email');
-    if (!mobile) missingFields.push('mobile');
-    if (!location) missingFields.push('location');
-    if (totalExperience === undefined || totalExperience === null) {
+    if (!firstName || !firstName.trim()) missingFields.push('firstName');
+    if (!lastName || !lastName.trim()) missingFields.push('lastName');
+    if (!email || !email.trim()) missingFields.push('email');
+    if (!mobile || !mobile.trim()) missingFields.push('mobile');
+
+    // ✅ FIX: Location validation — trim and check properly
+    if (!location || !location.trim()) missingFields.push('location');
+
+    // ✅ FIX: Experience — comes as string from form-data
+    if (totalExperience === undefined || totalExperience === null || totalExperience === '') {
       missingFields.push('totalExperience');
     }
-    if (relevantExperience === undefined || relevantExperience === null) {
+    if (relevantExperience === undefined || relevantExperience === null || relevantExperience === '') {
       missingFields.push('relevantExperience');
     }
-    if (!noticePeriod) missingFields.push('noticePeriod');
-    if (!currentSalary) missingFields.push('currentSalary');
-    if (!expectedSalary) missingFields.push('expectedSalary');
+
+    if (!noticePeriod || !noticePeriod.trim()) missingFields.push('noticePeriod');
+
+    // ✅ FIX: Salary — comes as string, check for empty string too
+    if (currentSalary === undefined || currentSalary === null || currentSalary === '') {
+      missingFields.push('currentSalary');
+    }
+    if (expectedSalary === undefined || expectedSalary === null || expectedSalary === '') {
+      missingFields.push('expectedSalary');
+    }
 
     if (missingFields.length > 0) {
       return res.status(400).json({
@@ -1172,37 +1183,45 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // ✅ STEP 9: Validate experience values
-    if (isNaN(totalExperience) || Number(totalExperience) < 0) {
+    // ✅ FIX: Parse numbers correctly from form-data strings
+
+    // Experience validation
+    const parsedTotalExp = parseFloat(String(totalExperience).trim());
+    const parsedRelevantExp = parseFloat(String(relevantExperience).trim());
+
+    if (isNaN(parsedTotalExp) || parsedTotalExp < 0) {
       return res.status(400).json({
         success: false,
         message: 'Total experience must be a valid number (years)'
       });
     }
 
-    if (isNaN(relevantExperience) || Number(relevantExperience) < 0) {
+    if (isNaN(parsedRelevantExp) || parsedRelevantExp < 0) {
       return res.status(400).json({
         success: false,
         message: 'Relevant experience must be a valid number (years)'
       });
     }
 
-    if (Number(relevantExperience) > Number(totalExperience)) {
+    if (parsedRelevantExp > parsedTotalExp) {
       return res.status(400).json({
         success: false,
         message: 'Relevant experience cannot be greater than total experience'
       });
     }
 
-    // ✅ STEP 10: Validate salary
-    if (isNaN(currentSalary) || Number(currentSalary) < 0) {
+    // ✅ FIX: Salary validation — parse from string properly
+    const parsedCurrentSalary = parseInt(String(currentSalary).trim().replace(/,/g, ''));
+    const parsedExpectedSalary = parseInt(String(expectedSalary).trim().replace(/,/g, ''));
+
+    if (isNaN(parsedCurrentSalary) || parsedCurrentSalary < 0) {
       return res.status(400).json({
         success: false,
         message: 'Current salary must be a valid number'
       });
     }
 
-    if (isNaN(expectedSalary) || Number(expectedSalary) < 0) {
+    if (isNaN(parsedExpectedSalary) || parsedExpectedSalary < 0) {
       return res.status(400).json({
         success: false,
         message: 'Expected salary must be a valid number'
@@ -1304,13 +1323,13 @@ exports.submitCandidate = async (req, res) => {
       // Build profile from individual form fields
       profile: {
         middleName: middleName?.trim() || '',
-        location: location.trim(),
-        currentLocation: location.trim(),
-        totalExperience: parseFloat(totalExperience),
-        relevantExperience: parseFloat(relevantExperience),
+        location: location.trim(),           // ✅ trimmed
+        currentLocation: location.trim(),    // ✅ trimmed
+        totalExperience: parsedTotalExp,     // ✅ parsed float
+        relevantExperience: parsedRelevantExp, // ✅ parsed float
         noticePeriod,
-        currentSalary: parseInt(currentSalary),
-        expectedSalary: parseInt(expectedSalary),
+        currentSalary: parsedCurrentSalary,  // ✅ parsed int (no comma issue)
+        expectedSalary: parsedExpectedSalary, // ✅ parsed int (no comma issue)
         writeup: writeup?.trim() || '',
         currentCompany: parsedProfile?.currentCompany || '',
         currentDesignation: parsedProfile?.currentDesignation || '',
@@ -1321,6 +1340,7 @@ exports.submitCandidate = async (req, res) => {
         linkedinProfile: parsedProfile?.linkedinProfile || '',
         portfolioUrl: parsedProfile?.portfolioUrl || ''
       },
+
 
       consent: {
         given: false,
