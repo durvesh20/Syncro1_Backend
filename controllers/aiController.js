@@ -6,7 +6,7 @@ const aiService = require('../services/aiService');
 // @access  Staffing Partner
 exports.parseResume = async (req, res) => {
     try {
-        const { resumeUrl, fileName } = req.body;
+        const { resumeUrl, fileName,candidateFormData, jobDescription } = req.body;
 
         if (!resumeUrl) {
             return res.status(400).json({
@@ -22,7 +22,7 @@ exports.parseResume = async (req, res) => {
             });
         }
 
-        const result = await aiService.parseResume(resumeUrl, fileName);
+        const result = await aiService.parseResume(resumeUrl, fileName, candidateFormData || {}, jobDescription || {} );
 
         res.json({
             success: true,

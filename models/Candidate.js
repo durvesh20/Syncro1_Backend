@@ -1,5 +1,6 @@
 // backend/models/Candidate.js - UPDATED WITH COMMISSION
 const mongoose = require('mongoose');
+const { Schema } = mongoose;
 
 const candidateSchema = new mongoose.Schema({
   // Submitted by Staffing Partner
@@ -99,6 +100,8 @@ const candidateSchema = new mongoose.Schema({
     currentSalary: Number,          // in INR per annum
     expectedSalary: Number,         // in INR per annum
     writeup: String,                // small writeup / summary by partner
+    languages: [String],
+    certifications: [String],
 
     // ✅ EXISTING FIELDS (kept)
     currentCompany: String,
@@ -334,16 +337,123 @@ const candidateSchema = new mongoose.Schema({
   },
 
   // ✅ NEW: AI Resume Parsing Result
-  resumeAnalysis: {
+resumeAnalysis: {
     parsed: { type: Boolean, default: false },
     parsedAt: Date,
     profileScore: { type: Number, default: 0 },
-    scoreBreakdown: mongoose.Schema.Types.Mixed,
-    matchLevel: String,           // STRONG_MATCH, GOOD_MATCH, etc
+    matchLevel: String,
     recommendation: String,
-    flags: [mongoose.Schema.Types.Mixed],
+
+    scoreBreakdown: {
+      skills: {
+        score: Number,
+        weight: Number,
+        matchedRequired: [String],
+        missingRequired: [String],
+        matchedPreferred: [String],
+        coveragePercent: Number
+      },
+      experience: {
+        score: Number,
+        weight: Number,
+        actual: String,
+        required: String,
+        status: String,
+        detail: String,
+        relevancePercent: Number
+      },
+      domain: {
+        score: Number,
+        weight: Number,
+        jobDomain: String,
+        candidateDomain: String,
+        status: String
+      },
+      education: {
+        score: Number,
+        weight: Number,
+        minimumRequired: String,
+        candidateEducation: String,
+        status: String
+      },
+      salary: {
+        score: Number,
+        weight: Number,
+        budget: String,
+        expected: String,
+        deltaPercent: Number,
+        status: String,
+        withinBudget: Boolean
+      },
+      location: {
+        score: Number,
+        weight: Number,
+        jobLocation: String,
+        candidateLocation: String,
+        status: String,
+        detail: String
+      },
+      noticePeriod: {
+        score: Number,
+        weight: Number,
+        required: String,
+        actual: String,
+        days: Number,
+        status: String
+      },
+      stability: {
+        score: Number,
+        weight: Number,
+        averageTenureYears: Number,
+        isJobHopper: Boolean,
+        risk: String,
+        detail: String
+      },
+      summary: {
+        weightedScore: Number,
+        riskPenalty: Number,
+        riskBreakdown: {
+          careerGapPenalty: Number,
+          jobHopperPenalty: Number,
+          domainMismatchPenalty: Number,
+          experienceDiscrepancyPenalty: Number,
+          salaryOverBudgetPenalty: Number
+        },
+        finalAdjustedScore: Number,
+        matchLevel: String
+      }
+    },
+
+    flags: [{
+      type: { type: String, enum: ['WARNING', 'SUCCESS', 'INFO'] },
+      message: String
+    }],
     advice: [String],
-    aiData: mongoose.Schema.Types.Mixed  // full parsed resume data
+
+    aiData: {
+      firstName: String,
+      lastName: String,
+      email: String,
+      mobile: String,
+      profile: {
+        currentCompany: String,
+        currentDesignation: String,
+        totalExperience: Number,
+        relevantExperience: Number,
+        currentLocation: String,
+        skills: [String],
+        education: [{
+          degree: String,
+          institution: String,
+          year: Number
+        }],
+        languages: [String],
+        certifications: [String]
+      },
+      summary: String
+    },
+
+    fullAnalysis: mongoose.Schema.Types.Mixed
   },
 
   // ✅ NEW: Admin Queue
@@ -361,7 +471,8 @@ const candidateSchema = new mongoose.Schema({
     reviewNotes: String,
     action: {
       type: String,
-      enum: ['APPROVED', 'REJECTED', 'PENDING']
+      enum: ['APPROVED', 'REJECTED', 'PENDING'],
+      default: 'PENDING'
     },
     rejectionReason: String
   },
@@ -392,6 +503,8 @@ candidateSchema.index({ company: 1, status: 1, createdAt: -1 });
 candidateSchema.index({ submittedBy: 1, createdAt: -1 });
 candidateSchema.index({ 'payout.status': 1, 'payout.eligibleDate': 1 }); // For payout queries
 candidateSchema.index({ 'replacementGuarantee.endDate': 1 }); // For guarantee expiry
+candidateSchema.index({ 'resumeAnalysis.profileScore': -1 });
+candidateSchema.index({ 'adminQueue.action': 1, createdAt: -1 });
 
 // ==================== METHODS ====================
 

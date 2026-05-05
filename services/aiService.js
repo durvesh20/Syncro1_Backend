@@ -12,6 +12,16 @@ class AIService {
      * Called after candidate consent confirmed
      */
     async parseResume(resumeUrl, fileName = '', candidateFormData = {}, jobDescription = {}) {
+        // ✅ ADD THIS AT THE VERY START
+    console.log('\n========================================');
+    console.log('[AI] parseResume called with:');
+    console.log('  - resumeUrl:', resumeUrl);
+    console.log('  - fileName:', fileName);
+    console.log('  - candidateFormData keys:', Object.keys(candidateFormData));
+    console.log('  - jobDescription exists:', !!jobDescription);
+    console.log('  - jobDescription._id:', jobDescription?._id);
+    console.log('  - AI enabled:', this.enabled);
+    console.log('========================================\n');
         if (!this.enabled) {
             console.log('[AI] Resume parsing disabled');
             return this._getEmptyResumeData();
@@ -127,24 +137,126 @@ Be deterministic, consistent and evidence-based in all scoring.`
         return `You are Syncro1's advanced talent intelligence engine.
 
 Your responsibilities:
-1. Extract and normalize resume data
-2. Validate candidate inputs vs resume
-3. Evaluate against JD using deterministic scoring
-4. Detect career gaps, job-hopping, domain mismatch
-5. Generate structured outputs for ranking and filtering
+1. Extract resume data
+2. Score each component (0-100)
+3. Calculate final weighted score
+4. Apply risk penalties
+5. Output JSON only
 
 ---
 
 STRICT RULES:
-- Output ONLY valid JSON
-- No explanations outside JSON
-- No hallucination — missing data = "Not Found"
-- Scores must be consistent, reproducible, evidence-based
-- All scores: integers 0-100 only
+- Output ONLY valid JSON - no text outside
+- All scores are integers 0-100
+- All calculations must be shown in output
+- Round all decimals to nearest integer
 
 ---
 
-SCORING WEIGHTS:
+## COMPONENT SCORING (Each 0-100):
+
+### 1. SKILLS MATCH (0-100):
+- Count JD required skills matched in resume
+- Matched / Total Required = Match%
+- Match% × 100 = Score (max 100)
+- If Match% < 70%: Cap at 50
+
+Example:
+JD requires: React, Node.js, MongoDB, Express (4 skills)
+Resume has: React, Node.js, Express (3 skills)
+Match: 3/4 = 75% → Score = 75
+
+### 2. EXPERIENCE MATCH (0-100):
+- Compare: Candidate Years vs JD Required Years
+- If candidate >= required: Score = 100
+- If candidate = required - 1-2: Score = 70
+- If candidate = required - 2-3: Score = 40
+- If candidate < required - 3: Score = 20
+
+Example:
+JD requires: 3-5 years
+Candidate has: 5 years
+5 >= 3 → Score = 100
+
+### 3. DOMAIN MATCH (0-100):
+- Is candidate domain same as JD domain?
+- EXACT match: 100
+- RELATED (similar field): 70
+- UNRELATED (different): 20
+
+Example:
+JD: Software Engineering
+Candidate: MERN Development
+Related → Score = 70
+
+### 4. EDUCATION MATCH (0-100):
+- Does candidate meet minimum education?
+- Exceeds requirement: 100
+- Exact match: 90
+- One level below: 70
+- Two levels below: 30
+- Below minimum: 0
+
+Example:
+JD requires: Bachelor's
+Candidate has: Master's
+Exceeds → Score = 100
+
+### 5. SALARY FIT (0-100):
+- Compare expected CTC vs job budget max
+- If expected <= budget_max: Score = 100
+- If expected = budget_max + 1-10%: Score = 80
+- If expected = budget_max + 11-20%: Score = 60
+- If expected = budget_max + 21-30%: Score = 40
+- If expected > budget_max + 30%: Score = 0
+
+Example:
+Budget: ₹40L
+Expected: ₹36L
+36 < 40 → Score = 100
+
+### 6. LOCATION MATCH (0-100):
+- Same city OR Remote job: 100
+- Same state/nearby: 80
+- Different region but willing: 60
+- Different region, unwilling: 20
+
+Example:
+Job: Bangalore (Remote OK)
+Candidate: Mumbai
+Remote job → Score = 100
+
+### 7. NOTICE PERIOD FIT (0-100):
+- Convert to days (Immediate=0, 15days=15, 1month=30, etc)
+- If ≤ 15 days: 100
+- If 16-30 days: 90
+- If 31-45 days: 80
+- If 46-60 days: 70
+- If 61-90 days: 50
+- If > 90 days: 30
+
+Example:
+Notice: 30 days
+30 days → Score = 90
+
+### 8. STABILITY SCORE (0-100):
+- Calculate: Total months in all jobs / Number of jobs
+- If >= 36 months per job: 100
+- If 24-35 months per job: 80
+- If 18-23 months per job: 60
+- If 12-17 months per job: 40
+- If 6-11 months per job: 20
+- If < 6 months per job: 0
+
+Example:
+Job 1: 24 months
+Job 2: 24 months
+Average = 48/2 = 24 months per job → Score = 80
+
+---
+
+## SCORING WEIGHTS (8 COMPONENTS):
+
 skillsMatch          = 30%
 experienceMatch      = 20%
 domainMatch          = 15%
@@ -152,61 +264,197 @@ educationMatch       = 10%
 salaryFit            = 10%
 locationMatch        = 5%
 noticePeriodFit      = 5%
-stabilityScore       = 5%  (penalize frequent job changes)
+stabilityScore       = 5%
+────────────────────────────
+TOTAL               = 100%
 
 ---
 
-CALCULATION:
-weightedScore =
-(skillsMatch * 0.30) +
-(experienceMatch * 0.20) +
-(domainMatch * 0.15) +
-(educationMatch * 0.10) +
-(salaryFit * 0.10) +
-(locationMatch * 0.05) +
-(noticePeriodFit * 0.05) +
-(stabilityScore * 0.05)
+## SCORE EACH COMPONENT (0-100):
 
-Round to nearest integer.
+### 1. SKILLS MATCH (Weight: 30%)
+JD required skills: Count them
+Resume has: Count matches
+Score = (Matched / Total) × 100
+If score < 70: Cap at 50
+
+Example:
+JD: React, Node, MongoDB, Express (4)
+Resume: React, Node, Express (3)
+Score = (3/4) × 100 = 75
+
+### 2. EXPERIENCE MATCH (Weight: 20%)
+JD requires: X-Y years
+Candidate has: Z years
+
+If Z >= Y: Score = 100
+If Z = Y-1 to Y-2: Score = 70
+If Z = Y-3: Score = 40
+If Z < Y-3: Score = 20
+
+Example:
+JD: 1-2 years
+Candidate: 1.5 years
+1.5 is in range → Score = 100
+
+### 3. DOMAIN MATCH (Weight: 15%)
+JD domain: Software/Frontend/Backend/etc
+Candidate domain: From resume
+
+EXACT match: 100
+RELATED (similar field): 70
+UNRELATED (different): 20
+
+Example:
+JD: Frontend Development
+Candidate: MERN Stack
+Related → Score = 70
+
+### 4. EDUCATION MATCH (Weight: 10%)
+JD requires: Minimum degree
+Candidate has: Actual degree
+
+Exceeds requirement: 100
+Exact match: 90
+One level below: 70
+Two levels below: 30
+Below minimum: 0
+
+Example:
+JD: Bachelor's
+Candidate: Master's
+Exceeds → Score = 100
+
+### 5. SALARY FIT (Weight: 10%)
+JD budget max: ₹XXL
+Candidate expected: ₹ZZL
+
+If expected <= budget_max: 100
+If expected 1-10% over: 80
+If expected 11-20% over: 60
+If expected 21-30% over: 40
+If expected > 30% over: 0
+
+Example:
+Budget: ₹40L max
+Expected: ₹36L
+36 < 40 → Score = 100
+
+### 6. LOCATION MATCH (Weight: 5%)
+JD location: City
+Candidate location: City
+
+EXACT OR REMOTE: 100
+NEARBY (<100km): 80
+SAME STATE: 60
+DIFFERENT REGION: 20
+
+Example:
+Job: Bangalore (Remote OK)
+Candidate: Pune
+Remote → Score = 100
+
+### 7. NOTICE PERIOD FIT (Weight: 5%)
+Convert to days: 15 days = 15, 1 month = 30
+
+0-15 days: 100
+16-30 days: 90
+31-45 days: 80
+46-60 days: 70
+61-90 days: 50
+90+ days: 30
+
+Example:
+Notice: 15 days
+→ Score = 100
+
+### 8. STABILITY SCORE (Weight: 5%)
+Calculate average: Total months in all jobs / Number of jobs
+
+36+ months per job: 100
+24-35 months per job: 80
+18-23 months per job: 60
+12-17 months per job: 40
+6-11 months per job: 20
+<6 months per job: 0
+
+Example:
+Job 1: 12 months
+Job 2: 12 months
+Average = 24/2 = 12 months
+→ Score = 40
 
 ---
 
-NORMALIZATION RULES:
-- Cap total score at 45 if critical must-have skills missing
-- Penalize heavily for career gaps > 6 months
-- Penalize for average job tenure < 1 year (job hopper)
-- Penalize for domain completely unrelated to JD
+## WEIGHTED SCORE CALCULATION:
+
+weightedScore = 
+  (skillsMatch × 0.30) +
+  (experienceMatch × 0.20) +
+  (domainMatch × 0.15) +
+  (educationMatch × 0.10) +
+  (salaryFit × 0.10) +
+  (locationMatch × 0.05) +
+  (noticePeriodFit × 0.05) +
+  (stabilityScore × 0.05)
+
+Round to nearest integer
+
+Example:
+= (75 × 0.30) + (100 × 0.20) + (70 × 0.15) + (100 × 0.10) + (100 × 0.10) + (100 × 0.05) + (100 × 0.05) + (40 × 0.05)
+= 22.5 + 20 + 10.5 + 10 + 10 + 5 + 5 + 2
+= 85
 
 ---
 
-MATCH LEVELS:
-STRONG  → 80-100
-GOOD    → 65-79
-PARTIAL → 50-64
-WEAK    → below 50
+## RISK PENALTY (0-25):
+
+Deduct for:
+- Career gap > 6mo: -5
+- Job hopper (avg < 1yr): -8
+- Domain mismatch: -10
+- Experience gap > 3yrs: -7
+- Salary > 30% over: -5
+
+Sum penalties (max -25)
+riskPenalty = total
+
+Example: -10
 
 ---
 
-RISK PENALTY (0-25 deduction):
-- Career gap > 6 months: -5
-- Career gap > 12 months: -10
-- Average job tenure < 1 year: -8
-- Domain completely unrelated: -10
-- Major experience discrepancy: -7
-- Salary expectation > 30% over budget: -5
+## FINAL SCORE:
 
-FinalAdjustedScore = weightedScore - totalRiskPenalty (min 0)
+finalAdjustedScore = weightedScore - riskPenalty
+Minimum: 0
+Maximum: 100
+
+Example: 85 - 10 = 75
 
 ---
 
-DECISION THRESHOLDS:
-SHORTLIST → FinalAdjustedScore >= 70
-HOLD      → FinalAdjustedScore >= 50
-REJECT    → FinalAdjustedScore < 50
+## MATCH LEVEL:
+
+80-100: STRONG
+65-79: GOOD
+50-64: PARTIAL
+0-49: WEAK
+
+Example: 75 → GOOD
 
 ---
 
-### Candidate Form Data (entered by recruiter):
+## DECISION:
+
+>= 70: SHORTLIST
+50-69: HOLD
+< 50: REJECT
+
+Example: 75 → SHORTLIST
+
+---
+
+### Candidate Form Data:
 firstName: ${formData.firstName || 'Not provided'}
 lastName: ${formData.lastName || 'Not provided'}
 email: ${formData.email || 'Not provided'}
@@ -217,85 +465,77 @@ relevantExperience: ${formData.relevantExperience || 'Not provided'} years
 noticePeriod: ${formData.noticePeriod || 'Not provided'}
 currentSalary: ${formData.currentSalary ? '₹' + Number(formData.currentSalary).toLocaleString('en-IN') : 'Not provided'} per annum
 expectedSalary: ${formData.expectedSalary ? '₹' + Number(formData.expectedSalary).toLocaleString('en-IN') : 'Not provided'} per annum
-writeup: ${formData.writeup || 'Not provided'}
 
-### Resume Text (extracted from PDF/DOC):
-${resumeText.substring(0, 6000)}
+### Resume Text:
+${resumeText.substring(0, 8000)}
 
 ### Job Description:
 ${jobDescription}
 
 ---
 
-### REQUIRED OUTPUT (STRICT JSON — no other text):
+### REQUIRED OUTPUT (JSON ONLY - NO OTHER TEXT):
 
 {
   "candidateProfile": {
-    "extractedName": "full name from resume or Not Found",
-    "extractedEmail": "email from resume or Not Found",
-    "extractedMobile": "10-digit mobile or Not Found",
-    "currentCompany": "current employer or Not Found",
-    "currentDesignation": "current title or Not Found",
+    "extractedName": "name or Not Found",
+    "extractedEmail": "email or Not Found",
+    "extractedMobile": "mobile or Not Found",
+    "currentCompany": "company or Not Found",
+    "currentDesignation": "title or Not Found",
     "skills": ["skill1", "skill2"],
-    "domain": "primary domain e.g. Software Engineering, Civil Engineering, Finance",
-    "actualTotalExperience": "X years from resume",
+    "domain": "primary domain",
+    "actualTotalExperience": "X years",
     "averageJobTenureYears": 0.0,
     "standardizedLocation": "City, State",
     "education": [
       {
-        "degree": "degree name",
-        "institution": "college name",
+        "degree": "degree",
+        "institution": "college",
         "year": 2020,
         "isMinimumMet": true
       }
     ],
-    "languages": ["English", "Hindi"],
-    "certifications": ["cert1"],
-    "careerGaps": [
-      {
-        "fromYear": 2022,
-        "toYear": 2023,
-        "durationMonths": 6,
-        "reason": "if mentioned or Unknown"
-      }
-    ],
+    "languages": [],
+    "certifications": [],
+    "careerGaps": [],
     "jobHistory": [
       {
-        "company": "company name",
+        "company": "company",
         "designation": "title",
-        "fromYear": 2020,
-        "toYear": 2022,
-        "durationMonths": 24,
-        "domain": "domain of work"
+        "fromYear": 2023,
+        "toYear": 2024,
+        "durationMonths": 12,
+        "domain": "domain"
       }
     ]
   },
 
   "screening": {
     "experienceRange": {
-      "required": "5-10 years",
-      "actual": "6 years",
+      "required": "X-Y years",
+      "actual": "X years",
       "status": "MEETS / BELOW / EXCEEDS"
     },
     "salaryFit": {
-      "budget": "₹20L-₹40L",
-      "expected": "₹20L",
+      "budget": "₹XXL-₹YYL",
+      "expected": "₹ZZL",
       "deltaPercent": 0,
       "status": "WITHIN / SLIGHTLY_OVER / OVER"
     },
     "locationFit": {
-      "jobLocation": "Bangalore",
-      "candidateLocation": "Mumbai",
+      "jobLocation": "city",
+      "candidateLocation": "city",
       "status": "EXACT / NEARBY / DIFFERENT",
       "relocationWilling": false
     },
     "noticePeriod": {
-      "required": "0-30 days",
-      "actual": "30 days",
+      "required": "days",
+      "actual": "days",
       "status": "IMMEDIATE / ACCEPTABLE / LONG"
     },
-    "keywordsFound": ["React.js", "Node.js"],
-    "keywordsMissing": ["MongoDB", "JavaScript"],
+    "keywordsFound": [],
+    "keywordsMissing": [],
     "careerGapAnalysis": {
       "hasGaps": false,
       "totalGapMonths": 0,
@@ -303,19 +543,19 @@ ${jobDescription}
       "gapRisk": "LOW / MEDIUM / HIGH"
     },
     "stabilityAnalysis": {
-      "averageTenureYears": 0,
+      "averageTenureYears": 0.0,
       "isJobHopper": false,
       "stabilityRisk": "LOW / MEDIUM / HIGH",
       "detail": "explanation"
     },
     "domainMatch": {
-      "jobDomain": "Software Engineering",
-      "candidateDomain": "Software Engineering",
+      "jobDomain": "domain",
+      "candidateDomain": "domain",
       "status": "EXACT / RELATED / UNRELATED"
     },
     "educationMatch": {
-      "minimumRequired": "B.Tech/B.E.",
-      "candidateEducation": "B.Tech in Computer Science",
+      "minimumRequired": "degree",
+      "candidateEducation": "degree",
       "status": "MEETS / BELOW / EXCEEDS"
     }
   },
@@ -360,6 +600,7 @@ ${jobDescription}
     "experienceDiscrepancyDetail": "explanation",
     "locationMatch": "EXACT / NEARBY / DIFFERENT",
     "redFlags": [],
+    "greenFlags": [],
     "inconsistencies": [],
     "dataQuality": "HIGH / MEDIUM / LOW"
   },
@@ -369,14 +610,9 @@ ${jobDescription}
   "recommendation": {
     "decision": "SHORTLIST / HOLD / REJECT",
     "priorityScore": 0,
-    "justification": "clear 2-3 line explanation for admin",
-    "suggestedActions": [
-      "Action 1 for admin or interviewer",
-      "Action 2"
-    ],
-    "interviewFocusAreas": [
-      "Area to probe in interview"
-    ]
+    "justification": "explanation",
+    "suggestedActions": [],
+    "interviewFocusAreas": []
   }
 }`;
     }
@@ -384,93 +620,104 @@ ${jobDescription}
      * Build Job Description string from Job document
      */
     _buildJobDescriptionString(job) {
-        if (!job || typeof job !== 'object') {
-            return 'Job description not available';
-        }
-
-        const lines = [];
-
-        if (job.title) lines.push(`Title: ${job.title}`);
-        if (job.category) lines.push(`Category: ${job.category}`);
-        if (job.employmentType) lines.push(`Employment Type: ${job.employmentType}`);
-        if (job.experienceLevel) lines.push(`Experience Level: ${job.experienceLevel}`);
-
-        if (job.experienceRange) {
-            lines.push(`Experience Required: ${job.experienceRange.min} to ${job.experienceRange.max} years`);
-        }
-
-        if (job.salary) {
-            const min = job.salary.min ? `₹${job.salary.min.toLocaleString('en-IN')}` : 'Not specified';
-            const max = job.salary.max ? `₹${job.salary.max.toLocaleString('en-IN')}` : 'Not specified';
-            lines.push(`Salary Budget: ${min} to ${max} per annum`);
-        }
-
-        if (job.location) {
-            const loc = [];
-            if (job.location.city) loc.push(job.location.city);
-            if (job.location.state) loc.push(job.location.state);
-            if (job.location.isRemote) loc.push('Remote OK');
-            if (job.location.isHybrid) loc.push('Hybrid');
-            lines.push(`Location: ${loc.join(', ')}`);
-        }
-
-        if (job.skills?.required?.length > 0) {
-            lines.push(`MUST-HAVE Skills: ${job.skills.required.join(', ')}`);
-        }
-
-        if (job.skills?.preferred?.length > 0) {
-            lines.push(`PREFERRED Skills: ${job.skills.preferred.join(', ')}`);
-        }
-
-        if (job.description) {
-            lines.push(`\nJob Description:\n${job.description.substring(0, 1000)}`);
-        }
-
-        if (job.requirements?.length > 0) {
-            lines.push(`\nRequirements:\n${job.requirements.map(r => `- ${r}`).join('\n')}`);
-        }
-
-        if (job.responsibilities?.length > 0) {
-            lines.push(`\nResponsibilities:\n${job.responsibilities.map(r => `- ${r}`).join('\n')}`);
-        }
-
-        return lines.join('\n');
+    // ✅ Convert Mongoose document to plain object
+    const jobObj = job?.toObject ? job.toObject() : job;
+    
+    console.log('\n[AI] Building Job Description String:');
+    console.log('  - Job exists:', !!jobObj);
+    console.log('  - Job ID:', jobObj?._id);
+    console.log('  - Job title:', jobObj?.title);
+    console.log('  - Has required skills:', jobObj?.skills?.required?.length || 0);
+    console.log('  - Required skills:', jobObj?.skills?.required);
+    
+    if (!jobObj || typeof jobObj !== 'object') {
+        console.warn('[AI] Job description not available or invalid');
+        return 'Job description not available';
     }
+
+    const lines = [];
+
+    if (jobObj.title) lines.push(`Title: ${jobObj.title}`);
+    if (jobObj.category) lines.push(`Category: ${jobObj.category}`);
+    if (jobObj.employmentType) lines.push(`Employment Type: ${jobObj.employmentType}`);
+    if (jobObj.experienceLevel) lines.push(`Experience Level: ${jobObj.experienceLevel}`);
+
+    if (jobObj.experienceRange) {
+        lines.push(`Experience Required: ${jobObj.experienceRange.min} to ${jobObj.experienceRange.max} years`);
+    }
+
+    if (jobObj.salary) {
+        const min = jobObj.salary.min ? `₹${jobObj.salary.min.toLocaleString('en-IN')}` : 'Not specified';
+        const max = jobObj.salary.max ? `₹${jobObj.salary.max.toLocaleString('en-IN')}` : 'Not specified';
+        lines.push(`Salary Budget: ${min} to ${max} per annum`);
+    }
+
+    if (jobObj.location) {
+        const loc = [];
+        if (jobObj.location.city) loc.push(jobObj.location.city);
+        if (jobObj.location.state) loc.push(jobObj.location.state);
+        if (jobObj.location.isRemote) loc.push('Remote OK');
+        if (jobObj.location.isHybrid) loc.push('Hybrid');
+        lines.push(`Location: ${loc.join(', ')}`);
+    }
+
+    if (jobObj.skills?.required?.length > 0) {
+        lines.push(`MUST-HAVE Skills: ${jobObj.skills.required.join(', ')}`);
+    }
+
+    if (jobObj.skills?.preferred?.length > 0) {
+        lines.push(`PREFERRED Skills: ${jobObj.skills.preferred.join(', ')}`);
+    }
+
+    if (jobObj.description) {
+        lines.push(`\nJob Description:\n${jobObj.description.substring(0, 1000)}`);
+    }
+
+    if (jobObj.requirements?.length > 0) {
+        lines.push(`\nRequirements:\n${jobObj.requirements.map(r => `- ${r}`).join('\n')}`);
+    }
+
+    if (jobObj.responsibilities?.length > 0) {
+        lines.push(`\nResponsibilities:\n${jobObj.responsibilities.map(r => `- ${r}`).join('\n')}`);
+    }
+
+    const finalString = lines.join('\n');
+    console.log('[AI] Job Description String Length:', finalString.length);
+    
+    return finalString;
+}
 
     /**
      * Structure AI result into our Candidate model format
      */
-    _structureAIResult(aiResult, formData) {
-        const profile = aiResult.candidateProfile || {};
-        const scoring = aiResult.scoring || {};
+_structureAIResult(aiResult, formData) {
+    const profile = aiResult.candidateProfile || {};
+    const scoring = aiResult.scoring || {};
 
-        return {
-            // Personal info — prefer form data, fallback to AI extracted
-            firstName: formData.firstName || this._cleanString(profile.extractedName?.split(' ')[0]),
-            lastName: formData.lastName || this._cleanString(profile.extractedName?.split(' ').slice(1).join(' ')),
-            email: formData.email || this._cleanEmail(profile.extractedEmail),
-            mobile: formData.mobile || this._cleanMobile(profile.extractedMobile),
+    return {
+        firstName: formData.firstName || this._cleanString(profile.extractedName?.split(' ')[0]),
+        lastName: formData.lastName || this._cleanString(profile.extractedName?.split(' ').slice(1).join(' ')),
+        email: formData.email || this._cleanEmail(profile.extractedEmail),
+        mobile: formData.mobile || this._cleanMobile(profile.extractedMobile),
 
-            // Profile from AI
-            profile: {
-                currentCompany: this._cleanString(profile.currentCompany),
-                currentDesignation: this._cleanString(profile.currentDesignation),
-                totalExperience: formData.totalExperience || null,
-                relevantExperience: formData.relevantExperience || null,
-                currentLocation: this._cleanString(profile.standardizedLocation) || formData.location,
-                skills: Array.isArray(profile.skills) ? profile.skills.filter(Boolean) : [],
-                education: Array.isArray(profile.education) ? profile.education : [],
-                noticePeriod: formData.noticePeriod || null,
-                currentSalary: formData.currentSalary || null,
-                expectedSalary: formData.expectedSalary || null,
-                languages: Array.isArray(profile.languages) ? profile.languages : [],
-                certifications: Array.isArray(profile.certifications) ? profile.certifications : []
-            },
+        profile: {
+            currentCompany: this._cleanString(profile.currentCompany),
+            currentDesignation: this._cleanString(profile.currentDesignation),
+            totalExperience: formData.totalExperience || null,
+            relevantExperience: formData.relevantExperience || null,
+            currentLocation: this._cleanString(profile.standardizedLocation) || formData.location,
+            skills: Array.isArray(profile.skills) ? profile.skills.filter(Boolean) : [],
+            education: Array.isArray(profile.education) ? profile.education : [],
+            languages: Array.isArray(profile.languages) ? profile.languages : [],
+            certifications: Array.isArray(profile.certifications) ? profile.certifications : [],
+            noticePeriod: formData.noticePeriod || null,
+            currentSalary: formData.currentSalary || null,
+            expectedSalary: formData.expectedSalary || null
+        },
 
-            // Summary from recommendation
-            summary: aiResult.recommendation?.justification || null
-        };
-    }
+        summary: aiResult.recommendation?.justification || null
+    };
+}
 
     /**
      * Build confidence object from AI scoring
@@ -493,57 +740,78 @@ ${jobDescription}
      * Extract text from resume URL
      */
     async _extractTextFromUrl(url) {
-        try {
-            const isPdf =
-                url.toLowerCase().includes('.pdf') ||
-                url.includes('/raw/');
+    try {
+        const fileName = url.toLowerCase();
 
-            if (isPdf) {
-                return await this._extractFromPdf(url);
-            }
-
-            const response = await axios.get(url, {
-                responseType: 'text',
-                timeout: 30000
-            });
-
-            return response.data;
-
-        } catch (error) {
-            console.error(`[AI] URL extraction error: ${error.message}`);
-            throw new Error(`Could not download resume: ${error.message}`);
+        // Check file type
+        if (fileName.includes('.docx') || fileName.includes('.doc')) {
+            return await this._extractFromDoc(url);
         }
+
+        // PDF or raw Cloudinary upload
+        if (fileName.includes('.pdf') || url.includes('/raw/')) {
+            return await this._extractFromPdf(url);
+        }
+
+        // Default: try as text
+        const response = await axios.get(url, {
+            responseType: 'text',
+            timeout: 30000
+        });
+        return response.data;
+
+    } catch (error) {
+        console.error(`[AI] URL extraction error: ${error.message}`);
+        throw new Error(`Could not download resume: ${error.message}`);
     }
+}
 
     /**
      * Extract text from PDF
      */
-    async _extractTextFromUrl(url) {
+    async _extractFromPdf(url) {
+    try {
+        console.log('[AI] Extracting text from PDF...');
+        
+        const response = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout: 30000,
+            maxContentLength: 10 * 1024 * 1024
+        });
+
+        const buffer = Buffer.from(response.data);
+
+        // Try pdf-parse first
         try {
-            const fileName = url.toLowerCase();
+            const pdfParse = require('pdf-parse');
+            const data = await pdfParse(buffer);
 
-            // ✅ Check file type
-            if (fileName.includes('.docx') || fileName.includes('.doc')) {
-                return await this._extractFromDoc(url);
+            if (data.text && data.text.trim().length > 50) {
+                console.log(`[AI] ✅ PDF parsed: ${data.text.length} chars, ${data.numpages} pages`);
+                return data.text;
             }
-
-            // PDF or raw Cloudinary upload
-            if (fileName.includes('.pdf') || url.includes('/raw/')) {
-                return await this._extractFromPdf(url);
-            }
-
-            // Default: try as text
-            const response = await axios.get(url, {
-                responseType: 'text',
-                timeout: 30000
-            });
-            return response.data;
-
-        } catch (error) {
-            console.error(`[AI] URL extraction error: ${error.message}`);
-            throw new Error(`Could not download resume: ${error.message}`);
+        } catch (pdfError) {
+            console.log('[AI] pdf-parse error:', pdfError.message);
         }
+
+        // Fallback to buffer extraction
+        const text = buffer
+            .toString('utf-8')
+            .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (text.length > 100) {
+            console.log(`[AI] PDF fallback extraction: ${text.length} chars`);
+            return text;
+        }
+
+        return `Resume file: ${url}`;
+
+    } catch (error) {
+        throw new Error(`PDF extraction failed: ${error.message}`);
     }
+}
 
     /**
      * Extract text from DOC/DOCX file

@@ -91,6 +91,21 @@ class JobAccessService {
       { $sort: sort },
       { $skip: skip },
       { $limit: limit },
+      // Join company data
+      {
+        $lookup: {
+          from: 'companies',
+          localField: 'company',
+          foreignField: '_id',
+          as: 'companyInfo'
+        }
+      },
+      {
+        $unwind: {
+          path: '$companyInfo',
+          preserveNullAndEmptyArrays: true
+        }
+      },
       {
         $lookup: {
           from: 'candidates',
@@ -119,6 +134,11 @@ class JobAccessService {
       },
       {
         $addFields: {
+          company: {
+            companyName: '$companyInfo.companyName',
+            logo: '$companyInfo.kyc.logo',
+            industry: '$companyInfo.kyc.industry'
+          },
           '_meta.mySubmissions': {
             $ifNull: [{ $arrayElemAt: ['$mySubmissions.count', 0] }, 0]
           },
@@ -126,7 +146,8 @@ class JobAccessService {
             $arrayElemAt: ['$mySubmissions.latestStatus', 0]
           }
         }
-      }
+      },
+      { $project: { companyInfo: 0, mySubmissions: 0 } }
     ]);
 
     // =========================

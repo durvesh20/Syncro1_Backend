@@ -9,6 +9,7 @@ const notificationEngine = require('../services/notificationEngine');
 const jobAccessService = require('../services/jobAccessService');
 const candidateScoringService = require('../services/candidateScoringService');
 const JobInterest = require('../models/JobInterest');
+ const candidateQueueService = require('../services/candidateQueueService');
 
 // ============================================================
 // PROFILE ROUTES
@@ -1443,6 +1444,17 @@ exports.submitCandidate = async (req, res) => {
     };
 
     notifyPartner();
+
+    // ✅ Trigger AI parse + score + admin queue (fire and forget)
+   const processCandidate = async () => {
+  try {
+    await candidateQueueService.processAfterConsent(candidate._id);
+  } catch (err) {
+    console.error('[QUEUE] Processing failed:', err.message);
+  }
+};
+
+processCandidate();
 
     // ✅ Success response
     res.status(201).json({

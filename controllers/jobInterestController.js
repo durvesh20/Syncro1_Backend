@@ -185,7 +185,11 @@ exports.getMyInterestedJobs = async (req, res) => {
             })
                 .populate({
                     path: 'job',
-                    select: 'title category location salary experienceLevel vacancies status approvalStatus metrics eligiblePlans isUrgent'
+                    select: 'title category location salary experienceLevel vacancies status approvalStatus metrics eligiblePlans isUrgent',
+                    populate: {
+                        path: 'company',
+                        select: 'companyName kyc.logo kyc.industry'
+                    }
                 })
                 .sort({ createdAt: -1 })
                 .skip(skip)
