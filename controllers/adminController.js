@@ -80,8 +80,9 @@ exports.getPendingVerifications = async (req, res) => {
           'firstName lastName firmName designation city state ' +
           'verificationStatus verificationNotes rejectionReason ' +
           'verifiedAt verifiedBy submittedAt profileCompletion ' +
-          'agreement documents uniqueId'
-        );
+          'agreement documents uniqueId ' +
+          'firmDetails Syncro1Competency geographicReach compliance commercialDetails' // Added missing firm details
+);
     }
 
     if (!type || type === 'companies') {
@@ -95,8 +96,8 @@ exports.getPendingVerifications = async (req, res) => {
           'companyName decisionMakerName designation city state ' +
           'verificationStatus verificationNotes rejectionReason ' +
           'verifiedAt verifiedBy profileCompletion documents ' +
-          'kyc.industry kyc.companyType uniqueId'
-        );
+          'kyc hiringPreferences billing legalConsents  uniqueId' 
+);
     }
 
     // ✅ Enrich with summary flags

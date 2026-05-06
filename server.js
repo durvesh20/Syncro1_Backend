@@ -172,8 +172,7 @@ app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/onboarding', require('./routes/onboardingRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/invoices', require('./routes/invoiceRoutes'));
-
-// ✅ These 3 were missing — now added ONCE
+app.use('/api/cities', require('./routes/citySuggestionRoutes'));
 app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
 app.use('/api/agreements', require('./routes/agreementRoutes'));
 app.use('/api/ai', require('./routes/aiRoutes'));
