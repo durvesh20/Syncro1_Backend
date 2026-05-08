@@ -143,7 +143,10 @@ const candidateSchema = new mongoose.Schema({
       'JOINED',
       'REJECTED',
       'WITHDRAWN',
-      'ON_HOLD'
+      'ON_HOLD',
+      'SLOT_ASSIGNED',        // Partner assigned candidate to a slot
+      'INTERVIEW_SCHEDULED',  // Slot confirmed (date is set)
+      'INTERVIEWED',  
     ],
     default: 'DRAFT'
   },
@@ -173,6 +176,10 @@ const candidateSchema = new mongoose.Schema({
   // Interview Details
   interviews: [{
     round: Number,
+    slot: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InterviewSlot'
+    },
     type: {
       type: String,
       enum: ['Phone', 'Video', 'In-Person', 'Technical', 'HR']
@@ -476,6 +483,37 @@ resumeAnalysis: {
     },
     rejectionReason: String
   },
+  // ✅ ONLY ADD this one field to track which job slot the candidate is booked in:
+assignedSlot: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'InterviewSlot',
+  default: null,
+},
+interviewConfig: {
+  mode: {
+    type: String,
+    enum: ['In-Person', 'Virtual'],
+    default: 'Virtual'
+  },
+  details: String, // Meeting link or Office address
+  interviewer: String,
+  isConfirmedByCompany: {
+    type: Boolean,
+    default: false
+  },
+  confirmedAt: Date,
+  confirmationToken: {
+    type: String,
+    index: true,
+    sparse: true
+  },
+  candidateResponse: {
+    type: String,
+    enum: ['PENDING', 'ACCEPTED', 'DECLINED'],
+    default: 'PENDING'
+  },
+  respondedAt: Date
+},
 
   // ✅ NEW: Consent tracking (WhatsApp)
   whatsappConsent: {

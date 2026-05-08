@@ -229,4 +229,175 @@ router.get('/consent/disagree/:token', async (req, res) => {
   }
 });
 
+// ================================================================
+// INTERVIEW CONFIRMATION ROUTES
+// Called from WhatsApp template buttons
+// Agree:    GET /api/candidates/interview/agree/:token
+// Disagree: GET /api/candidates/interview/disagree/:token
+// ================================================================
+
+// @desc    Candidate clicks "I Agree" to interview on WhatsApp
+// @route   GET /api/candidates/interview/agree/:token
+router.get("/interview/agree/:token", async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ success: false, message: "Invalid link" });
+    }
+
+    const candidate = await Candidate.findOne({
+      "interviewConfig.confirmationToken": token,
+    })
+      .populate("job", "title")
+      .populate("company", "companyName user")
+      .populate("submittedBy", "firmName user");
+
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: "Invalid or expired link" });
+    }
+
+    if (candidate.interviewConfig.candidateResponse === "ACCEPTED") {
+      return res.json({
+        success: true,
+        message: "You have already confirmed your availability for this interview.",
+        data: { status: "ALREADY_ACCEPTED" },
+      });
+    }
+
+    // Update response
+    candidate.interviewConfig.candidateResponse = "ACCEPTED";
+    candidate.interviewConfig.respondedAt = new Date();
+
+    candidate.statusHistory.push({
+      status: candidate.status,
+      changedAt: new Date(),
+      notes: "Candidate confirmed interview availability via WhatsApp",
+    });
+
+    await candidate.save();
+
+    // Notify Company & Partner
+    const notifyStakeholders = async () => {
+      try {
+        const notificationEngine = require("../services/notificationEngine");
+        
+        // Notify Company
+        if (candidate.company?.user) {
+          await notificationEngine.send({
+            recipientId: candidate.company.user,
+            type: "INTERVIEW_CONFIRMED",
+            title: "✅ Interview Confirmed",
+            message: `${candidate.firstName} ${candidate.lastName} has confirmed availability for the interview for "${candidate.job?.title}".`,
+            data: { candidateId: candidate._id, jobId: candidate.job?._id },
+            channels: { inApp: true, email: true },
+          });
+        }
+
+        // Notify Partner
+        if (candidate.submittedBy?.user) {
+          await notificationEngine.send({
+            recipientId: candidate.submittedBy.user,
+            type: "INTERVIEW_CONFIRMED",
+            title: "✅ Candidate Confirmed Interview",
+            message: `Your candidate ${candidate.firstName} has confirmed the interview with ${candidate.company?.companyName}.`,
+            data: { candidateId: candidate._id },
+            channels: { inApp: true, email: true },
+          });
+        }
+      } catch (err) {
+        console.error("[INTERVIEW] Notification failed:", err.message);
+      }
+    };
+
+    notifyStakeholders();
+
+    res.json({
+      success: true,
+      message: "Great! Your availability has been shared with the employer. We wish you all the best for your interview!",
+      data: {
+        status: "ACCEPTED",
+        candidateName: `${candidate.firstName} ${candidate.lastName}`,
+        jobTitle: candidate.job?.title,
+        company: candidate.company?.companyName,
+      },
+    });
+  } catch (error) {
+    console.error("[INTERVIEW] Agree error:", error.message);
+    res.status(500).json({ success: false, message: "Failed to confirm" });
+  }
+});
+
+// @desc    Candidate clicks "I Disagree" to interview on WhatsApp
+// @route   GET /api/candidates/interview/disagree/:token
+router.get("/interview/disagree/:token", async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const candidate = await Candidate.findOne({
+      "interviewConfig.confirmationToken": token,
+    })
+      .populate("job", "title")
+      .populate("company", "companyName user")
+      .populate("submittedBy", "firmName user");
+
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: "Invalid or expired link" });
+    }
+
+    if (candidate.interviewConfig.candidateResponse !== "PENDING") {
+      return res.json({
+        success: true,
+        message: "Response already recorded.",
+        data: { status: candidate.interviewConfig.candidateResponse },
+      });
+    }
+
+    // Update response
+    candidate.interviewConfig.candidateResponse = "DECLINED";
+    candidate.interviewConfig.respondedAt = new Date();
+    candidate.status = "ON_HOLD"; // Put on hold if they decline interview
+
+    candidate.statusHistory.push({
+      status: "ON_HOLD",
+      changedAt: new Date(),
+      notes: "Candidate declined interview availability via WhatsApp",
+    });
+
+    await candidate.save();
+
+    // Notify Company & Partner
+    const notifyStakeholders = async () => {
+      try {
+        const notificationEngine = require("../services/notificationEngine");
+        
+        // Notify Company
+        if (candidate.company?.user) {
+          await notificationEngine.send({
+            recipientId: candidate.company.user,
+            type: "INTERVIEW_DECLINED",
+            title: "❌ Interview Declined",
+            message: `${candidate.firstName} ${candidate.lastName} has declined the interview for "${candidate.job?.title}".`,
+            data: { candidateId: candidate._id },
+            channels: { inApp: true, email: true },
+          });
+        }
+      } catch (err) {
+        console.error("[INTERVIEW] Notification failed:", err.message);
+      }
+    };
+
+    notifyStakeholders();
+
+    res.json({
+      success: true,
+      message: "Your response has been recorded. The employer has been notified.",
+      data: { status: "DECLINED" },
+    });
+  } catch (error) {
+    console.error("[INTERVIEW] Disagree error:", error.message);
+    res.status(500).json({ success: false, message: "Failed to record response" });
+  }
+});
+
 module.exports = router;

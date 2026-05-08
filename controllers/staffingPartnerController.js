@@ -9,7 +9,9 @@ const notificationEngine = require('../services/notificationEngine');
 const jobAccessService = require('../services/jobAccessService');
 const candidateScoringService = require('../services/candidateScoringService');
 const JobInterest = require('../models/JobInterest');
- const candidateQueueService = require('../services/candidateQueueService');
+const InterviewSlot = require('../models/InterviewSlot');
+const candidateQueueService = require('../services/candidateQueueService');
+const whatsappService = require('../services/whatsappService');
 
 // ============================================================
 // PROFILE ROUTES
@@ -1487,6 +1489,348 @@ processCandidate();
   }
 };
 
+// PARTNER: Get all available slots for a job
+// GET /api/partners/jobs/:jobId/interview-slots
+exports.getAvailableSlotsForPartner = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({ success: false, message: 'Partner not found' });
+    }
+
+    const job = await Job.findById(req.params.jobId).populate('company', 'companyName');
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    // Get all ACTIVE slots for this job
+    const slots = await InterviewSlot.find({
+      job: req.params.jobId,
+      status: 'ACTIVE',
+    }).sort({ date: 1, startTime: 1 });
+
+    // Get partner's shortlisted candidates for this job
+    const partnerCandidates = await Candidate.find({
+      job: req.params.jobId,
+      submittedBy: partner._id,
+      status: 'SHORTLISTED', // Only shortlisted ones can be assigned
+    }).select('firstName lastName email mobile status assignedSlot profile.currentDesignation');
+
+    // For each slot show what partner needs to know
+    const formattedSlots = slots.map((slot) => {
+      // Which of THIS partner's candidates are already in this slot
+      const partnerBookingsInSlot = slot.bookedCandidates.filter(
+        (b) =>
+          b.partner.toString() === partner._id.toString() &&
+          b.bookingStatus === 'BOOKED'
+      );
+
+      return {
+        slotId: slot._id,
+        date: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        maxCandidates: slot.maxCandidates,
+        availableSpots: slot.availableSpots,
+        isFull: slot.availableSpots === 0,
+        notes: slot.notes,
+        // How many of YOUR candidates are in this slot
+        yourCandidatesBooked: partnerBookingsInSlot.length,
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        jobId: job._id,
+        jobTitle: job.title,
+        company: job.company?.companyName,
+        jobDeadline: job.deadline,
+
+        // Slots available for booking
+        availableSlots: formattedSlots.filter((s) => !s.isFull),
+        fullSlots: formattedSlots.filter((s) => s.isFull),
+        totalSlots: formattedSlots.length,
+
+        // Partner's candidates eligible for slot assignment
+        yourShortlistedCandidates: partnerCandidates.map((c) => ({
+          candidateId: c._id,
+          name: `${c.firstName} ${c.lastName}`,
+          email: c.email,
+          designation: c.profile?.currentDesignation,
+          status: c.status,
+          alreadyAssigned: !!c.assignedSlot,
+          assignedSlotId: c.assignedSlot,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('[PARTNER] Get available slots error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get interview slots',
+      error: error.message,
+    });
+  }
+};
+
+// PARTNER: Assign a shortlisted candidate to a slot
+// POST /api/partners/jobs/:jobId/interview-slots/:slotId/assign
+exports.assignCandidateToSlot = async (req, res) => {
+  try {
+    const { candidateId } = req.body;
+
+    if (!candidateId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide candidateId',
+      });
+    }
+
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({ success: false, message: 'Partner not found' });
+    }
+
+    // ── Validate candidate ────────────────────────────────────────────
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found' });
+    }
+
+    // Candidate must belong to this partner
+    if (candidate.submittedBy.toString() !== partner._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'This candidate does not belong to you',
+      });
+    }
+
+    // Candidate must be for this job
+    if (candidate.job.toString() !== req.params.jobId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Candidate is not applied for this job',
+      });
+    }
+
+    // Candidate must be SHORTLISTED
+    if (candidate.status !== 'SHORTLISTED') {
+      return res.status(400).json({
+        success: false,
+        message: `Only SHORTLISTED candidates can be assigned to slots. Current status: ${candidate.status}`,
+      });
+    }
+
+    // Candidate must not already be assigned to a slot
+    if (candidate.assignedSlot) {
+      return res.status(400).json({
+        success: false,
+        message: 'Candidate is already assigned to a slot',
+        assignedSlotId: candidate.assignedSlot,
+        hint: 'Remove candidate from current slot before reassigning',
+      });
+    }
+
+    // ── Validate slot ─────────────────────────────────────────────────
+    const slot = await InterviewSlot.findOne({
+      _id: req.params.slotId,
+      job: req.params.jobId,
+    });
+
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Slot not found' });
+    }
+
+    if (slot.status !== 'ACTIVE') {
+      return res.status(400).json({
+        success: false,
+        message: `Slot is not available. Status: ${slot.status}`,
+      });
+    }
+
+    if (slot.availableSpots <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'This slot is full. Please choose another slot.',
+        availableSpots: 0,
+      });
+    }
+
+    // ── Check if candidate already in this slot (duplicate check) ─────
+    const alreadyInSlot = slot.bookedCandidates.some(
+      (b) =>
+        b.candidate.toString() === candidateId &&
+        b.bookingStatus === 'BOOKED'
+    );
+
+    if (alreadyInSlot) {
+      return res.status(400).json({
+        success: false,
+        message: 'Candidate is already booked in this slot',
+      });
+    }
+
+    // ── Book the candidate ────────────────────────────────────────────
+    slot.bookedCandidates.push({
+      candidate: candidateId,
+      partner: partner._id,
+      bookedAt: new Date(),
+      bookingStatus: 'BOOKED',
+    });
+
+    // Decrease available spots
+    slot.availableSpots -= 1;
+
+    // Mark slot as FULL if no spots remain
+    if (slot.availableSpots === 0) {
+      slot.status = 'FULL';
+    }
+
+    await slot.save();
+
+    // ── Update candidate ──────────────────────────────────────────────
+    candidate.assignedSlot = slot._id;
+    candidate.status = 'SLOT_ASSIGNED';
+
+    // Record in interviews array for history
+    candidate.interviews.push({
+      round: candidate.interviews.length + 1,
+      slot: slot._id,
+      scheduledAt: slot.date,
+      type: 'Video', // Defaulting to Video for now
+      result: 'PENDING'
+    });
+
+    candidate.statusHistory.push({
+      status: 'SLOT_ASSIGNED',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: 'PARTNER',
+      notes: `Assigned to interview slot on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}`,
+      metadata: {
+        slotId: slot._id,
+        slotDate: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+      },
+    });
+
+    await candidate.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Candidate assigned to interview slot successfully',
+      data: {
+        candidate: {
+          id: candidate._id,
+          name: `${candidate.firstName} ${candidate.lastName}`,
+          status: candidate.status,
+        },
+        slot: {
+          slotId: slot._id,
+          date: slot.date,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          remainingSpots: slot.availableSpots,
+          slotStatus: slot.status,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('[PARTNER] Assign candidate to slot error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign candidate to slot',
+      error: error.message,
+    });
+  }
+};
+
+// PARTNER: Remove candidate from a slot (unassign)
+// DELETE /api/partners/jobs/:jobId/interview-slots/:slotId/assign/:candidateId
+exports.removeCandidateFromSlot = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({ success: false, message: 'Partner not found' });
+    }
+
+    const slot = await InterviewSlot.findOne({
+      _id: req.params.slotId,
+      job: req.params.jobId,
+    });
+
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Slot not found' });
+    }
+
+    // Find the booking
+    const booking = slot.bookedCandidates.find(
+      (b) =>
+        b.candidate.toString() === req.params.candidateId &&
+        b.partner.toString() === partner._id.toString() &&
+        b.bookingStatus === 'BOOKED'
+    );
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found or already cancelled',
+      });
+    }
+
+    // Cancel booking
+    booking.bookingStatus = 'CANCELLED';
+    booking.cancelledAt = new Date();
+    booking.cancelReason = req.body.reason || 'Partner removed candidate';
+
+    // Restore available spot
+    slot.availableSpots += 1;
+
+    // Reactivate slot if it was FULL
+    if (slot.status === 'FULL') {
+      slot.status = 'ACTIVE';
+    }
+
+    await slot.save();
+
+    // Update candidate status back to SHORTLISTED
+    await Candidate.findByIdAndUpdate(req.params.candidateId, {
+      $set: {
+        assignedSlot: null,
+        status: 'SHORTLISTED',
+      },
+      $push: {
+        statusHistory: {
+          status: 'SHORTLISTED',
+          changedBy: req.user._id,
+          changedAt: new Date(),
+          changedByRole: 'PARTNER',
+          notes: 'Removed from interview slot — back to shortlisted',
+          metadata: { removedFromSlot: slot._id },
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      message: 'Candidate removed from slot successfully',
+      data: {
+        slotId: slot._id,
+        availableSpots: slot.availableSpots,
+        slotStatus: slot.status,
+      },
+    });
+  } catch (error) {
+    console.error('[PARTNER] Remove candidate from slot error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to remove candidate from slot',
+      error: error.message,
+    });
+  }
+};
 // ============================================================
 // RESUME UPDATE (after submission — separate route)
 // ============================================================
@@ -1601,8 +1945,9 @@ exports.getMySubmissions = async (req, res) => {
         'profile.noticePeriod profile.currentSalary profile.expectedSalary ' +
         'profile.writeup profile.currentCompany profile.currentDesignation ' +
         'resume whatsappConsent.status resumeAnalysis.profileScore ' +
-        'resumeAnalysis.matchLevel createdAt job company'
-      );
+        'resumeAnalysis.matchLevel createdAt job company assignedSlot'
+      )
+      .populate('assignedSlot', 'date startTime endTime status');
 
     const hasMore = submissions.length > limit;
     const results = hasMore ? submissions.slice(0, limit) : submissions;
@@ -1639,7 +1984,8 @@ exports.getSubmission = async (req, res) => {
       submittedBy: partner._id
     })
       .populate('job', 'title company commission')
-      .populate('company', 'companyName');
+      .populate('company', 'companyName')
+      .populate('assignedSlot', 'date startTime endTime status');
 
     if (!submission) {
       return res.status(404).json({

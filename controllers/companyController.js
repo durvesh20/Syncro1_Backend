@@ -1,10 +1,13 @@
 // backend/controllers/companyController.js
+const crypto = require('crypto');
 const Company = require("../models/Company");
 const User = require("../models/User");
 const Job = require("../models/Job");
 const Candidate = require("../models/Candidate");
 const candidateLifecycleService = require("../services/candidateLifecycleService");
 const StatusMachine = require("../utils/statusMachine");
+const InterviewSlot = require("../models/InterviewSlot");
+const whatsappService = require("../services/whatsappService");
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -20,6 +23,54 @@ const sanitizePagination = (page, limit) => ({
   page: Math.max(1, Math.min(1000, parseInt(page) || 1)),
   limit: Math.max(1, Math.min(100, parseInt(limit) || 20))
 });
+// HELPER: Add status history entry
+// ─────────────────────────────────────────────────────────────────────────────
+const addStatusHistory = (candidate, status, userId, role, notes, metadata = {}) => {
+  candidate.statusHistory.push({
+    status,
+    changedBy: userId,
+    changedByRole: role,
+    notes,
+    metadata,
+  });
+  candidate.status = status;
+};
+
+// HELPER: Convert time string (e.g. "10:00 AM" or "01:30 PM") to minutes from start of day
+const timeToMinutes = (timeStr) => {
+  if (!timeStr) return 0;
+  const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (!match) return 0;
+
+  let [_, hours, minutes, modifier] = match;
+  hours = parseInt(hours);
+  minutes = parseInt(minutes);
+
+  if (hours === 12) {
+    hours = 0;
+  }
+  if (modifier.toUpperCase() === 'PM') {
+    hours += 12;
+  }
+  return hours * 60 + minutes;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPER: Verify company owns the candidate
+// ─────────────────────────────────────────────────────────────────────────────
+const verifyCompanyOwnership = async (candidateId, userId) => {
+  const company = await Company.findOne({ user: userId });
+  if (!company) throw { statusCode: 404, message: "Company not found" };
+
+  const candidate = await Candidate.findById(candidateId);
+  if (!candidate) throw { statusCode: 404, message: "Candidate not found" };
+
+  if (candidate.company.toString() !== company._id.toString()) {
+    throw { statusCode: 403, message: "Not authorized" };
+  }
+
+  return { company, candidate };
+};
 
 // ==================== 1. PRIMARY ACCOUNT (Decision Maker) ====================
 
@@ -786,14 +837,24 @@ exports.getDashboard = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const recentCandidates = await Candidate.find({ company: company._id })
+    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
+
+    const recentCandidates = await Candidate.find({ 
+      company: company._id,
+      status: { $nin: HIDDEN_STATUSES }
+    })
       .populate("job", "title")
       .populate("submittedBy", "firstName lastName")
       .sort({ createdAt: -1 })
       .limit(10);
 
     const hiringFunnel = await Candidate.aggregate([
-      { $match: { company: company._id } },
+      { 
+        $match: { 
+          company: company._id,
+          status: { $nin: HIDDEN_STATUSES }
+        } 
+      },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
 
@@ -1172,13 +1233,18 @@ exports.getJobCandidates = async (req, res) => {
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
     const { status } = req.query;
 
-    const query = { job: req.params.jobId };
-    if (status) query.status = status;
+    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
+    
+    const query = { 
+      job: req.params.jobId,
+      status: status ? status : { $nin: HIDDEN_STATUSES }
+    };
 
     const skip = (page - 1) * limit;
 
     const candidates = await Candidate.find(query)
       .populate("submittedBy", "firstName lastName firmName")
+      .populate("assignedSlot", "date startTime endTime status")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -1224,14 +1290,19 @@ exports.getAllCandidates = async (req, res) => {
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
     const { status } = req.query;
 
-    const query = { company: company._id };
-    if (status) query.status = status;
+    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
+
+    const query = { 
+      company: company._id,
+      status: status ? status : { $nin: HIDDEN_STATUSES }
+    };
 
     const skip = (page - 1) * limit;
 
     const candidates = await Candidate.find(query)
       .populate("submittedBy", "firstName lastName firmName")
       .populate("job", "title")
+      .populate("assignedSlot", "date startTime endTime status")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -1267,6 +1338,7 @@ exports.getCandidate = async (req, res) => {
     const candidate = await Candidate.findById(req.params.id)
       .populate("submittedBy", "firstName lastName firmName email")
       .populate("job", "title commission")
+      .populate("assignedSlot", "date startTime endTime status")
       .populate({
         path: "company",
         select: "companyName user",
@@ -1313,6 +1385,491 @@ exports.getCandidate = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch candidate",
+      error: error.message,
+    });
+  }
+};
+
+// @desc    Shortlist Candidate
+// @route   PUT /api/companies/candidates/:id/shortlist
+exports.shortlistCandidate = async (req, res) => {
+  try {
+    const { notes } = req.body;
+
+    const { candidate } = await verifyCompanyOwnership(
+      req.params.id,
+      req.user._id
+    );
+
+    // Only allow shortlisting from these statuses
+    const allowedFromStatuses = ["SUBMITTED", "UNDER_REVIEW"];
+    if (!allowedFromStatuses.includes(candidate.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot shortlist from current status: ${candidate.status}`,
+        data: {
+          currentStatus: candidate.status,
+          allowedFromStatuses,
+        },
+      });
+    }
+
+    addStatusHistory(
+      candidate,
+      "SHORTLISTED",
+      req.user._id,
+      "COMPANY",
+      notes || "Candidate shortlisted"
+    );
+
+    await candidate.save();
+
+    res.json({
+      success: true,
+      message: "Candidate shortlisted successfully",
+      data: {
+        candidateId: candidate._id,
+        name: candidate.name,
+        status: candidate.status,
+        nextStep: "Create interview slots via POST /candidates/:id/interview-slots",
+      },
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
+    }
+    console.error("[COMPANY] Shortlist candidate error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to shortlist candidate",
+      error: error.message,
+    });
+  }
+};
+
+
+// COMPANY: Create Interview Slots for a Job
+// POST /api/companies/jobs/:jobId/interview-slots
+exports.createInterviewSlots = async (req, res) => {
+  try {
+    const { slots } = req.body;
+    // slots = [
+    //   { date: "2024-02-15", startTime: "10:00 AM", endTime: "11:00 AM", maxCandidates: 3, notes: "..." },
+    //   { date: "2024-02-16", startTime: "02:00 PM", endTime: "04:00 PM", maxCandidates: 5 },
+    // ]
+
+    // ── Validate payload ──────────────────────────────────────────────
+    if (!slots || !Array.isArray(slots) || slots.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide at least one interview slot',
+        example: {
+          slots: [
+            {
+              date: '2024-02-15',
+              startTime: '10:00 AM',
+              endTime: '11:00 AM',
+              maxCandidates: 3,
+              notes: 'Optional notes',
+            },
+          ],
+        },
+      });
+    }
+
+    // ── Get company ───────────────────────────────────────────────────
+    const company = await Company.findOne({ user: req.user._id });
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    // ── Get job & validate ownership ──────────────────────────────────
+    const job = await Job.findById(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    if (job.company.toString() !== company._id.toString()) {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+
+    if (!job.applicationDeadline) {
+      return res.status(400).json({
+        success: false,
+        message: 'Job must have a deadline before creating interview slots',
+      });
+    }
+
+    const jobDeadline = new Date(job.applicationDeadline);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Start of today
+
+    // ── Get existing active slots for overlap check ──────────────────
+    const existingSlots = await InterviewSlot.find({
+      job: job._id,
+      status: { $ne: 'CANCELLED' }
+    });
+
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+    // ── Validate each slot ────────────────────────────────────────────
+    const invalidSlots = [];
+
+    slots.forEach((slot, index) => {
+      const errors = [];
+
+      if (!slot.date) errors.push('date is required');
+      if (!slot.startTime) errors.push('startTime is required');
+      if (!slot.endTime) errors.push('endTime is required');
+      if (!slot.maxCandidates || slot.maxCandidates < 1) {
+        errors.push('maxCandidates must be at least 1');
+      }
+
+      if (slot.date && slot.startTime && slot.endTime) {
+        const slotDate = new Date(slot.date);
+        slotDate.setHours(0, 0, 0, 0);
+
+        const startMin = timeToMinutes(slot.startTime);
+        const endMin = timeToMinutes(slot.endTime);
+
+        if (startMin >= endMin) {
+          errors.push('Start time must be before end time');
+        }
+
+        // 1. Must be today or future
+        if (slotDate < today) {
+          errors.push(`Date ${slot.date} is in the past`);
+        } else if (slotDate.getTime() === today.getTime()) {
+          // 2. If today, start time must be at least 30 mins in future (allow some buffer)
+          if (startMin < currentMinutes + 15) {
+            errors.push(`Start time ${slot.startTime} is too close to current time or in the past`);
+          }
+        }
+
+        // 3. Must be on or before job deadline
+        if (slotDate > jobDeadline) {
+          errors.push(
+            `Date ${slot.date} exceeds job deadline (${job.applicationDeadline.toLocaleDateString()})`
+          );
+        }
+
+        // 4. Check for overlaps WITHIN the new slots array
+        const internalOverlap = slots.find((other, otherIdx) => {
+          if (otherIdx === index) return false;
+          if (other.date !== slot.date) return false;
+          
+          const oStart = timeToMinutes(other.startTime);
+          const oEnd = timeToMinutes(other.endTime);
+          
+          // Overlap if (StartA < EndB) AND (EndA > StartB)
+          return (startMin < oEnd) && (endMin > oStart);
+        });
+
+        if (internalOverlap) {
+          errors.push(`Slot overlaps with another slot in this request (at index ${slots.indexOf(internalOverlap)})`);
+        }
+
+        // 5. Check for overlaps with EXISTING slots in DB
+        const dbOverlap = existingSlots.find(existing => {
+          const eDate = new Date(existing.date);
+          eDate.setHours(0, 0, 0, 0);
+          if (eDate.getTime() !== slotDate.getTime()) return false;
+
+          const eStart = timeToMinutes(existing.startTime);
+          const eEnd = timeToMinutes(existing.endTime);
+
+          return (startMin < eEnd) && (endMin > eStart);
+        });
+
+        if (dbOverlap) {
+          errors.push(`Slot overlaps with an existing slot on ${slotDate.toLocaleDateString()} (${dbOverlap.startTime} - ${dbOverlap.endTime})`);
+        }
+      }
+
+      if (errors.length > 0) {
+        invalidSlots.push({ index, slot, errors });
+      }
+    });
+
+    if (invalidSlots.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some slots have invalid data',
+        jobDeadline: job.deadline,
+        allowedDateRange: {
+          from: today.toISOString().split('T')[0],
+          to: jobDeadline.toISOString().split('T')[0],
+        },
+        invalidSlots,
+      });
+    }
+
+    // ── Create slots ──────────────────────────────────────────────────
+    const createdSlots = await InterviewSlot.insertMany(
+      slots.map((slot) => ({
+        job: job._id,
+        company: company._id,
+        date: new Date(slot.date),
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        maxCandidates: slot.maxCandidates,
+        availableSpots: slot.maxCandidates, // Initially all spots are available
+        notes: slot.notes || null,
+        status: 'ACTIVE',
+      }))
+    );
+
+    res.status(201).json({
+      success: true,
+      message: `${createdSlots.length} interview slot(s) created successfully`,
+      data: {
+        jobId: job._id,
+        jobTitle: job.title,
+        jobDeadline: job.deadline,
+        allowedDateRange: {
+          from: today.toISOString().split('T')[0],
+          to: jobDeadline.toISOString().split('T')[0],
+        },
+        totalSlotsCreated: createdSlots.length,
+        slots: createdSlots,
+        nextStep:
+          'Partners will now see these slots and assign their shortlisted candidates',
+      },
+    });
+  } catch (error) {
+    console.error('[COMPANY] Create interview slots error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create interview slots',
+      error: error.message,
+    });
+  }
+};
+
+// COMPANY: Get all slots for a job (Company view — sees all bookings)
+// GET /api/companies/jobs/:jobId/interview-slots
+exports.getJobInterviewSlots = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const job = await Job.findById(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    if (job.company.toString() !== company._id.toString()) {
+      return res.status(403).json({ success: false, message: 'Not authorized' });
+    }
+
+    const slots = await InterviewSlot.find({
+      job: req.params.jobId,
+      company: company._id,
+    })
+      .populate({
+        path: 'bookedCandidates.candidate',
+        select: 'firstName lastName email mobile status profile.currentDesignation',
+      })
+      .populate({
+        path: 'bookedCandidates.partner',
+        select: 'firmName contactPerson',
+      })
+      .sort({ date: 1, startTime: 1 });
+
+    // Group by date for easy viewing
+    const slotsByDate = {};
+    slots.forEach((slot) => {
+      const dateKey = new Date(slot.date).toISOString().split('T')[0];
+      if (!slotsByDate[dateKey]) {
+        slotsByDate[dateKey] = [];
+      }
+      slotsByDate[dateKey].push(slot);
+    });
+
+    res.json({
+      success: true,
+      data: {
+        jobId: job._id,
+        jobTitle: job.title,
+        jobDeadline: job.applicationDeadline,
+        totalSlots: slots.length,
+        totalCapacity: slots.reduce((sum, s) => sum + s.maxCandidates, 0),
+        totalBooked: slots.reduce(
+          (sum, s) =>
+            sum + s.bookedCandidates.filter((b) => b.bookingStatus === 'BOOKED').length,
+          0
+        ),
+        slotsByDate,
+        allSlots: slots,
+      },
+    });
+  } catch (error) {
+    console.error('[COMPANY] Get job interview slots error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get interview slots',
+      error: error.message,
+    });
+  }
+};
+
+// COMPANY: Delete / Cancel a slot
+// DELETE /api/companies/jobs/:jobId/interview-slots/:slotId
+exports.cancelInterviewSlot = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const slot = await InterviewSlot.findOne({
+      _id: req.params.slotId,
+      job: req.params.jobId,
+      company: company._id,
+    });
+
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Slot not found' });
+    }
+
+    // Cannot cancel if candidates are already booked
+    const activeBookings = slot.bookedCandidates.filter(
+      (b) => b.bookingStatus === 'BOOKED'
+    );
+
+    if (activeBookings.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot cancel slot with ${activeBookings.length} active booking(s). Remove candidates first.`,
+        activeBookings: activeBookings.length,
+      });
+    }
+
+    slot.status = 'CANCELLED';
+    await slot.save();
+
+    res.json({
+      success: true,
+      message: 'Interview slot cancelled successfully',
+      data: { slotId: slot._id, status: slot.status },
+    });
+  } catch (error) {
+    console.error('[COMPANY] Cancel interview slot error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cancel slot',
+      error: error.message,
+    });
+  }
+};
+
+// COMPANY: Confirm interview details (mode, link/address, interviewer)
+// POST /api/companies/candidates/:id/confirm-interview
+exports.confirmInterviewDetails = async (req, res) => {
+  try {
+    const { mode, details, interviewer } = req.body;
+
+    if (!mode || !details || !interviewer) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide interview mode, details (link/address), and interviewer name",
+      });
+    }
+
+    const company = await Company.findOne({ user: req.user._id });
+    if (!company) {
+      return res.status(404).json({ success: false, message: "Company not found" });
+    }
+
+    const candidate = await Candidate.findById(req.params.id);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: "Candidate not found" });
+    }
+
+    if (candidate.company.toString() !== company._id.toString()) {
+      return res.status(403).json({ success: false, message: "Not authorized" });
+    }
+
+    if (!candidate.assignedSlot) {
+      return res.status(400).json({
+        success: false,
+        message: "No interview slot assigned for this candidate yet",
+      });
+    }
+
+    // Fetch slot info for WhatsApp
+    const slot = await InterviewSlot.findById(candidate.assignedSlot);
+    if (!slot) {
+      return res.status(404).json({ success: false, message: "Assigned slot not found" });
+    }
+
+    const job = await Job.findById(candidate.job);
+
+    // Generate unique token for confirmation
+    const confirmationToken = crypto.randomBytes(32).toString("hex");
+
+    // Update candidate
+    candidate.interviewConfig = {
+      mode,
+      details,
+      interviewer,
+      isConfirmedByCompany: true,
+      confirmedAt: new Date(),
+      confirmationToken,
+      candidateResponse: "PENDING",
+    };
+
+    candidate.status = "INTERVIEW_SCHEDULED";
+    candidate.statusHistory.push({
+      status: "INTERVIEW_SCHEDULED",
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: "COMPANY",
+      notes: `Interview confirmed: ${mode} with ${interviewer}. Confirmation token generated.`,
+    });
+
+    await candidate.save();
+
+    // Trigger WhatsApp
+    try {
+      const interviewDate = new Date(slot.date).toLocaleDateString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      });
+
+      await whatsappService.sendInterviewInvitation(
+        candidate.mobile,
+        candidate.firstName,
+        company.companyName,
+        interviewDate,
+        slot.startTime,
+        job.title,
+        mode === "Virtual" ? "Online" : "Offline",
+        details,
+        interviewer,
+        confirmationToken // Use the new crypto token
+      );
+    } catch (waError) {
+      console.error("[COMPANY] WhatsApp notification failed:", waError.message);
+    }
+
+    res.json({
+      success: true,
+      message: "Interview details confirmed and shared with candidate",
+      data: candidate.interviewConfig,
+    });
+  } catch (error) {
+    console.error("[COMPANY] Confirm interview details error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to confirm interview details",
       error: error.message,
     });
   }

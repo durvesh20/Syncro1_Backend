@@ -76,6 +76,10 @@ const notificationSchema = new mongoose.Schema({
       'CANDIDATE_CONSENT_CONFIRMED',
       'CANDIDATE_CONSENT_DENIED',
 
+      // Interview confirmation
+      'INTERVIEW_CONFIRMED',
+      'INTERVIEW_DECLINED',
+
       // System
       'SYSTEM_ANNOUNCEMENT'
     ],

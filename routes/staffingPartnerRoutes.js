@@ -29,7 +29,13 @@ const {
   getEarnings,
   getPayoutDetails,
   getInvoices,
-  getInvoice
+  getInvoice,
+  getAvailableSlots,
+  selectInterviewSlot,
+  proposeInterviewSlots,
+  getAvailableSlotsForPartner,
+  assignCandidateToSlot,
+  removeCandidateFromSlot
 } = require('../controllers/staffingPartnerController');
 
 const { protect, authorize, checkStatus } = require('../middleware/auth');
@@ -261,6 +267,10 @@ router.post(
   handleUploadError,         // Step 2: catch any multer/cloudinary errors
   submitCandidate            // Step 3: run controller with req.file available
 );
+
+router.get('/jobs/:jobId/interview-slots', getAvailableSlotsForPartner);
+router.post('/jobs/:jobId/interview-slots/:slotId/assign', assignCandidateToSlot);
+router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', removeCandidateFromSlot);
 
 // ==================== SUBMISSIONS ROUTES ====================
 router.get('/submissions', getMySubmissions);

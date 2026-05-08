@@ -401,6 +401,118 @@ class WhatsAppService {
     }
   }
 
+  /**
+   * Send interview invitation using approved template: interview_invitation
+   *
+   * Template body:
+   * "Dear {{1}}, As discussed, your interview with {{2}} is scheduled on {{3}} 
+   *  at {{4}} at their {{5}} office for the {{6}} role.
+   *  Address: {{2}}, {{7}}
+   *  Whom to Meet: {{8}}..."
+   *
+   * Buttons (Dynamic URL):
+   *   "I Agree"    → https://syncro1.com/interview/candidate/agree/{{token}}
+   *   "I Disagree" → https://syncro1.com/interview/candidate/disagree/{{token}}
+   */
+  async sendInterviewInvitation(
+    phoneNumber,
+    candidateName,
+    companyName,
+    interviewDate,
+    interviewTime,
+    jobRole,
+    interviewMode,
+    interviewDetails,
+    interviewerName,
+    confirmationToken
+  ) {
+    const formattedPhone = this._formatPhone(phoneNumber);
+
+    console.log('═══════════════════════════════════════');
+    console.log('📅 WhatsApp Interview Invitation');
+    console.log(`   Phone:   +${formattedPhone}`);
+    console.log(`   Candidate: ${candidateName}`);
+    console.log(`   Company:   ${companyName}`);
+    console.log(`   Date/Time: ${interviewDate} @ ${interviewTime}`);
+    console.log(`   Role:      ${jobRole}`);
+    console.log('═══════════════════════════════════════');
+
+    if (!this.enabled) {
+      console.log('   [Mock - WhatsApp disabled]');
+      return { success: true, mock: true };
+    }
+
+    try {
+      const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: formattedPhone,
+        type: 'template',
+        template: {
+          name: 'interview_confirmation',
+          language: { code: 'en_GB' },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: candidateName },    // {{1}}
+                { type: 'text', text: companyName },      // {{2}}
+                { type: 'text', text: interviewDate },    // {{3}}
+                { type: 'text', text: interviewTime },    // {{4}}
+                { type: 'text', text: jobRole },          // {{5}}
+                { type: 'text', text: interviewMode },    // {{6}}
+                { type: 'text', text: interviewDetails }, // {{7}}
+                { type: 'text', text: interviewerName }   // {{8}}
+              ]
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [{ type: 'text', text: confirmationToken }]
+            },
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '1',
+              parameters: [{ type: 'text', text: confirmationToken }]
+            }
+          ]
+        }
+      };
+
+      const response = await axios.post(
+        `${this.baseUrl}/${this.phoneNumberId}/messages`,
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+
+      const messageId = response.data?.messages?.[0]?.id;
+      console.log(`[WHATSAPP] ✅ Interview invitation sent to +${formattedPhone} | MsgID: ${messageId}`);
+
+      return {
+        success: true,
+        messageId,
+        waId: response.data?.contacts?.[0]?.wa_id,
+        data: response.data
+      };
+    } catch (error) {
+      const errMsg = error.response?.data?.error?.message || error.message;
+      const errCode = error.response?.data?.error?.code;
+
+      console.error(`[WHATSAPP] ❌ Interview invitation failed → +${formattedPhone}`);
+      console.error(`[WHATSAPP] Error Code: ${errCode} | Message: ${errMsg}`);
+
+      return { success: false, error: errMsg, errorCode: errCode };
+    }
+  }
+
   async sendProfileVerified(phoneNumber, name) {
     return this.sendTemplate(
       phoneNumber,
