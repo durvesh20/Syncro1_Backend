@@ -43,6 +43,7 @@ const {
   updateOfferResponse,
   addNote,
   shortlistCandidate,
+  rejectCandidate,
   createInterviewSlots,
   getInterviewSlots,
   confirmInterviewSlot,
@@ -242,6 +243,7 @@ router.get('/candidates', getAllCandidates);
 router.get('/candidates/:id', getCandidate);
 router.put("/candidates/:id/status", checkStatus('VERIFIED', 'ACTIVE'), updateCandidateStatus);
 router.put("/candidates/:id/shortlist", checkStatus('VERIFIED', 'ACTIVE'), shortlistCandidate);
+router.put("/candidates/:id/reject", checkStatus('VERIFIED', 'ACTIVE'), rejectCandidate);
 
 // ── Interview Slot Flow ───────────────────────────────────────────────────────
 router.post('/jobs/:jobId/interview-slots', checkStatus('VERIFIED', 'ACTIVE'), createInterviewSlots);
@@ -249,12 +251,6 @@ router.get('/jobs/:jobId/interview-slots', checkStatus('VERIFIED', 'ACTIVE'), ge
 router.delete('/jobs/:jobId/interview-slots/:slotId', checkStatus('VERIFIED', 'ACTIVE'), cancelInterviewSlot);
 router.post('/candidates/:id/confirm-interview', checkStatus('VERIFIED', 'ACTIVE'), confirmInterviewDetails);
 
-// router.put('/candidates/:id/status', checkStatus('VERIFIED', 'ACTIVE'), updateCandidateStatus);
-// router.post('/candidates/:id/interviews', checkStatus('VERIFIED', 'ACTIVE'), scheduleInterview);
-// router.put('/candidates/:id/interviews/:interviewId', checkStatus('VERIFIED', 'ACTIVE'), updateInterviewFeedback);
-// router.post('/candidates/:id/offer', checkStatus('VERIFIED', 'ACTIVE'), makeOffer);
-// router.put('/candidates/:id/offer', checkStatus('VERIFIED', 'ACTIVE'), updateOfferResponse);
-// router.post('/candidates/:id/joining', checkStatus('VERIFIED', 'ACTIVE'), confirmJoining);
 router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), addNote);
 
 module.exports = router;

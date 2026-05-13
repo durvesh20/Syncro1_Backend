@@ -2590,6 +2590,8 @@ exports.getAllJobsWithCandidates = async (req, res) => {
                 profileScore: '$$c.resumeAnalysis.profileScore',
                 matchLevel: '$$c.resumeAnalysis.matchLevel',
                 aiDecision: '$$c.resumeAnalysis.recommendation',
+                resume: '$$c.resume',
+                interviewConfig: '$$c.interviewConfig',
                 submittedBy: '$$c.submittedBy',
                 submittedAt: '$$c.createdAt'
               }
@@ -2689,7 +2691,7 @@ exports.getJobWithCandidates = async (req, res) => {
       .populate('submittedBy', 'firmName firstName lastName uniqueId metrics user')
       .sort({ createdAt: -1 })
       .select(
-        'firstName lastName email mobile status profile resume ' +
+        'firstName lastName email mobile status profile resume interviewConfig ' +
         'resumeAnalysis.profileScore resumeAnalysis.matchLevel ' +
         'resumeAnalysis.recommendation resumeAnalysis.scoreBreakdown ' +
         'resumeAnalysis.parsed resumeAnalysis.flags resumeAnalysis.advice ' +

@@ -7,7 +7,84 @@ const Candidate = require('../models/Candidate');
 // Called from WhatsApp template buttons
 // Agree:    GET /api/candidates/consent/agree/:token
 // Disagree: GET /api/candidates/consent/disagree/:token
+// Review:   GET /api/candidates/consent/review/:token
 // ================================================================
+
+// @desc    Fetch candidate, job, and partner details for consent review
+// @route   GET /api/candidates/consent/review/:token
+router.get('/consent/review/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const candidate = await Candidate.findOne({
+      'whatsappConsent.token': token
+    })
+      .populate('job')
+      .populate({
+        path: 'submittedBy',
+        select: 'firmName firstName lastName user',
+        populate: {
+          path: 'user',
+          select: 'email'
+        }
+      });
+
+    if (!candidate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invalid or expired consent link'
+      });
+    }
+
+    // Already actioned
+    if (candidate.whatsappConsent.status === 'CONFIRMED') {
+      return res.json({
+        success: true,
+        message: 'Consent already confirmed',
+        data: { status: 'ALREADY_CONFIRMED' }
+      });
+    }
+
+    if (candidate.whatsappConsent.status === 'DENIED') {
+      return res.json({
+        success: true,
+        message: 'Consent already denied',
+        data: { status: 'ALREADY_DENIED' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        candidate: {
+          firstName: candidate.firstName,
+          lastName: candidate.lastName,
+          email: candidate.email,
+          mobile: candidate.mobile,
+          profile: candidate.profile,
+          resume: candidate.resume
+        },
+        job: candidate.job,
+        partner: {
+          firmName: candidate.submittedBy?.firmName,
+          firstName: candidate.submittedBy?.firstName,
+          lastName: candidate.submittedBy?.lastName,
+          email: candidate.submittedBy?.user?.email,
+          partnerName: `${candidate.submittedBy?.firstName} ${candidate.submittedBy?.lastName}`
+        },
+        expiresAt: candidate.whatsappConsent.expiresAt
+      }
+    });
+
+  } catch (error) {
+    console.error('[CONSENT] Review details error:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch details',
+      error: error.message
+    });
+  }
+});
 
 // @desc    Candidate clicks "I Agree" on WhatsApp
 // @route   GET /api/candidates/consent/agree/:token
@@ -257,20 +334,21 @@ router.get("/interview/agree/:token", async (req, res) => {
       return res.status(404).json({ success: false, message: "Invalid or expired link" });
     }
 
-    if (candidate.interviewConfig.candidateResponse === "ACCEPTED") {
+    if (candidate.interviewConfig.candidateResponse !== "PENDING") {
       return res.json({
         success: true,
-        message: "You have already confirmed your availability for this interview.",
-        data: { status: "ALREADY_ACCEPTED" },
+        message: `You have already responded to this invitation (Status: ${candidate.interviewConfig.candidateResponse}).`,
+        data: { status: "ALREADY_RESPONDED", currentResponse: candidate.interviewConfig.candidateResponse },
       });
     }
 
     // Update response
     candidate.interviewConfig.candidateResponse = "ACCEPTED";
     candidate.interviewConfig.respondedAt = new Date();
+    candidate.status = "INTERVIEW_CONFIRMED";
 
     candidate.statusHistory.push({
-      status: candidate.status,
+      status: "INTERVIEW_CONFIRMED",
       changedAt: new Date(),
       notes: "Candidate confirmed interview availability via WhatsApp",
     });
@@ -348,8 +426,8 @@ router.get("/interview/disagree/:token", async (req, res) => {
     if (candidate.interviewConfig.candidateResponse !== "PENDING") {
       return res.json({
         success: true,
-        message: "Response already recorded.",
-        data: { status: candidate.interviewConfig.candidateResponse },
+        message: `You have already responded to this invitation (Status: ${candidate.interviewConfig.candidateResponse}).`,
+        data: { status: "ALREADY_RESPONDED", currentResponse: candidate.interviewConfig.candidateResponse },
       });
     }
 

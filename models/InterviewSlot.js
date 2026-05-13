@@ -41,6 +41,12 @@ const interviewSlotSchema = new mongoose.Schema(
       required: true,
       min: 1,
     },
+    
+    // Average time per interview in minutes
+    averageTime: {
+      type: Number,
+      default: 30,
+    },
 
     // How many spots are still available
     // Decreases as partner assigns candidates
@@ -104,6 +110,13 @@ const interviewSlotSchema = new mongoose.Schema(
     notes: {
       type: String,
       default: null,
+    },
+
+    // Interview mode (Virtual, Face-to-Face, etc.)
+    interviewMode: {
+      type: String,
+      enum: ['Virtual', 'Face-to-Face'],
+      default: 'Virtual',
     },
   },
   {

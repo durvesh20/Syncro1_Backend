@@ -1007,7 +1007,7 @@ exports.getJobDetails = async (req, res) => {
 exports.submitCandidate = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
-    const job = await Job.findById(req.params.jobId);
+    const job = await Job.findById(req.params.jobId).populate('company', 'companyName');
 
     if (!partner) {
       return res.status(404).json({
@@ -1448,15 +1448,15 @@ exports.submitCandidate = async (req, res) => {
     notifyPartner();
 
     // ✅ Trigger AI parse + score + admin queue (fire and forget)
-   const processCandidate = async () => {
-  try {
-    await candidateQueueService.processAfterConsent(candidate._id);
-  } catch (err) {
-    console.error('[QUEUE] Processing failed:', err.message);
-  }
-};
+    const processCandidate = async () => {
+      try {
+        await candidateQueueService.processAfterConsent(candidate._id);
+      } catch (err) {
+        console.error('[QUEUE] Processing failed:', err.message);
+      }
+    };
 
-processCandidate();
+    processCandidate();
 
     // ✅ Success response
     res.status(201).json({
@@ -1509,6 +1509,21 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
       status: 'ACTIVE',
     }).sort({ date: 1, startTime: 1 });
 
+    const now = new Date();
+
+    // Helper to combine date and time string
+    const getSlotDateTime = (date, timeStr) => {
+      const d = new Date(date);
+      const [time, modifier] = timeStr.split(' ');
+      let [hours, minutes] = time.split(':');
+      hours = parseInt(hours);
+      minutes = parseInt(minutes);
+      if (modifier === 'PM' && hours < 12) hours += 12;
+      if (modifier === 'AM' && hours === 12) hours = 0;
+      d.setHours(hours, minutes, 0, 0);
+      return d;
+    };
+
     // Get partner's shortlisted candidates for this job
     const partnerCandidates = await Candidate.find({
       job: req.params.jobId,
@@ -1534,10 +1549,15 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
         availableSpots: slot.availableSpots,
         isFull: slot.availableSpots === 0,
         notes: slot.notes,
+        interviewMode: slot.interviewMode || '',
         // How many of YOUR candidates are in this slot
         yourCandidatesBooked: partnerBookingsInSlot.length,
+        isPast: getSlotDateTime(slot.date, slot.startTime) < now
       };
     });
+
+    // Only show slots that are NOT in the past
+    const futureSlots = formattedSlots.filter(s => !s.isPast);
 
     res.json({
       success: true,
@@ -1545,12 +1565,12 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
         jobId: job._id,
         jobTitle: job.title,
         company: job.company?.companyName,
-        jobDeadline: job.deadline,
+        jobDeadline: job.applicationDeadline,
 
         // Slots available for booking
-        availableSlots: formattedSlots.filter((s) => !s.isFull),
-        fullSlots: formattedSlots.filter((s) => s.isFull),
-        totalSlots: formattedSlots.length,
+        availableSlots: futureSlots.filter((s) => !s.isFull),
+        fullSlots: futureSlots.filter((s) => s.isFull),
+        totalSlots: futureSlots.length,
 
         // Partner's candidates eligible for slot assignment
         yourShortlistedCandidates: partnerCandidates.map((c) => ({
@@ -1646,6 +1666,26 @@ exports.assignCandidateToSlot = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Slot is not available. Status: ${slot.status}`,
+      });
+    }
+
+    // ── Check if slot is in the past ──────────────────────────────────
+    const getSlotDateTime = (date, timeStr) => {
+      const d = new Date(date);
+      const [time, modifier] = timeStr.split(' ');
+      let [hours, minutes] = time.split(':');
+      hours = parseInt(hours);
+      minutes = parseInt(minutes);
+      if (modifier === 'PM' && hours < 12) hours += 12;
+      if (modifier === 'AM' && hours === 12) hours = 0;
+      d.setHours(hours, minutes, 0, 0);
+      return d;
+    };
+
+    if (getSlotDateTime(slot.date, slot.startTime) < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot assign candidate to a past interview slot',
       });
     }
 
@@ -1944,10 +1984,10 @@ exports.getMySubmissions = async (req, res) => {
         'profile.location profile.totalExperience profile.relevantExperience ' +
         'profile.noticePeriod profile.currentSalary profile.expectedSalary ' +
         'profile.writeup profile.currentCompany profile.currentDesignation ' +
-        'resume whatsappConsent.status resumeAnalysis.profileScore ' +
+        'resume interviewConfig whatsappConsent.status resumeAnalysis.profileScore ' +
         'resumeAnalysis.matchLevel createdAt job company assignedSlot'
       )
-      .populate('assignedSlot', 'date startTime endTime status');
+      .populate('assignedSlot', 'date startTime endTime status interviewMode');
 
     const hasMore = submissions.length > limit;
     const results = hasMore ? submissions.slice(0, limit) : submissions;
@@ -1985,7 +2025,7 @@ exports.getSubmission = async (req, res) => {
     })
       .populate('job', 'title company commission')
       .populate('company', 'companyName')
-      .populate('assignedSlot', 'date startTime endTime status');
+      .populate('assignedSlot', 'date startTime endTime status interviewMode');
 
     if (!submission) {
       return res.status(404).json({

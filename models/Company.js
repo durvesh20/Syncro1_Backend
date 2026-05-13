@@ -246,7 +246,7 @@ companySchema.pre('save', function (next) {
     const seconds = String(now.getSeconds()).padStart(2, '0');
     const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
 
-    this.uniqueId = `CMP-${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
+    this.uniqueId = `${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
   }
   next();
 });

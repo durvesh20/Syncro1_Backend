@@ -126,24 +126,6 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
   }
 }));
 
-
-// ✅ WhatsApp template consent redirect routes
-// Template buttons go to: https://syncro1.com/consent/candidate/agree/:token
-// These redirect to our API
-
-app.get('/consent/candidate/agree/:token', (req, res) => {
-  res.redirect(
-    `/api/candidates/consent/agree/${req.params.token}`
-  );
-});
-
-app.get('/consent/candidate/disagree/:token', (req, res) => {
-  res.redirect(
-    `/api/candidates/consent/disagree/${req.params.token}`
-  );
-});
-
-
 /* =========================================================
    HEALTH CHECK
 ========================================================= */

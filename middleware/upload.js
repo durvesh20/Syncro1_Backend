@@ -11,8 +11,7 @@ const resumeStorage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: 'syncro1/resumes',
-    resource_type: 'raw',  // ✅ raw supports all file types
-    allowed_formats: ['pdf', 'doc', 'docx'],
+    resource_type: 'auto',  // ✅ auto better handles various doc formats
     public_id: (req, file) => {
       const uniqueName = `resume_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
       return uniqueName;

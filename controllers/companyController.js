@@ -948,6 +948,24 @@ exports.createJob = async (req, res) => {
         ? req.body.eligiblePlans
         : ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"];
 
+    // ✅ Enforce 30-day minimum deadline for new job posts
+    if (req.body.applicationDeadline) {
+      const deadline = new Date(req.body.applicationDeadline);
+      const minDeadline = new Date();
+      minDeadline.setDate(minDeadline.getDate() + 30);
+      
+      // Reset hours for fair date comparison
+      minDeadline.setHours(0, 0, 0, 0);
+      deadline.setHours(0, 0, 0, 0);
+
+      if (deadline < minDeadline) {
+        return res.status(400).json({
+          success: false,
+          message: "Application deadline must be at least 30 days from the current date."
+        });
+      }
+    }
+
     const jobData = {
       ...req.body,
       company: company._id,
@@ -1244,7 +1262,7 @@ exports.getJobCandidates = async (req, res) => {
 
     const candidates = await Candidate.find(query)
       .populate("submittedBy", "firstName lastName firmName")
-      .populate("assignedSlot", "date startTime endTime status")
+      .populate("assignedSlot", "date startTime endTime status interviewMode")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -1302,7 +1320,7 @@ exports.getAllCandidates = async (req, res) => {
     const candidates = await Candidate.find(query)
       .populate("submittedBy", "firstName lastName firmName")
       .populate("job", "title")
-      .populate("assignedSlot", "date startTime endTime status")
+      .populate("assignedSlot", "date startTime endTime status interviewMode")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -1338,7 +1356,7 @@ exports.getCandidate = async (req, res) => {
     const candidate = await Candidate.findById(req.params.id)
       .populate("submittedBy", "firstName lastName firmName email")
       .populate("job", "title commission")
-      .populate("assignedSlot", "date startTime endTime status")
+      .populate("assignedSlot", "date startTime endTime status interviewMode")
       .populate({
         path: "company",
         select: "companyName user",
@@ -1401,36 +1419,22 @@ exports.shortlistCandidate = async (req, res) => {
       req.user._id
     );
 
-    // Only allow shortlisting from these statuses
-    const allowedFromStatuses = ["SUBMITTED", "UNDER_REVIEW"];
-    if (!allowedFromStatuses.includes(candidate.status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot shortlist from current status: ${candidate.status}`,
-        data: {
-          currentStatus: candidate.status,
-          allowedFromStatuses,
-        },
-      });
-    }
-
-    addStatusHistory(
-      candidate,
+    // Use Lifecycle Service for consistent updates
+    const updatedCandidate = await candidateLifecycleService.updateStatus(
+      candidate._id,
       "SHORTLISTED",
       req.user._id,
-      "COMPANY",
+      "company",
       notes || "Candidate shortlisted"
     );
-
-    await candidate.save();
 
     res.json({
       success: true,
       message: "Candidate shortlisted successfully",
       data: {
-        candidateId: candidate._id,
-        name: candidate.name,
-        status: candidate.status,
+        candidateId: updatedCandidate._id,
+        name: updatedCandidate.name,
+        status: updatedCandidate.status,
         nextStep: "Create interview slots via POST /candidates/:id/interview-slots",
       },
     });
@@ -1450,16 +1454,64 @@ exports.shortlistCandidate = async (req, res) => {
   }
 };
 
+// @desc    Reject Candidate
+// @route   PUT /api/companies/candidates/:id/reject
+exports.rejectCandidate = async (req, res) => {
+  try {
+    const { reason, notes } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({
+        success: false,
+        message: "Reason for rejection is required",
+      });
+    }
+
+    const { candidate } = await verifyCompanyOwnership(
+      req.params.id,
+      req.user._id
+    );
+
+    // Use Lifecycle Service for consistent updates
+    const updatedCandidate = await candidateLifecycleService.updateStatus(
+      candidate._id,
+      "REJECTED",
+      req.user._id,
+      "company",
+      notes || reason
+    );
+
+    res.json({
+      success: true,
+      message: "Candidate rejected successfully",
+      data: {
+        candidateId: updatedCandidate._id,
+        status: updatedCandidate.status,
+        reason: reason,
+      },
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
+    }
+    console.error("[COMPANY] Reject candidate error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to reject candidate",
+      error: error.message,
+    });
+  }
+};
+
 
 // COMPANY: Create Interview Slots for a Job
 // POST /api/companies/jobs/:jobId/interview-slots
 exports.createInterviewSlots = async (req, res) => {
   try {
     const { slots } = req.body;
-    // slots = [
-    //   { date: "2024-02-15", startTime: "10:00 AM", endTime: "11:00 AM", maxCandidates: 3, notes: "..." },
-    //   { date: "2024-02-16", startTime: "02:00 PM", endTime: "04:00 PM", maxCandidates: 5 },
-    // ]
 
     // ── Validate payload ──────────────────────────────────────────────
     if (!slots || !Array.isArray(slots) || slots.length === 0) {
@@ -1608,20 +1660,50 @@ exports.createInterviewSlots = async (req, res) => {
       });
     }
 
+    // ── Helper to add minutes to 12h time ────────────────────────────
+    const addMinutesTo12h = (timeStr, minutes) => {
+      let [time, modifier] = timeStr.split(' ');
+      let [hours, mins] = time.split(':').map(Number);
+      if (modifier === 'PM' && hours < 12) hours += 12;
+      if (modifier === 'AM' && hours === 12) hours = 0;
+      
+      const totalMins = hours * 60 + mins + minutes;
+      let newHours = Math.floor(totalMins / 60) % 24;
+      const newMins = totalMins % 60;
+      const ampm = newHours >= 12 ? 'PM' : 'AM';
+      newHours = newHours % 12 || 12;
+      
+      return `${newHours.toString().padStart(2, '0')}:${newMins.toString().padStart(2, '0')} ${ampm}`;
+    };
+
     // ── Create slots ──────────────────────────────────────────────────
-    const createdSlots = await InterviewSlot.insertMany(
-      slots.map((slot) => ({
-        job: job._id,
-        company: company._id,
-        date: new Date(slot.date),
-        startTime: slot.startTime,
-        endTime: slot.endTime,
-        maxCandidates: slot.maxCandidates,
-        availableSpots: slot.maxCandidates, // Initially all spots are available
-        notes: slot.notes || null,
-        status: 'ACTIVE',
-      }))
-    );
+    const explodedSlots = [];
+    slots.forEach(slot => {
+      const avg = parseInt(slot.averageTime) || 30;
+      let currentStartTime = slot.startTime;
+
+      for (let i = 0; i < slot.maxCandidates; i++) {
+        const currentEndTime = addMinutesTo12h(currentStartTime, avg);
+        
+        explodedSlots.push({
+          job: job._id,
+          company: company._id,
+          date: new Date(slot.date),
+          startTime: currentStartTime,
+          endTime: currentEndTime,
+          maxCandidates: 1,
+          averageTime: avg,
+          interviewMode: slot.interviewMode || 'Virtual',
+          availableSpots: 1,
+          notes: slot.notes || null,
+          status: 'ACTIVE',
+        });
+
+        currentStartTime = currentEndTime;
+      }
+    });
+
+    const createdSlots = await InterviewSlot.insertMany(explodedSlots);
 
     res.status(201).json({
       success: true,
@@ -1870,377 +1952,6 @@ exports.confirmInterviewDetails = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to confirm interview details",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Update Candidate Status
-// @route   PUT /api/companies/candidates/:id/status
-exports.updateCandidateStatus = async (req, res) => {
-  try {
-    const { status, notes } = req.body;
-
-    if (!status) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide status",
-      });
-    }
-
-    const company = await Company.findOne({ user: req.user._id });
-    if (!company) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Company not found" });
-    }
-
-    const candidate = await Candidate.findById(req.params.id);
-    if (!candidate) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Candidate not found" });
-    }
-
-    if (candidate.company.toString() !== company._id.toString()) {
-      return res
-        .status(403)
-        .json({ success: false, message: "Not authorized" });
-    }
-
-    // ✅ VALIDATE: If marking as JOINED, offer must exist
-    if (status === "JOINED") {
-      if (!candidate.offer || !candidate.offer.salary) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Cannot mark as JOINED without an offer. Please make an offer first.",
-          hint: "Use POST /api/companies/candidates/:id/offer to set offer details",
-          data: {
-            hasOffer: !!candidate.offer,
-            hasSalary: !!candidate.offer?.salary,
-            currentOffer: candidate.offer || null,
-          },
-        });
-      }
-
-      if (!candidate.offer.joiningDate) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Please set a joining date in the offer before marking as JOINED",
-          data: { currentOffer: candidate.offer },
-        });
-      }
-    }
-
-    // ✅ VALIDATE: If marking as OFFERED, salary must be provided
-    if (status === "OFFERED") {
-      if (!candidate.offer || !candidate.offer.salary) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Cannot mark as OFFERED without offer details. Use the offer endpoint first.",
-          hint: "Use POST /api/companies/candidates/:id/offer with salary and joiningDate",
-        });
-      }
-    }
-
-    // ✅ Use lifecycle service
-    try {
-      const updatedCandidate = await candidateLifecycleService.updateStatus(
-        req.params.id,
-        status,
-        req.user._id,
-        "company",
-        notes,
-      );
-
-      const responseCandidate = await Candidate.findById(updatedCandidate._id)
-        .populate("submittedBy", "firstName lastName firmName")
-        .populate("job", "title commission")
-        .populate("company", "companyName");
-
-      const nextActions = candidateLifecycleService.getNextActions(
-        status,
-        "company",
-      );
-
-      res.json({
-        success: true,
-        message: `Status updated to ${StatusMachine.getStatusLabel(status)}`,
-        data: {
-          candidate: responseCandidate,
-          nextActions: nextActions.map((s) => ({
-            value: s,
-            label: StatusMachine.getStatusLabel(s),
-          })),
-        },
-      });
-    } catch (error) {
-      if (error.statusCode === 400) {
-        return res.status(400).json({
-          success: false,
-          message: error.message,
-          data: {
-            currentStatus: {
-              value: candidate.status,
-              label: StatusMachine.getStatusLabel(candidate.status),
-            },
-            allowedTransitions: (error.allowedTransitions || []).map((s) => ({
-              value: s,
-              label: StatusMachine.getStatusLabel(s),
-            })),
-            hint: error.hint || null,
-          },
-        });
-      }
-      throw error;
-    }
-  } catch (error) {
-    console.error('[COMPANY] Update candidate status error:', error);
-    res.status(500).json({
-      success: false,
-      message: "Status update failed",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Schedule Interview
-// @route   POST /api/companies/candidates/:id/interviews
-exports.scheduleInterview = async (req, res) => {
-  try {
-    const candidate = await Candidate.findById(req.params.id).populate({
-      path: "company",
-      select: "user",
-    });
-
-    if (!candidate) {
-      return res.status(404).json({
-        success: false,
-        message: "Candidate not found",
-      });
-    }
-
-    if (candidate.company.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Not authorized",
-      });
-    }
-
-    const { type, scheduledAt, interviewerName, interviewerEmail, meetingLink } = req.body;
-
-    // ✅ FIX #4: Validate interviewer email if provided
-    if (interviewerEmail && !isValidEmail(interviewerEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid interviewer email format",
-      });
-    }
-
-    const interview = {
-      round: candidate.interviews.length + 1,
-      type,
-      scheduledAt,
-      interviewerName,
-      interviewerEmail,
-      meetingLink,
-      result: "PENDING",
-    };
-
-    candidate.interviews.push(interview);
-    candidate.status = "INTERVIEW_SCHEDULED";
-    candidate.statusHistory.push({
-      status: "INTERVIEW_SCHEDULED",
-      changedBy: req.user._id,
-      notes: `Interview Round ${interview.round} scheduled for ${new Date(interview.scheduledAt).toLocaleString()}`,
-    });
-
-    await candidate.save();
-
-    res.json({
-      success: true,
-      message: "Interview scheduled successfully",
-      data: candidate,
-    });
-  } catch (error) {
-    console.error('[COMPANY] Schedule interview error:', error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to schedule interview",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Update Interview Feedback
-// @route   PUT /api/companies/candidates/:id/interviews/:interviewId
-exports.updateInterviewFeedback = async (req, res) => {
-  try {
-    const candidate = await Candidate.findById(req.params.id).populate({
-      path: "company",
-      select: "user",
-    });
-
-    if (!candidate) {
-      return res.status(404).json({
-        success: false,
-        message: "Candidate not found",
-      });
-    }
-
-    if (candidate.company.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Not authorized",
-      });
-    }
-
-    const interview = candidate.interviews.id(req.params.interviewId);
-    if (!interview) {
-      return res.status(404).json({
-        success: false,
-        message: "Interview not found",
-      });
-    }
-
-    interview.feedback = req.body.feedback;
-    interview.rating = req.body.rating;
-    interview.result = req.body.result;
-
-    if (req.body.result === "PASSED" || req.body.result === "FAILED") {
-      candidate.status = "INTERVIEWED";
-      candidate.statusHistory.push({
-        status: "INTERVIEWED",
-        changedBy: req.user._id,
-        notes: `Interview Round ${interview.round} completed - ${req.body.result}`,
-      });
-    }
-
-    await candidate.save();
-
-    res.json({
-      success: true,
-      message: "Interview feedback updated",
-      data: candidate,
-    });
-  } catch (error) {
-    console.error('[COMPANY] Update interview feedback error:', error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to update feedback",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Make Offer
-// @route   POST /api/companies/candidates/:id/offer
-exports.makeOffer = async (req, res) => {
-  try {
-    const candidate = await Candidate.findById(req.params.id).populate({
-      path: "company",
-      select: "user",
-    });
-
-    if (!candidate) {
-      return res.status(404).json({
-        success: false,
-        message: "Candidate not found",
-      });
-    }
-
-    if (candidate.company.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Not authorized",
-      });
-    }
-
-    candidate.offer = {
-      salary: req.body.salary,
-      joiningDate: req.body.joiningDate,
-      offerLetterUrl: req.body.offerLetterUrl,
-      offeredAt: new Date(),
-      response: "PENDING",
-    };
-    candidate.status = "OFFERED";
-    candidate.statusHistory.push({
-      status: "OFFERED",
-      changedBy: req.user._id,
-      notes: `Offer made with salary ₹${req.body.salary}`,
-    });
-
-    await candidate.save();
-
-    res.json({
-      success: true,
-      message: "Offer made successfully",
-      data: candidate,
-    });
-  } catch (error) {
-    console.error('[COMPANY] Make offer error:', error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to make offer",
-      error: error.message,
-    });
-  }
-};
-
-// @desc    Update Offer Response
-// @route   PUT /api/companies/candidates/:id/offer
-exports.updateOfferResponse = async (req, res) => {
-  try {
-    const candidate = await Candidate.findById(req.params.id).populate({
-      path: "company",
-      select: "user",
-    });
-
-    if (!candidate) {
-      return res.status(404).json({
-        success: false,
-        message: "Candidate not found",
-      });
-    }
-
-    if (candidate.company.user.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Not authorized",
-      });
-    }
-
-    candidate.offer.response = req.body.response;
-    candidate.offer.respondedAt = new Date();
-    candidate.offer.negotiationNotes = req.body.negotiationNotes;
-
-    if (req.body.response === "ACCEPTED") {
-      candidate.status = "OFFER_ACCEPTED";
-    } else if (req.body.response === "DECLINED") {
-      candidate.status = "OFFER_DECLINED";
-    }
-
-    candidate.statusHistory.push({
-      status: candidate.status,
-      changedBy: req.user._id,
-      notes: `Offer ${req.body.response.toLowerCase()}`,
-    });
-
-    await candidate.save();
-
-    res.json({
-      success: true,
-      message: "Offer response updated",
-      data: candidate,
-    });
-  } catch (error) {
-    console.error('[COMPANY] Update offer response error:', error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to update offer response",
       error: error.message,
     });
   }

@@ -38,6 +38,15 @@ const {
   removeCandidateFromSlot
 } = require('../controllers/staffingPartnerController');
 
+const {
+  listPoolCandidates,
+  createPoolCandidate,
+  getPoolCandidate,
+  updatePoolCandidate,
+  deletePoolCandidate,
+  applyFromPool
+} = require('../controllers/partnerCandidateController');
+
 const { protect, authorize, checkStatus } = require('../middleware/auth');
 
 const {
@@ -268,6 +277,13 @@ router.post(
   submitCandidate            // Step 3: run controller with req.file available
 );
 
+// ✅ Apply from pool: POST /api/staffing-partners/jobs/:jobId/candidates/from-pool
+// Must come BEFORE the generic interview-slots route to avoid :id collision
+router.post(
+  '/jobs/:jobId/candidates/from-pool',
+  applyFromPool
+);
+
 router.get('/jobs/:jobId/interview-slots', getAvailableSlotsForPartner);
 router.post('/jobs/:jobId/interview-slots/:slotId/assign', assignCandidateToSlot);
 router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', removeCandidateFromSlot);
@@ -294,9 +310,36 @@ router.get('/invoices/:id', getInvoice);
 // @note    Only the partner who submitted the candidate can update resume
 router.post(
   '/candidates/:id/resume',
-  uploadResumeMiddleware,   // Step 1: upload new file to Cloudinary
-  handleUploadError,         // Step 2: catch upload errors
-  uploadResume               // Step 3: update candidate record in DB
+  uploadResumeMiddleware,
+  handleUploadError,
+  uploadResume
 );
+
+// ==================== CANDIDATE POOL ROUTES ====================
+
+// GET    /api/staffing-partners/my-candidates         — list all (paginated)
+router.get('/my-candidates', listPoolCandidates);
+
+// POST   /api/staffing-partners/my-candidates         — create (with optional resume)
+router.post(
+  '/my-candidates',
+  uploadResumeMiddleware,
+  handleUploadError,
+  createPoolCandidate
+);
+
+// GET    /api/staffing-partners/my-candidates/:id     — get one
+router.get('/my-candidates/:id', getPoolCandidate);
+
+// PUT    /api/staffing-partners/my-candidates/:id     — update (with optional resume)
+router.put(
+  '/my-candidates/:id',
+  uploadResumeMiddleware,
+  handleUploadError,
+  updatePoolCandidate
+);
+
+// DELETE /api/staffing-partners/my-candidates/:id     — delete
+router.delete('/my-candidates/:id', deletePoolCandidate);
 
 module.exports = router;

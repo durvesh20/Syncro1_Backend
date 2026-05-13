@@ -144,9 +144,10 @@ const candidateSchema = new mongoose.Schema({
       'REJECTED',
       'WITHDRAWN',
       'ON_HOLD',
-      'SLOT_ASSIGNED',        // Partner assigned candidate to a slot
-      'INTERVIEW_SCHEDULED',  // Slot confirmed (date is set)
-      'INTERVIEWED',  
+      'SLOT_ASSIGNED',
+      'INTERVIEW_SCHEDULED',
+      'INTERVIEW_CONFIRMED',
+      'INTERVIEWED',
     ],
     default: 'DRAFT'
   },
@@ -182,7 +183,7 @@ const candidateSchema = new mongoose.Schema({
     },
     type: {
       type: String,
-      enum: ['Phone', 'Video', 'In-Person', 'Technical', 'HR']
+      enum: ['Phone', 'Video', 'Face-to-Face', 'Technical', 'HR']
     },
     scheduledAt: Date,
     interviewerName: String,
@@ -344,7 +345,7 @@ const candidateSchema = new mongoose.Schema({
   },
 
   // ✅ NEW: AI Resume Parsing Result
-resumeAnalysis: {
+  resumeAnalysis: {
     parsed: { type: Boolean, default: false },
     parsedAt: Date,
     profileScore: { type: Number, default: 0 },
@@ -484,36 +485,36 @@ resumeAnalysis: {
     rejectionReason: String
   },
   // ✅ ONLY ADD this one field to track which job slot the candidate is booked in:
-assignedSlot: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: 'InterviewSlot',
-  default: null,
-},
-interviewConfig: {
-  mode: {
-    type: String,
-    enum: ['In-Person', 'Virtual'],
-    default: 'Virtual'
+  assignedSlot: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'InterviewSlot',
+    default: null,
   },
-  details: String, // Meeting link or Office address
-  interviewer: String,
-  isConfirmedByCompany: {
-    type: Boolean,
-    default: false
+  interviewConfig: {
+    mode: {
+      type: String,
+      enum: ['Virtual', 'Face-to-Face'],
+      default: 'Virtual'
+    },
+    details: String, // Meeting link or Office address
+    interviewer: String,
+    isConfirmedByCompany: {
+      type: Boolean,
+      default: false
+    },
+    confirmedAt: Date,
+    confirmationToken: {
+      type: String,
+      index: true,
+      sparse: true
+    },
+    candidateResponse: {
+      type: String,
+      enum: ['PENDING', 'ACCEPTED', 'DECLINED'],
+      default: 'PENDING'
+    },
+    respondedAt: Date
   },
-  confirmedAt: Date,
-  confirmationToken: {
-    type: String,
-    index: true,
-    sparse: true
-  },
-  candidateResponse: {
-    type: String,
-    enum: ['PENDING', 'ACCEPTED', 'DECLINED'],
-    default: 'PENDING'
-  },
-  respondedAt: Date
-},
 
   // ✅ NEW: Consent tracking (WhatsApp)
   whatsappConsent: {
@@ -528,6 +529,16 @@ interviewConfig: {
       enum: ['PENDING', 'CONFIRMED', 'DENIED', 'EXPIRED'],
       default: 'PENDING'
     }
+  },
+
+  // ✅ Pool tracing: set when candidate was applied via "Apply from Pool"
+  // null = submitted manually (classic flow)
+  // ObjectId = came from partner's PartnerCandidate pool entry
+  // IMPORTANT: This is for display/tracing ONLY. Never used to sync live data.
+  poolCandidateRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PartnerCandidate',
+    default: null
   }
 
 }, {
