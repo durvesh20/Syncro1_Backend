@@ -36,11 +36,6 @@ const {
   getJobCandidates,
   getAllCandidates,
   getCandidate,
-  updateCandidateStatus,
-  scheduleInterview,
-  updateInterviewFeedback,
-  makeOffer,
-  updateOfferResponse,
   addNote,
   shortlistCandidate,
   rejectCandidate,
@@ -241,7 +236,6 @@ router.delete(
 // ==================== CANDIDATE ROUTES ====================
 router.get('/candidates', getAllCandidates);
 router.get('/candidates/:id', getCandidate);
-router.put("/candidates/:id/status", checkStatus('VERIFIED', 'ACTIVE'), updateCandidateStatus);
 router.put("/candidates/:id/shortlist", checkStatus('VERIFIED', 'ACTIVE'), shortlistCandidate);
 router.put("/candidates/:id/reject", checkStatus('VERIFIED', 'ACTIVE'), rejectCandidate);
 
