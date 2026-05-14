@@ -72,101 +72,21 @@ class CandidateQueueService {
             );
 
             if (result.success && result.fullAnalysis) {
-                parsedData = result.data;
+                parsedData = result.candidateData;
                 fullAnalysis = result.fullAnalysis;
                 aiParsed = true;
 
-                const scoring = fullAnalysis.scoring || {};
-                const rankingSignals = fullAnalysis.rankingSignals || {};
                 const validation = fullAnalysis.validation || {};
-                const screening = fullAnalysis.screening || {};
                 const rec = fullAnalysis.recommendation || {};
                 const candidateProfile = fullAnalysis.candidateProfile || {};
 
-                profileScore = scoring.finalAdjustedScore || 0;
+                // ✅ Direct assignment — AI output IS the DB shape
+                scoreBreakdown = fullAnalysis.scoreBreakdown || null;
+                profileScore = scoreBreakdown?.summary?.finalAdjustedScore || 0;
                 matchLevel = fullAnalysis.matchLevel || 'UNKNOWN';
                 recommendation = rec.decision || 'HOLD';
 
-                scoreBreakdown = {
-                    skills: {
-                        score: scoring.skillsMatch || 0,
-                        weight: 30,
-                        matchedRequired: rankingSignals.mustHaveSkillsMatched || [],
-                        missingRequired: rankingSignals.mustHaveSkillsMissing || [],
-                        matchedPreferred: rankingSignals.preferredSkillsMatched || [],
-                        coveragePercent: scoring.skillCoveragePercent || 0
-                    },
-                    experience: {
-                        score: scoring.experienceMatch || 0,
-                        weight: 20,
-                        actual: screening.experienceRange?.actual || 'Not Found',
-                        required: screening.experienceRange?.required || 'Not Found',
-                        status: screening.experienceRange?.status || 'UNKNOWN',
-                        detail: validation.experienceDiscrepancyDetail || '',
-                        relevancePercent: scoring.experienceRelevancePercent || 0
-                    },
-                    domain: {
-                        score: scoring.domainMatch || 0,
-                        weight: 15,
-                        jobDomain: screening.domainMatch?.jobDomain || 'Not Found',
-                        candidateDomain: screening.domainMatch?.candidateDomain || 'Not Found',
-                        status: screening.domainMatch?.status || 'UNKNOWN'
-                    },
-                    education: {
-                        score: scoring.educationMatch || 0,
-                        weight: 10,
-                        minimumRequired: screening.educationMatch?.minimumRequired || 'Not Found',
-                        candidateEducation: screening.educationMatch?.candidateEducation || 'Not Found',
-                        status: screening.educationMatch?.status || 'UNKNOWN'
-                    },
-                    salary: {
-                        score: scoring.salaryFit || 0,
-                        weight: 10,
-                        budget: screening.salaryFit?.budget || 'Not specified',
-                        expected: screening.salaryFit?.expected || 'Not provided',
-                        deltaPercent: rankingSignals.salaryDeltaPercent || 0,
-                        status: screening.salaryFit?.status || 'UNKNOWN',
-                        withinBudget: rankingSignals.salaryWithinBudget || false
-                    },
-                    location: {
-                        score: scoring.locationMatch || 0,
-                        weight: 5,
-                        jobLocation: screening.locationFit?.jobLocation || 'Not Found',
-                        candidateLocation: screening.locationFit?.candidateLocation || 'Not Found',
-                        status: screening.locationFit?.status || 'DIFFERENT',
-                        detail: validation.locationMatch || 'DIFFERENT'
-                    },
-                    noticePeriod: {
-                        score: scoring.noticePeriodFit || 0,
-                        weight: 5,
-                        required: screening.noticePeriod?.required || 'Not specified',
-                        actual: screening.noticePeriod?.actual || 'Not provided',
-                        days: rankingSignals.noticePeriodDays || 0,
-                        status: screening.noticePeriod?.status || 'UNKNOWN'
-                    },
-                    stability: {
-                        score: scoring.stabilityScore || 0,
-                        weight: 5,
-                        averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
-                        isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
-                        risk: screening.stabilityAnalysis?.stabilityRisk || 'UNKNOWN',
-                        detail: screening.stabilityAnalysis?.detail || ''
-                    },
-                    summary: {
-                        weightedScore: scoring.weightedScore || 0,
-                        riskPenalty: scoring.riskPenalty || 0,
-                        riskBreakdown: scoring.riskBreakdown || {
-                            careerGapPenalty: 0,
-                            jobHopperPenalty: 0,
-                            domainMismatchPenalty: 0,
-                            experienceDiscrepancyPenalty: 0,
-                            salaryOverBudgetPenalty: 0
-                        },
-                        finalAdjustedScore: profileScore,
-                        matchLevel: matchLevel
-                    }
-                };
-
+                // Build flags from validation
                 flags = [];
                 if (validation.redFlags && validation.redFlags.length > 0) {
                     flags = flags.concat(validation.redFlags.map(f => ({
@@ -197,8 +117,8 @@ class CandidateQueueService {
                 console.log(`   📊 Final Score: ${profileScore}/100`);
                 console.log(`   🎯 Match Level: ${matchLevel}`);
                 console.log(`   💡 Decision: ${recommendation}`);
-                console.log(`   🔧 Skills Coverage: ${scoring.skillCoveragePercent}%`);
-                console.log(`   ⚠️  Risk Penalty: ${scoring.riskPenalty || 0}`);
+                console.log(`   🔧 Skills Coverage: ${scoreBreakdown?.skills?.coveragePercent}%`);
+                console.log(`   ⚠️  Risk Penalty: ${scoreBreakdown?.summary?.riskPenalty || 0}`);
 
             } else {
                 console.log('[QUEUE] ⚠️  AI returned no analysis — using manual scoring');
@@ -311,10 +231,10 @@ class CandidateQueueService {
             }
         }
 
-        const matchLevel = score >= 80 ? 'STRONG_MATCH'
-            : score >= 65 ? 'GOOD_MATCH'
-                : score >= 50 ? 'PARTIAL_MATCH'
-                    : 'WEAK_MATCH';
+        const matchLevel = score >= 80 ? 'STRONG'
+            : score >= 65 ? 'GOOD'
+                : score >= 50 ? 'PARTIAL'
+                    : 'WEAK';
 
         return { score, matchLevel };
     }

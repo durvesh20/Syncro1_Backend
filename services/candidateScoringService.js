@@ -3,7 +3,20 @@ const Job = require('../models/Job');
 class CandidateScoringService {
 
   /**
-   * Score candidate profile against job
+   * Score candidate profile against job using the same 8-component weights as the AI engine.
+   * 
+   * Weights (aligned with aiService.js):
+   *   skills:       30%
+   *   experience:   20%
+   *   domain:       15%
+   *   education:    10%
+   *   salary:       10%
+   *   location:      5%
+   *   noticePeriod:  5%
+   *   stability:     5%
+   *   ─────────────────
+   *   TOTAL:       100%
+   *
    * @param {object} profile - Candidate profile data
    * @param {object} job - Job document
    * @returns {object} Score breakdown
@@ -16,16 +29,7 @@ class CandidateScoringService {
     const scores = {};
     let totalScore = 0;
 
-    // 1. Experience Match (25%)
-    const expScore = this._scoreExperience(profile.totalExperience, job.experienceRange);
-    scores.experience = {
-      score: expScore,
-      weight: 25,
-      detail: this._experienceDetail(profile.totalExperience, job.experienceRange)
-    };
-    totalScore += expScore * 0.25;
-
-    // 2. Skills Match (30%)
+    // 1. Skills Match (30%)
     const skillResult = this._scoreSkills(
       profile.skills || [],
       job.skills?.required || [],
@@ -36,20 +40,59 @@ class CandidateScoringService {
       weight: 30,
       matchedRequired: skillResult.matchedRequired,
       missingRequired: skillResult.missingRequired,
-      matchedPreferred: skillResult.matchedPreferred
+      matchedPreferred: skillResult.matchedPreferred,
+      coveragePercent: skillResult.coveragePercent
     };
     totalScore += skillResult.score * 0.30;
 
-    // 3. Salary Fit (15%)
+    // 2. Experience Match (20%)
+    const expScore = this._scoreExperience(profile.totalExperience, job.experienceRange);
+    scores.experience = {
+      score: expScore.score,
+      weight: 20,
+      actual: profile.totalExperience ? `${profile.totalExperience} years` : 'Not provided',
+      required: job.experienceRange ? `${job.experienceRange.min}-${job.experienceRange.max} years` : 'Not specified',
+      status: expScore.status,
+      detail: expScore.detail
+    };
+    totalScore += expScore.score * 0.20;
+
+    // 3. Domain Match (15%)
+    const domainScore = this._scoreDomain(profile, job);
+    scores.domain = {
+      score: domainScore.score,
+      weight: 15,
+      jobDomain: job.category || 'Not specified',
+      candidateDomain: profile.domain || profile.currentDesignation || 'Not specified',
+      status: domainScore.status
+    };
+    totalScore += domainScore.score * 0.15;
+
+    // 4. Education Match (10%)
+    const eduScore = this._scoreEducation(profile.education, job);
+    scores.education = {
+      score: eduScore.score,
+      weight: 10,
+      minimumRequired: job.educationRequirement || 'Not specified',
+      candidateEducation: eduScore.candidateEducation || 'Not provided',
+      status: eduScore.status
+    };
+    totalScore += eduScore.score * 0.10;
+
+    // 5. Salary Fit (10%)
     const salaryScore = this._scoreSalary(profile.expectedSalary, job.salary);
     scores.salary = {
       score: salaryScore.score,
-      weight: 15,
-      detail: salaryScore.detail
+      weight: 10,
+      budget: job.salary ? `₹${(job.salary.min || 0).toLocaleString('en-IN')}-₹${(job.salary.max || 0).toLocaleString('en-IN')}` : 'Not specified',
+      expected: profile.expectedSalary ? `₹${profile.expectedSalary.toLocaleString('en-IN')}` : 'Not provided',
+      deltaPercent: salaryScore.deltaPercent || 0,
+      status: salaryScore.status,
+      withinBudget: salaryScore.withinBudget
     };
-    totalScore += salaryScore.score * 0.15;
+    totalScore += salaryScore.score * 0.10;
 
-    // 4. Location Match (15%)
+    // 6. Location Match (5%)
     const locScore = this._scoreLocation(
       profile.currentLocation,
       profile.preferredLocations,
@@ -58,21 +101,53 @@ class CandidateScoringService {
     );
     scores.location = {
       score: locScore.score,
-      weight: 15,
+      weight: 5,
+      jobLocation: job.location?.city || 'Not specified',
+      candidateLocation: profile.currentLocation || profile.location || 'Not specified',
+      status: locScore.status,
       detail: locScore.detail
     };
-    totalScore += locScore.score * 0.15;
+    totalScore += locScore.score * 0.05;
 
-    // 5. Notice Period (15%)
+    // 7. Notice Period Fit (5%)
     const npScore = this._scoreNoticePeriod(profile.noticePeriod);
     scores.noticePeriod = {
       score: npScore.score,
-      weight: 15,
-      detail: npScore.detail
+      weight: 5,
+      actual: profile.noticePeriod || 'Not specified',
+      days: npScore.days,
+      status: npScore.status
     };
-    totalScore += npScore.score * 0.15;
+    totalScore += npScore.score * 0.05;
+
+    // 8. Stability Score (5%)
+    const stabScore = this._scoreStability(profile);
+    scores.stability = {
+      score: stabScore.score,
+      weight: 5,
+      averageTenureYears: stabScore.averageTenureYears || 0,
+      isJobHopper: stabScore.isJobHopper || false,
+      risk: stabScore.risk,
+      detail: stabScore.detail
+    };
+    totalScore += stabScore.score * 0.05;
 
     const overall = Math.round(totalScore);
+
+    // Summary
+    scores.summary = {
+      weightedScore: overall,
+      riskPenalty: 0,
+      riskBreakdown: {
+        careerGapPenalty: 0,
+        jobHopperPenalty: 0,
+        domainMismatchPenalty: 0,
+        experienceDiscrepancyPenalty: 0,
+        salaryOverBudgetPenalty: 0
+      },
+      finalAdjustedScore: overall,
+      matchLevel: this._getMatchLevel(overall)
+    };
 
     return {
       overallScore: overall,
@@ -107,22 +182,28 @@ class CandidateScoringService {
   // ── SCORING METHODS ──
 
   _scoreExperience(candidateExp, range) {
-    if (candidateExp === undefined || candidateExp === null || !range) return 50;
+    if (candidateExp === undefined || candidateExp === null || !range) {
+      return { score: 50, status: 'UNKNOWN', detail: 'Not specified' };
+    }
 
     const { min, max } = range;
 
-    if (candidateExp >= min && candidateExp <= max) return 100;
-    if (candidateExp > max && candidateExp <= max + 2) return 70;
-    if (candidateExp < min && candidateExp >= min - 1) return 60;
-    if (candidateExp > max + 4) return 30; // Overqualified
-    return 20;
-  }
-
-  _experienceDetail(exp, range) {
-    if (exp === undefined || !range) return 'Not specified';
-    if (exp >= range.min && exp <= range.max) return `${exp} years — within range (${range.min}-${range.max})`;
-    if (exp > range.max) return `${exp} years — ${exp - range.max} year(s) above max`;
-    return `${exp} years — ${range.min - exp} year(s) below min`;
+    if (candidateExp >= min && candidateExp <= max) {
+      return { score: 100, status: 'MEETS', detail: `${candidateExp} years — within range (${min}-${max})` };
+    }
+    if (candidateExp > max && candidateExp <= max + 2) {
+      return { score: 70, status: 'EXCEEDS', detail: `${candidateExp} years — ${candidateExp - max} year(s) above max` };
+    }
+    if (candidateExp < min && candidateExp >= min - 1) {
+      return { score: 70, status: 'BELOW', detail: `${candidateExp} years — ${min - candidateExp} year(s) below min` };
+    }
+    if (candidateExp < min && candidateExp >= min - 3) {
+      return { score: 40, status: 'BELOW', detail: `${candidateExp} years — ${min - candidateExp} year(s) below min` };
+    }
+    if (candidateExp > max + 4) {
+      return { score: 30, status: 'EXCEEDS', detail: `${candidateExp} years — overqualified` };
+    }
+    return { score: 20, status: 'BELOW', detail: `${candidateExp} years — significant gap` };
   }
 
   _scoreSkills(candidateSkills, required, preferred) {
@@ -143,72 +224,136 @@ class CandidateScoringService {
       return candidateNorm.some(cs => cs.includes(n) || n.includes(cs));
     });
 
-    const reqScore = required.length > 0 ? (matchedRequired.length / required.length) * 80 : 80;
-    const prefScore = preferred.length > 0 ? (matchedPreferred.length / preferred.length) * 20 : 20;
+    const reqScore = required.length > 0 ? (matchedRequired.length / required.length) * 100 : 80;
+    const coveragePercent = required.length > 0 ? Math.round((matchedRequired.length / required.length) * 100) : 100;
+    
+    // Apply cap: if coverage < 70%, cap score at 50
+    let score = Math.round(reqScore);
+    if (coveragePercent < 70) score = Math.min(score, 50);
 
     return {
-      score: Math.round(reqScore + prefScore),
+      score,
       matchedRequired,
       missingRequired,
-      matchedPreferred
+      matchedPreferred,
+      coveragePercent
     };
   }
 
   _scoreSalary(expected, jobSalary) {
     if (!expected || !jobSalary?.max) {
-      return { score: 50, detail: 'Salary data not available' };
+      return { score: 50, status: 'UNKNOWN', detail: 'Salary data not available', deltaPercent: 0, withinBudget: false };
     }
 
     const min = jobSalary.min || 0;
     const max = jobSalary.max;
+    const deltaPercent = max > 0 ? Math.round(((expected / max) - 1) * 100) : 0;
 
-    if (expected >= min && expected <= max) return { score: 100, detail: 'Within budget' };
-    if (expected <= max * 1.10) return { score: 70, detail: `${Math.round(((expected / max) - 1) * 100)}% above — may be negotiable` };
-    if (expected <= max * 1.25) return { score: 40, detail: `${Math.round(((expected / max) - 1) * 100)}% above budget` };
-    if (expected < min * 0.7) return { score: 60, detail: 'Below range — may indicate level mismatch' };
-    return { score: 15, detail: `${Math.round(((expected / max) - 1) * 100)}% above — unlikely to fit` };
+    if (expected <= max) {
+      return { score: 100, status: 'WITHIN', detail: 'Within budget', deltaPercent, withinBudget: true };
+    }
+    if (expected <= max * 1.10) {
+      return { score: 80, status: 'SLIGHTLY_OVER', detail: `${deltaPercent}% above — may be negotiable`, deltaPercent, withinBudget: false };
+    }
+    if (expected <= max * 1.20) {
+      return { score: 60, status: 'OVER', detail: `${deltaPercent}% above budget`, deltaPercent, withinBudget: false };
+    }
+    if (expected <= max * 1.30) {
+      return { score: 40, status: 'OVER', detail: `${deltaPercent}% above budget`, deltaPercent, withinBudget: false };
+    }
+    return { score: 0, status: 'OVER', detail: `${deltaPercent}% above — unlikely to fit`, deltaPercent, withinBudget: false };
   }
 
   _scoreLocation(current, preferred, canRelocate, jobLoc) {
-    if (!jobLoc?.city) return { score: 50, detail: 'Job location not specified' };
+    if (!jobLoc?.city) return { score: 50, status: 'UNKNOWN', detail: 'Job location not specified' };
 
     const city = jobLoc.city.toLowerCase();
 
-    if (jobLoc.isRemote) return { score: 100, detail: 'Remote — no location constraint' };
-    if (current?.toLowerCase().includes(city)) return { score: 100, detail: `Already in ${jobLoc.city}` };
-    if (preferred?.some(l => l.toLowerCase().includes(city))) return { score: 85, detail: `${jobLoc.city} is preferred` };
-    if (jobLoc.isHybrid && canRelocate) return { score: 70, detail: 'Hybrid + willing to relocate' };
-    if (canRelocate) return { score: 60, detail: 'Different city — willing to relocate' };
-    return { score: 20, detail: `In ${current || 'unknown city'} — relocation not confirmed` };
+    if (jobLoc.isRemote) return { score: 100, status: 'EXACT', detail: 'Remote — no location constraint' };
+    if (current?.toLowerCase().includes(city)) return { score: 100, status: 'EXACT', detail: `Already in ${jobLoc.city}` };
+    if (preferred?.some(l => l.toLowerCase().includes(city))) return { score: 80, status: 'NEARBY', detail: `${jobLoc.city} is preferred` };
+    if (jobLoc.isHybrid && canRelocate) return { score: 60, status: 'NEARBY', detail: 'Hybrid + willing to relocate' };
+    if (canRelocate) return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
+    return { score: 20, status: 'DIFFERENT', detail: `In ${current || 'unknown city'} — relocation not confirmed` };
   }
 
   _scoreNoticePeriod(np) {
-    if (!np) return { score: 50, detail: 'Not specified' };
+    if (!np) return { score: 50, status: 'UNKNOWN', detail: 'Not specified', days: 0 };
 
     const p = np.toLowerCase();
-    if (p.includes('immediate') || p.includes('0')) return { score: 100, detail: 'Immediately available' };
-    if (p.includes('15') || p.includes('2 week')) return { score: 90, detail: '2 weeks' };
-    if (p.includes('30') || p.includes('1 month')) return { score: 80, detail: '1 month' };
-    if (p.includes('60') || p.includes('2 month')) return { score: 55, detail: '2 months' };
-    if (p.includes('90') || p.includes('3 month')) return { score: 35, detail: '3 months — may delay joining' };
-    return { score: 30, detail: np };
+    if (p.includes('immediate') || p.includes('0')) return { score: 100, status: 'IMMEDIATE', detail: 'Immediately available', days: 0 };
+    if (p.includes('15') || p.includes('2 week')) return { score: 100, status: 'IMMEDIATE', detail: '2 weeks', days: 15 };
+    if (p.includes('30') || p.includes('1 month')) return { score: 90, status: 'ACCEPTABLE', detail: '1 month', days: 30 };
+    if (p.includes('45')) return { score: 80, status: 'ACCEPTABLE', detail: '45 days', days: 45 };
+    if (p.includes('60') || p.includes('2 month')) return { score: 70, status: 'ACCEPTABLE', detail: '2 months', days: 60 };
+    if (p.includes('90') || p.includes('3 month')) return { score: 50, status: 'LONG', detail: '3 months — may delay joining', days: 90 };
+    return { score: 30, status: 'LONG', detail: np, days: 120 };
+  }
+
+  _scoreDomain(profile, job) {
+    // Basic domain matching without AI
+    const jobCategory = (job.category || '').toLowerCase();
+    const candidateTitle = (profile.currentDesignation || '').toLowerCase();
+    const candidateDomain = (profile.domain || '').toLowerCase();
+
+    if (!jobCategory) return { score: 50, status: 'UNKNOWN' };
+
+    // Check for exact or strong overlap
+    if (candidateTitle.includes(jobCategory) || candidateDomain.includes(jobCategory) ||
+        jobCategory.includes(candidateTitle) || jobCategory.includes(candidateDomain)) {
+      return { score: 100, status: 'EXACT' };
+    }
+
+    // Related tech domains
+    const techDomains = ['software', 'developer', 'engineer', 'frontend', 'backend', 'fullstack', 'mern', 'web', 'mobile', 'devops', 'cloud', 'data', 'ai', 'ml'];
+    const isCandidateTech = techDomains.some(d => candidateTitle.includes(d) || candidateDomain.includes(d));
+    const isJobTech = techDomains.some(d => jobCategory.includes(d));
+
+    if (isCandidateTech && isJobTech) return { score: 70, status: 'RELATED' };
+
+    return { score: 20, status: 'UNRELATED' };
+  }
+
+  _scoreEducation(education, job) {
+    const candidateEdu = Array.isArray(education) && education.length > 0 ? education[0]?.degree : null;
+    
+    if (!candidateEdu) return { score: 50, status: 'UNKNOWN', candidateEducation: 'Not provided' };
+
+    // Basic education scoring — without AI, we can't deeply compare
+    const eduLower = candidateEdu.toLowerCase();
+    const hasPostgrad = eduLower.includes('master') || eduLower.includes('mba') || eduLower.includes('m.tech') || eduLower.includes('m.s');
+    const hasGrad = eduLower.includes('bachelor') || eduLower.includes('b.tech') || eduLower.includes('b.e') || eduLower.includes('bca') || eduLower.includes('b.sc');
+
+    if (hasPostgrad) return { score: 100, status: 'EXCEEDS', candidateEducation: candidateEdu };
+    if (hasGrad) return { score: 90, status: 'MEETS', candidateEducation: candidateEdu };
+    return { score: 50, status: 'UNKNOWN', candidateEducation: candidateEdu };
+  }
+
+  _scoreStability(profile) {
+    // Without detailed job history, provide a neutral score
+    // This will be scored more accurately by the AI with full resume analysis
+    return {
+      score: 60,
+      averageTenureYears: 0,
+      isJobHopper: false,
+      risk: 'UNKNOWN',
+      detail: 'Requires resume analysis for accurate stability scoring'
+    };
   }
 
   // ── HELPERS ──
 
   _getMatchLevel(score) {
-    if (score >= 80) return 'STRONG_MATCH';
-    if (score >= 60) return 'GOOD_MATCH';
-    if (score >= 40) return 'PARTIAL_MATCH';
-    return 'WEAK_MATCH';
+    if (score >= 80) return 'STRONG';
+    if (score >= 65) return 'GOOD';
+    if (score >= 50) return 'PARTIAL';
+    return 'WEAK';
   }
 
   _getRecommendation(score) {
-    if (score >= 85) return 'Highly Recommended';
-    if (score >= 70) return 'Recommended';
-    if (score >= 55) return 'Worth Considering';
-    if (score >= 40) return 'Below Average';
-    return 'Not Recommended';
+    if (score >= 70) return 'SHORTLIST';
+    if (score >= 50) return 'HOLD';
+    return 'REJECT';
   }
 
   _getFlags(profile, job) {
@@ -219,7 +364,7 @@ class CandidateScoringService {
     }
 
     if (profile.expectedSalary > (job.salary?.max || 0) * 1.3) {
-      flags.push({ type: 'RISK', message: 'Salary expectation 30%+ above budget' });
+      flags.push({ type: 'WARNING', message: 'Salary expectation 30%+ above budget' });
     }
 
     const np = profile.noticePeriod?.toLowerCase() || '';
