@@ -1,67 +1,6 @@
 // backend/models/Subscription.js
 const mongoose = require('mongoose');
 
-const subscriptionPlanSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: true,
-    enum: ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM']
-  },
-  displayName: String,
-  price: {
-    type: Number,
-    required: true
-  },
-  gstPercentage: {
-    type: Number,
-    default: 18
-  },
-  currency: {
-    type: String,
-    default: 'INR'
-  },
-  duration: {
-    type: Number, // in days
-    default: 30
-  },
-  features: {
-    jobLevels: [String], // Entry, Mid, Senior, Executive, C-Suite
-    databaseAccess: {
-      type: String,
-      enum: ['basic', 'advanced', 'premium', 'unlimited']
-    },
-    commissionRate: {
-      type: String,
-      enum: ['standard', 'priority', 'premium', 'highest']
-    },
-    support: {
-      type: String,
-      enum: ['email', 'priority', 'dedicated', 'white-glove']
-    },
-    analytics: {
-      type: String,
-      enum: ['basic', 'advanced', 'premium', 'custom']
-    },
-    notifications: {
-      type: String,
-      enum: ['standard', 'priority', 'exclusive']
-    },
-    accountManager: Boolean,
-    performanceBonuses: Boolean,
-    exclusiveClientAccess: Boolean,
-    customStrategies: Boolean,
-    quarterlyReviews: Boolean,
-    monthlyReviews: Boolean,
-    revenueShare: Boolean
-  },
-  isActive: {
-    type: Boolean,
-    default: true
-  }
-}, {
-  timestamps: true
-});
-
 const subscriptionSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -75,8 +14,16 @@ const subscriptionSchema = new mongoose.Schema({
   },
   plan: {
     type: String,
-    enum: ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM'],
     required: true
+  },
+  planId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SubscriptionPlan'
+  },
+  billingCycle: {
+    type: String,
+    enum: ['monthly', 'yearly', 'fixed'],
+    default: 'monthly'
   },
   startDate: {
     type: Date,
@@ -119,7 +66,6 @@ const subscriptionSchema = new mongoose.Schema({
   timestamps: true
 });
 
-const SubscriptionPlan = mongoose.model('SubscriptionPlan', subscriptionPlanSchema);
 const Subscription = mongoose.model('Subscription', subscriptionSchema);
 
-module.exports = { SubscriptionPlan, Subscription };
+module.exports = { Subscription };

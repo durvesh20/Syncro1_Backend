@@ -236,6 +236,11 @@ const staffingPartnerSchema = new mongoose.Schema({
       enum: ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM'],
       default: 'FREE'
     },
+    billingCycle: {
+      type: String,
+      enum: ['monthly', 'yearly'],
+      default: 'monthly'
+    },
     startDate: Date,
     endDate: Date,
     isActive: { type: Boolean, default: true },

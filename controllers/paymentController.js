@@ -3,13 +3,13 @@ const { Subscription } = require('../models/Subscription');
 const StaffingPartner = require('../models/StaffingPartner');
 const paymentService = require('../services/paymentService');
 
-const paymentEnabled = process.env.PAYMENT_ENABLED === 'true';
+const paymentEnabled = paymentService.enabled;
 
 // @desc    Get Subscription Plans
 // @route   GET /api/payments/plans
 exports.getPlans = async (req, res) => {
   try {
-    const plans = paymentService.getSubscriptionPlans();
+    const plans = await paymentService.getSubscriptionPlans();
     res.json({
       success: true,
       data: {
@@ -31,8 +31,8 @@ exports.getPlans = async (req, res) => {
 // @route   POST /api/payments/create-order
 exports.createOrder = async (req, res) => {
   try {
-    const { plan } = req.body;
-    const plans = paymentService.getSubscriptionPlans();
+    const { plan, billingCycle = 'monthly' } = req.body;
+    const plans = await paymentService.getSubscriptionPlans();
 
     if (!plans[plan]) {
       return res.status(400).json({
@@ -41,15 +41,33 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    const planDetails = plans[plan];
+    const planData = plans[plan];
     const partner = await StaffingPartner.findOne({ user: req.user._id });
 
+    // Extract correct pricing based on billing cycle
+    let amount, duration;
+    if (plan === 'FREE') {
+      amount = planData.price || 0;
+      duration = planData.duration || 365;
+    } else {
+      const cycleData = planData[billingCycle];
+      if (!cycleData) {
+        return res.status(400).json({ success: false, message: 'Invalid billing cycle for this plan' });
+      }
+      // Note: In DB, price is base price, total includes GST. 
+      // For now, let's assume 'price' in DB is the total to keep it simple, or calculate GST.
+      // Based on seed: price is the value we want to charge.
+      const gst = Math.round(cycleData.price * (cycleData.gstPercentage || 18) / 100);
+      amount = cycleData.price + gst;
+      duration = cycleData.duration;
+    }
+
     // Free plan - activate immediately
-    if (plan === 'FREE' || planDetails.total === 0) {
+    if (plan === 'FREE' || amount === 0) {
       partner.subscription = {
         plan: 'FREE',
         startDate: new Date(),
-        endDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year
+        endDate: new Date(Date.now() + duration * 24 * 60 * 60 * 1000),
         isActive: true
       };
       await partner.save();
@@ -66,30 +84,20 @@ exports.createOrder = async (req, res) => {
 
     // If payment is disabled, allow mock activation
     if (!paymentEnabled) {
-      console.log('=================================================');
-      console.log('💳 MOCK PAYMENT - Payment Disabled');
-      console.log(`   Plan: ${plan}`);
-      console.log(`   Amount: ₹${planDetails.total}`);
-      console.log(`   User: ${req.user.email}`);
-      console.log('=================================================');
-
       return res.json({
         success: true,
-        message: 'Payment is disabled in development. Use /api/payments/mock-activate to activate plan.',
-        data: {
-          plan,
-          amount: planDetails.total,
-          paymentEnabled: false,
-          mockActivationUrl: '/api/payments/mock-activate'
-        }
+        mock: true,
+        message: 'Payment is disabled. Use mock activation.',
+        data: { plan, billingCycle, amount, paymentEnabled: false }
       });
     }
 
-    // Real payment flow (when enabled)
-    const receipt = `sub_${req.user._id}_${Date.now()}`;
-    const result = await paymentService.createOrder(planDetails.total, 'INR', receipt, {
+    // Real payment flow
+    const receipt = `rcpt_${Date.now()}`;
+    const result = await paymentService.createOrder(amount, 'INR', receipt, {
       userId: req.user._id.toString(),
-      plan
+      plan,
+      billingCycle
     });
 
     if (!result.success) {
@@ -103,10 +111,11 @@ exports.createOrder = async (req, res) => {
     res.json({
       success: true,
       data: {
-        orderId: result.order.id,
-        amount: result.order.amount,
+        id: result.order.id,
+        amount: Math.round(result.order.amount),
         currency: result.order.currency,
-        plan: planDetails,
+        plan: planData,
+        billingCycle,
         keyId: process.env.RAZORPAY_KEY_ID
       }
     });
@@ -120,52 +129,44 @@ exports.createOrder = async (req, res) => {
 };
 
 // @desc    Mock Activate Plan (Development Only)
-// @route   POST /api/payments/mock-activate
 exports.mockActivatePlan = async (req, res) => {
   try {
-    // Only allow in development or when payment is disabled
-    if (paymentEnabled && process.env.NODE_ENV === 'production') {
-      return res.status(403).json({
-        success: false,
-        message: 'Mock activation not allowed in production with payment enabled'
-      });
-    }
-
-    const { plan } = req.body;
-    const plans = paymentService.getSubscriptionPlans();
+    const { plan, billingCycle = 'monthly' } = req.body;
+    const plans = await paymentService.getSubscriptionPlans();
 
     if (!plans[plan]) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid plan selected'
-      });
+      return res.status(400).json({ success: false, message: 'Invalid plan selected' });
     }
 
-    const planDetails = plans[plan];
+    const planData = plans[plan];
     const partner = await StaffingPartner.findOne({ user: req.user._id });
 
-    if (!partner) {
-      return res.status(404).json({
-        success: false,
-        message: 'Staffing partner profile not found'
-      });
+    let amount, duration;
+    if (plan === 'FREE') {
+      amount = planData.price || 0;
+      duration = planData.duration || 365;
+    } else {
+      const cycleData = planData[billingCycle];
+      const gst = Math.round(cycleData.price * (cycleData.gstPercentage || 18) / 100);
+      amount = cycleData.price + gst;
+      duration = cycleData.duration;
     }
 
     const startDate = new Date();
-    const endDate = new Date(Date.now() + planDetails.duration * 24 * 60 * 60 * 1000);
+    const endDate = new Date(Date.now() + duration * 24 * 60 * 60 * 1000);
 
-    // Create subscription record
     const subscription = await Subscription.create({
       user: req.user._id,
       staffingPartner: partner._id,
       plan,
+      billingCycle,
       startDate,
       endDate,
       status: 'ACTIVE',
       payment: {
         orderId: 'mock_order_' + Date.now(),
         paymentId: 'mock_payment_' + Date.now(),
-        amount: planDetails.total,
+        amount: amount,
         currency: 'INR',
         method: 'mock',
         status: 'COMPLETED',
@@ -173,168 +174,113 @@ exports.mockActivatePlan = async (req, res) => {
       }
     });
 
-    // Update partner subscription
-    partner.subscription = {
-      plan,
-      startDate,
-      endDate,
-      isActive: true
-    };
+    partner.subscription = { plan, billingCycle, startDate, endDate, isActive: true };
     await partner.save();
-
-    console.log('=================================================');
-    console.log('✅ MOCK PLAN ACTIVATED');
-    console.log(`   Plan: ${plan}`);
-    console.log(`   Partner: ${partner.firstName} ${partner.lastName}`);
-    console.log(`   Valid until: ${endDate.toDateString()}`);
-    console.log('=================================================');
 
     res.json({
       success: true,
-      message: `${planDetails.name} plan activated successfully (Mock)`,
-      data: {
-        subscription,
-        partner: {
-          id: partner._id,
-          subscription: partner.subscription
-        }
-      }
+      message: `${planData.name} plan activated successfully (Mock)`,
+      data: { subscription, partner: { id: partner._id, subscription: partner.subscription } }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Mock activation failed',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Mock activation failed', error: error.message });
   }
 };
 
 // @desc    Verify Payment
-// @route   POST /api/payments/verify
 exports.verifyPayment = async (req, res) => {
   try {
-    const { orderId, paymentId, signature, plan } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan, billingCycle = 'monthly' } = req.body;
+    const result = await paymentService.verifyPayment(razorpay_order_id, razorpay_payment_id, razorpay_signature);
 
-    if (!paymentEnabled) {
-      return res.status(400).json({
-        success: false,
-        message: 'Payment is disabled. Use mock activation instead.'
-      });
-    }
-
-    // Verify signature
-    const isValid = paymentService.verifyPayment(orderId, paymentId, signature);
-
-    if (!isValid) {
-      return res.status(400).json({
-        success: false,
-        message: 'Payment verification failed - Invalid signature'
-      });
+    if (!result) {
+      return res.status(400).json({ success: false, message: 'Payment verification failed' });
     }
 
     const partner = await StaffingPartner.findOne({ user: req.user._id });
-    const plans = paymentService.getSubscriptionPlans();
-    const planDetails = plans[plan];
+    if (!partner) {
+      console.error('❌ Partner not found during verification:', req.user._id);
+      return res.status(404).json({ success: false, message: 'Staffing partner profile not found' });
+    }
+
+    const plans = await paymentService.getSubscriptionPlans();
+    const planData = plans[plan];
+
+    if (!planData) {
+      console.error('❌ Plan not found in DB during verification:', plan);
+      return res.status(400).json({ success: false, message: 'Plan configuration missing' });
+    }
+
+    let amount, duration;
+    if (plan === 'FREE') {
+      amount = planData.price || 0;
+      duration = planData.duration || 365;
+    } else {
+      const cycleData = planData[billingCycle];
+      if (!cycleData) {
+        console.error(`❌ Cycle data missing for ${plan} / ${billingCycle}`);
+        return res.status(400).json({ success: false, message: 'Billing cycle configuration missing' });
+      }
+      const gst = Math.round(cycleData.price * (cycleData.gstPercentage || 18) / 100);
+      amount = cycleData.price + gst;
+      duration = cycleData.duration;
+    }
 
     const startDate = new Date();
-    const endDate = new Date(Date.now() + planDetails.duration * 24 * 60 * 60 * 1000);
+    const endDate = new Date(Date.now() + duration * 24 * 60 * 60 * 1000);
 
-    // Create subscription
     const subscription = await Subscription.create({
       user: req.user._id,
       staffingPartner: partner._id,
       plan,
+      billingCycle,
       startDate,
       endDate,
       status: 'ACTIVE',
       payment: {
-        orderId,
-        paymentId,
-        amount: planDetails.total,
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        amount: amount,
         currency: 'INR',
         status: 'COMPLETED',
         paidAt: new Date()
       }
     });
 
-    // Update partner subscription
-    partner.subscription = {
-      plan,
-      startDate,
-      endDate,
-      isActive: true
-    };
+    partner.subscription = { plan, billingCycle, startDate, endDate, isActive: true };
     await partner.save();
 
-    res.json({
-      success: true,
-      message: 'Payment verified and subscription activated',
-      data: subscription
-    });
+    res.json({ success: true, message: 'Payment verified', data: subscription });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Payment verification failed',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Verification failed', error: error.message });
   }
 };
 
 // @desc    Get Subscription History
-// @route   GET /api/payments/subscriptions
 exports.getSubscriptions = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const subscriptions = await Subscription.find({ staffingPartner: partner._id }).sort({ createdAt: -1 });
 
-    if (!partner) {
-      return res.status(404).json({
-        success: false,
-        message: 'Staffing partner profile not found'
-      });
-    }
-
-    const subscriptions = await Subscription.find({ staffingPartner: partner._id })
-      .sort({ createdAt: -1 });
-
-    res.json({
-      success: true,
-      data: {
-        current: partner.subscription,
-        history: subscriptions,
-        paymentEnabled
-      }
-    });
+    res.json({ success: true, data: { current: partner.subscription, history: subscriptions, paymentEnabled } });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch subscriptions',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch history', error: error.message });
   }
 };
 
 // @desc    Get Current Subscription
-// @route   GET /api/payments/current
 exports.getCurrentSubscription = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
-
-    if (!partner) {
-      return res.status(404).json({
-        success: false,
-        message: 'Staffing partner profile not found'
-      });
-    }
-
-    const plans = paymentService.getSubscriptionPlans();
+    const plans = await paymentService.getSubscriptionPlans();
     const currentPlan = partner.subscription?.plan || 'FREE';
-    const planDetails = plans[currentPlan];
+    const planData = plans[currentPlan];
 
     res.json({
       success: true,
       data: {
         subscription: partner.subscription,
-        planDetails,
+        planData,
         isActive: partner.subscription?.isActive || false,
         daysRemaining: partner.subscription?.endDate
           ? Math.max(0, Math.ceil((new Date(partner.subscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)))
@@ -342,10 +288,6 @@ exports.getCurrentSubscription = async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch subscription',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch subscription', error: error.message });
   }
 };

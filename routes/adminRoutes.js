@@ -46,6 +46,14 @@ const {
 } = require('../controllers/adminController');
 
 const {
+  getAllPlans,
+  createPlan,
+  updatePlan,
+  deletePlan,
+  seedPlans
+} = require('../controllers/adminPlanController');
+
+const {
   protect,
   authorizeAdminAccess,
   checkPermission
@@ -544,6 +552,37 @@ router.get(
   '/jobs/:id/candidates',
   checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
   require('../controllers/adminController').getJobWithCandidates
+);
+
+// ==================== SUBSCRIPTION PLANS ====================
+router.get(
+  '/plans',
+  checkPermission(PERMISSIONS.MANAGE_PLANS),
+  getAllPlans
+);
+
+router.post(
+  '/plans',
+  checkPermission(PERMISSIONS.MANAGE_PLANS),
+  createPlan
+);
+
+router.put(
+  '/plans/:id',
+  checkPermission(PERMISSIONS.MANAGE_PLANS),
+  updatePlan
+);
+
+router.delete(
+  '/plans/:id',
+  checkPermission(PERMISSIONS.MANAGE_PLANS),
+  deletePlan
+);
+
+router.post(
+  '/plans/seed',
+  checkPermission(PERMISSIONS.MANAGE_PLANS),
+  seedPlans
 );
 
 

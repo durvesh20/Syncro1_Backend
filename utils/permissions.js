@@ -73,7 +73,10 @@ const PERMISSIONS = {
     CANCEL_INVOICE: 'CANCEL_INVOICE',
 
     // Notifications
-    VIEW_NOTIFICATIONS: 'VIEW_NOTIFICATIONS'
+    VIEW_NOTIFICATIONS: 'VIEW_NOTIFICATIONS',
+
+    // Subscriptions
+    MANAGE_PLANS: 'MANAGE_PLANS'
 };
 
 // Useful grouped arrays for validation / UI bundles
@@ -167,6 +170,10 @@ const PERMISSION_GROUPS = {
 
     NOTIFICATIONS: [
         PERMISSIONS.VIEW_NOTIFICATIONS
+    ],
+
+    SUBSCRIPTIONS: [
+        PERMISSIONS.MANAGE_PLANS
     ]
 };
 
