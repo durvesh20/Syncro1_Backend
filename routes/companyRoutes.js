@@ -44,7 +44,8 @@ const {
   confirmInterviewSlot,
   getJobInterviewSlots,
   cancelInterviewSlot,
-  confirmInterviewDetails
+  confirmInterviewDetails,
+  getInterviewSchedule
 } = require('../controllers/companyController');
 
 const { protect, authorize, checkStatus } = require('../middleware/auth');
@@ -244,6 +245,7 @@ router.post('/jobs/:jobId/interview-slots', checkStatus('VERIFIED', 'ACTIVE'), c
 router.get('/jobs/:jobId/interview-slots', checkStatus('VERIFIED', 'ACTIVE'), getJobInterviewSlots);
 router.delete('/jobs/:jobId/interview-slots/:slotId', checkStatus('VERIFIED', 'ACTIVE'), cancelInterviewSlot);
 router.post('/candidates/:id/confirm-interview', checkStatus('VERIFIED', 'ACTIVE'), confirmInterviewDetails);
+router.get('/interview-schedule', checkStatus('VERIFIED', 'ACTIVE'), getInterviewSchedule);
 
 router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), addNote);
 

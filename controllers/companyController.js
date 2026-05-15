@@ -1957,6 +1957,112 @@ exports.confirmInterviewDetails = async (req, res) => {
   }
 };
 
+// @desc    Get Interview Schedule for a Company
+// @route   GET /api/companies/interview-schedule
+exports.getInterviewSchedule = async (req, res) => {
+  try {
+    const company = await Company.findOne({ user: req.user._id });
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const { date } = req.query;
+    const filterDate = date ? new Date(date) : new Date();
+    filterDate.setHours(0, 0, 0, 0);
+
+    const nextDay = new Date(filterDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+
+    console.log(`[COMPANY] Fetching interview schedule for ${filterDate.toISOString()} to ${nextDay.toISOString()}`);
+
+    const slots = await InterviewSlot.find({
+      company: company._id,
+      date: {
+        $gte: filterDate,
+        $lt: nextDay
+      },
+      status: { $ne: 'CANCELLED' }
+    })
+    .populate({
+      path: 'bookedCandidates.candidate',
+      model: 'Candidate',
+      select: 'firstName lastName email mobile status profile.currentDesignation profile.middleName'
+    })
+    .populate('job', 'title location employmentType')
+    .sort({ startTime: 1 });
+
+    console.log(`[COMPANY] Found ${slots.length} slots for today`);
+    
+    // Format response for dashboard
+    const schedule = slots.map(slot => {
+      console.log(`[COMPANY] Slot ${slot._id} (Job: ${slot.job?.title}) has ${slot.bookedCandidates?.length || 0} candidate entries`);
+      
+      const bookings = (slot.bookedCandidates || [])
+        .map(b => {
+          if (!b.candidate) {
+            console.log(`[COMPANY] ERROR: Candidate field is missing/null in slot ${slot._id}. Entry:`, b);
+            return null;
+          }
+          
+          // Check if it's a populated object or just an ID
+          const cand = b.candidate;
+          if (!cand.firstName) {
+             console.log(`[COMPANY] ERROR: Candidate ${cand._id || cand} was not properly populated!`);
+             if (cand._id) {
+                // If it's an object but empty
+                return {
+                    candidateId: cand._id,
+                    name: "Data Missing",
+                    email: "Missing",
+                    status: b.bookingStatus
+                };
+             }
+             return null;
+          }
+
+          return {
+            candidateId: cand._id,
+            name: `${cand.firstName || ''} ${cand.middleName || ''} ${cand.lastName || ''}`.replace(/\s+/g, ' ').trim(),
+            email: cand.email,
+            designation: cand.profile?.currentDesignation || 'Candidate',
+            status: b.bookingStatus,
+            mobile: cand.mobile
+          };
+        })
+        .filter(Boolean);
+
+      return {
+        id: slot._id,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        interviewMode: slot.interviewMode,
+        jobTitle: slot.job?.title || 'Unknown Position',
+        jobLocation: slot.job?.location?.city || 'N/A',
+        bookings
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        date: filterDate,
+        schedule,
+        debug: {
+            slotCount: slots.length,
+            totalBookings: schedule.reduce((sum, s) => sum + s.bookings.length, 0)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[COMPANY] Get interview schedule error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch interview schedule',
+      error: error.message
+    });
+  }
+};
+
 // @desc    Add Note to Candidate
 // @route   POST /api/companies/candidates/:id/notes
 exports.addNote = async (req, res) => {
