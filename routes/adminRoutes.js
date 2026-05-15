@@ -579,11 +579,7 @@ router.delete(
   deletePlan
 );
 
-router.post(
-  '/plans/seed',
-  checkPermission(PERMISSIONS.MANAGE_PLANS),
-  seedPlans
-);
+
 
 
 module.exports = router;

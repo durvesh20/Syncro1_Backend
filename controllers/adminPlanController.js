@@ -121,34 +121,3 @@ exports.deletePlan = async (req, res) => {
     });
   }
 };
-
-// @desc    Seed initial plans (Admin only)
-// @route   POST /api/admin/plans/seed
-exports.seedPlans = async (req, res) => {
-  try {
-    const initialPlans = [
-      { planKey: 'FREE', name: 'Free', subHeading: 'Entry-level placements', ctcRange: '₹0 - ₹5L', price: 0, duration: 365, billingCycle: 'fixed', features: [], sortOrder: 1 },
-      { planKey: 'GROWTH_MONTHLY', name: 'Growth', subHeading: 'Mid-level opportunities', ctcRange: '₹5L - ₹20L', price: 4999, duration: 30, billingCycle: 'monthly', isHighlight: true, features: ['Mid-level jobs', 'Advanced database access', 'Priority notifications'], sortOrder: 2 },
-      { planKey: 'GROWTH_YEARLY', name: 'Growth', subHeading: 'Mid-level opportunities', ctcRange: '₹5L - ₹20L', price: 49990, duration: 365, billingCycle: 'yearly', features: ['Mid-level jobs', 'Advanced database access', 'Priority notifications'], sortOrder: 3 },
-      { planKey: 'PROFESSIONAL_MONTHLY', name: 'Professional', subHeading: 'Senior-level opportunities', ctcRange: '₹20L - ₹35L', price: 7999, duration: 30, billingCycle: 'monthly', features: ['Senior-level jobs', 'Premium commission', 'VIP support'], sortOrder: 4 },
-      { planKey: 'PROFESSIONAL_YEARLY', name: 'Professional', subHeading: 'Senior-level opportunities', ctcRange: '₹20L - ₹35L', price: 79990, duration: 365, billingCycle: 'yearly', features: ['Senior-level jobs', 'Premium commission', 'VIP support'], sortOrder: 5 },
-      { planKey: 'PREMIUM_MONTHLY', name: 'Premium', subHeading: 'Executive & C-suite jobs', ctcRange: '₹35L+', price: 11999, duration: 30, billingCycle: 'monthly', features: ['Executive jobs', 'Highest commission', 'White-glove support'], sortOrder: 6 },
-      { planKey: 'PREMIUM_YEARLY', name: 'Premium', subHeading: 'Executive & C-suite jobs', ctcRange: '₹35L+', price: 119990, duration: 365, billingCycle: 'yearly', features: ['Executive jobs', 'Highest commission', 'White-glove support'], sortOrder: 7 }
-    ];
-
-    await SubscriptionPlan.deleteMany({});
-    const plans = await SubscriptionPlan.insertMany(initialPlans);
-
-    res.json({
-      success: true,
-      message: 'Plans seeded successfully',
-      count: plans.length
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to seed plans',
-      error: error.message
-    });
-  }
-};
