@@ -12,7 +12,102 @@ const PLAN_HIERARCHY = {
   'PREMIUM': ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM']
 };
 
+function parseCtcLimit(ctcRangeStr) {
+  if (!ctcRangeStr) return Infinity;
+  
+  const str = ctcRangeStr.toUpperCase().replace(/\s+/g, '');
+  
+  if (str.includes('ALL') || str.includes('NO_LIMIT') || str.includes('ANY') || str === '') {
+    return Infinity;
+  }
+  
+  const match = str.match(/(\d+(?:\.\d+)?)/);
+  if (match) {
+    const value = parseFloat(match[1]);
+    
+    // Check if the range implies Lakhs/L/LPA
+    if (str.includes('L') || str.includes('LPA') || str.includes('LAKH')) {
+      return value * 100000;
+    }
+    
+    // If it's a raw number without L, but is small (e.g. <= 100), assume it's in LPA
+    if (value <= 100) {
+      return value * 100000;
+    }
+    
+    return value;
+  }
+  
+  return Infinity;
+}
+
 class JobAccessService {
+
+  async getPlanCtcLimits() {
+    const SubscriptionPlan = require('../models/SubscriptionPlan');
+    try {
+      const plans = await SubscriptionPlan.find({ isActive: true });
+      
+      const limits = {
+        'FREE': 500000,
+        'GROWTH': 2000000,
+        'PROFESSIONAL': 3500000,
+        'PREMIUM': Infinity
+      };
+      
+      for (const plan of plans) {
+        const key = plan.planKey.toUpperCase();
+        const limit = parseCtcLimit(plan.ctcRange);
+        
+        if (key === 'FREE') {
+          limits['FREE'] = limit;
+        } else if (key.startsWith('GROWTH')) {
+          limits['GROWTH'] = limit;
+        } else if (key.startsWith('PROFESSIONAL')) {
+          limits['PROFESSIONAL'] = limit;
+        } else if (key.startsWith('PREMIUM')) {
+          limits['PREMIUM'] = limit;
+        }
+      }
+      
+      return limits;
+    } catch (error) {
+      console.error('[JobAccessService] Failed to fetch subscription plans for CTC limits:', error);
+      return {
+        'FREE': 500000,
+        'GROWTH': 2000000,
+        'PROFESSIONAL': 3500000,
+        'PREMIUM': Infinity
+      };
+    }
+  }
+
+  async isPlanEligibleForJob(partnerPlan, job, providedCtcLimits = null) {
+    const plan = partnerPlan || 'FREE';
+    
+    const ctcLimits = providedCtcLimits || await this.getPlanCtcLimits();
+    const ctcLimit = ctcLimits[plan] || 500000;
+    if (ctcLimit !== Infinity) {
+      let jobMinSalary = job.salary?.min || job.salary?.max || 0;
+      // Normalize salary: if <= 100, treat it as LPA and convert to raw Rupees
+      if (jobMinSalary <= 100) {
+        jobMinSalary = jobMinSalary * 100000;
+      }
+      if (jobMinSalary > ctcLimit) {
+        return false;
+      }
+    }
+    
+    if (job.eligiblePlans && job.eligiblePlans.length > 0) {
+      const partnerAccessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
+      const hasPlanAccess = job.eligiblePlans.some(p => partnerAccessiblePlans.includes(p));
+      if (!hasPlanAccess) {
+        return false;
+      }
+    }
+    
+    return true;
+  }
 
   /**
    * Get jobs accessible to a partner based on their subscription plan
@@ -21,6 +116,21 @@ class JobAccessService {
   async getAccessibleJobs(partnerId, partnerPlan, filters = {}) {
     const plan = partnerPlan || 'FREE';
     const accessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
+    
+    // Fetch CTC limits from DB
+    const ctcLimits = await this.getPlanCtcLimits();
+    const ctcLimit = ctcLimits[plan] || 500000;
+
+    // Auto-update expired active jobs on the platform to ON_HOLD
+    await Job.updateMany(
+      {
+        status: 'ACTIVE',
+        applicationDeadline: { $lt: new Date() }
+      },
+      {
+        $set: { status: 'ON_HOLD' }
+      }
+    );
 
     // Build query
     const query = {
@@ -28,41 +138,88 @@ class JobAccessService {
       eligiblePlans: { $in: accessiblePlans }
     };
 
+    // Apply experience level filter if provided by parameters
+    if (filters.experienceLevel) {
+      query.experienceLevel = filters.experienceLevel;
+    }
+
+    // Build conditions to combine via $and
+    const conditions = [];
+
+    // CTC limit restriction
+    if (ctcLimit !== Infinity) {
+      const lpaLimit = ctcLimit / 100000;
+      conditions.push({
+        $or: [
+          // If stored as raw Rupees (value > 100)
+          { 
+            $and: [
+              { 'salary.min': { $gt: 100 } },
+              { 'salary.min': { $lte: ctcLimit } }
+            ]
+          },
+          // If stored as LPA (value <= 100)
+          {
+            $and: [
+              { 'salary.min': { $lte: 100 } },
+              { 'salary.min': { $lte: lpaLimit } }
+            ]
+          },
+          // If min salary is not defined, check max salary in raw Rupees
+          {
+            $and: [
+              { $or: [{ 'salary.min': { $exists: false } }, { 'salary.min': null }] },
+              { 'salary.max': { $gt: 100 } },
+              { 'salary.max': { $lte: ctcLimit } }
+            ]
+          },
+          // If min salary is not defined, check max salary in LPA
+          {
+            $and: [
+              { $or: [{ 'salary.min': { $exists: false } }, { 'salary.min': null }] },
+              { 'salary.max': { $lte: 100 } },
+              { 'salary.max': { $lte: lpaLimit } }
+            ]
+          }
+        ]
+      });
+    }
+
     // Apply filters
     if (filters.category) query.category = filters.category;
-    if (filters.experienceLevel) query.experienceLevel = filters.experienceLevel;
     if (filters.employmentType) query.employmentType = filters.employmentType;
     if (filters.isUrgent === 'true' || filters.isUrgent === true) query.isUrgent = true;
 
     if (filters.location) {
       const searchTerm = filters.location.slice(0, 100);
       const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      query.$or = [
-        { 'location.city': new RegExp(escaped, 'i') },
-        { 'location.isRemote': true }
-      ];
+      conditions.push({
+        $or: [
+          { 'location.city': new RegExp(escaped, 'i') },
+          { 'location.isRemote': true }
+        ]
+      });
     }
 
     if (filters.search) {
       const searchTerm = filters.search.slice(0, 100);
       const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const searchOr = [
-        { title: new RegExp(escaped, 'i') },
-        { category: new RegExp(escaped, 'i') },
-        { 'skills.required': new RegExp(escaped, 'i') },
-        { tags: new RegExp(escaped, 'i') }
-      ];
-
-      if (query.$or) {
-        query.$and = [{ $or: query.$or }, { $or: searchOr }];
-        delete query.$or;
-      } else {
-        query.$or = searchOr;
-      }
+      conditions.push({
+        $or: [
+          { title: new RegExp(escaped, 'i') },
+          { category: new RegExp(escaped, 'i') },
+          { 'skills.required': new RegExp(escaped, 'i') },
+          { tags: new RegExp(escaped, 'i') }
+        ]
+      });
     }
 
     if (filters.salaryMin) query['salary.max'] = { $gte: Number(filters.salaryMin) };
     if (filters.salaryMax) query['salary.min'] = { $lte: Number(filters.salaryMax) };
+
+    if (conditions.length > 0) {
+      query.$and = conditions;
+    }
 
     let sort = { 'metrics.interestedPartners': -1, isFeatured: -1, isUrgent: -1, createdAt: -1 };
 

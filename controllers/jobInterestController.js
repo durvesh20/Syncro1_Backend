@@ -4,6 +4,7 @@ const LimitExtensionRequest = require('../models/LimitExtensionRequest');
 const StaffingPartner = require('../models/StaffingPartner');
 const Job = require('../models/Job');
 const User = require('../models/User');
+const jobAccessService = require('../services/jobAccessService');
 
 // ================================================================
 // PARTNER ROUTES
@@ -29,6 +30,18 @@ exports.showInterest = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: 'Job not found'
+            });
+        }
+
+        // Check plan eligibility
+        const partnerPlan = partner.subscription?.plan || 'FREE';
+        const isEligible = await jobAccessService.isPlanEligibleForJob(partnerPlan, job);
+        if (!isEligible) {
+            return res.status(403).json({
+                success: false,
+                message: `This job is not accessible on your ${partnerPlan} plan. Please upgrade your subscription.`,
+                requiredPlans: job.eligiblePlans,
+                currentPlan: partnerPlan
             });
         }
 

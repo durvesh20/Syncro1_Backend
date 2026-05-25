@@ -136,7 +136,7 @@ const jobSchema = new mongoose.Schema({
   // ==================== JOB STATUS ====================
   status: {
     type: String,
-    enum: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'CLOSED', 'FILLED'],
+    enum: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'CLOSED', 'FILLED', 'ON_HOLD'],
     default: 'DRAFT'
   },
 
@@ -252,7 +252,8 @@ const jobSchema = new mongoose.Schema({
     default: false
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  validateModifiedOnly: true
 });
 
 // ==================== INDEXES ====================
@@ -277,6 +278,16 @@ jobSchema.virtual('requiresApproval').get(function () {
 });
 
 // ==================== MIDDLEWARE ====================
+jobSchema.pre('save', function (next) {
+  const now = new Date();
+  if (this.status === 'ACTIVE' && this.applicationDeadline && this.applicationDeadline < now) {
+    this.status = 'ON_HOLD';
+  } else if (this.status === 'ON_HOLD' && this.applicationDeadline && this.applicationDeadline > now) {
+    this.status = 'ACTIVE';
+  }
+  next();
+});
+
 jobSchema.pre('save', function (next) {
   // Auto-generate slug
   if (this.isModified('title') && !this.slug) {

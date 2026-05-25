@@ -6,6 +6,7 @@ const PartnerCandidate = require('../models/PartnerCandidate');
 const StaffingPartner = require('../models/StaffingPartner');
 const Candidate = require('../models/Candidate');
 const Job = require('../models/Job');
+const jobAccessService = require('../services/jobAccessService');
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -348,6 +349,18 @@ exports.applyFromPool = async (req, res) => {
     if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
     if (job.status !== 'ACTIVE') {
       return res.status(400).json({ success: false, message: 'This job is no longer accepting applications' });
+    }
+
+    // Check plan eligibility
+    const partnerPlan = partner.subscription?.plan || 'FREE';
+    const isEligible = await jobAccessService.isPlanEligibleForJob(partnerPlan, job);
+    if (!isEligible) {
+      return res.status(403).json({
+        success: false,
+        message: `This job is not accessible on your ${partnerPlan} plan. Please upgrade your subscription.`,
+        requiredPlans: job.eligiblePlans,
+        currentPlan: partnerPlan
+      });
     }
 
     // ── 3. Check partner has shown interest ──
