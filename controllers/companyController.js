@@ -1999,12 +1999,19 @@ exports.getInterviewSchedule = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
-    const { date } = req.query;
-    const filterDate = date ? new Date(date) : new Date();
-    filterDate.setHours(0, 0, 0, 0);
-
-    const nextDay = new Date(filterDate);
-    nextDay.setDate(nextDay.getDate() + 1);
+    const { date, startDate, endDate } = req.query;
+    let filterDate, nextDay;
+    if (startDate && endDate) {
+      filterDate = new Date(startDate);
+      filterDate.setHours(0, 0, 0, 0);
+      nextDay = new Date(endDate);
+      nextDay.setHours(23, 59, 59, 999);
+    } else {
+      filterDate = date ? new Date(date) : new Date();
+      filterDate.setHours(0, 0, 0, 0);
+      nextDay = new Date(filterDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+    }
 
     console.log(`[COMPANY] Fetching interview schedule for ${filterDate.toISOString()} to ${nextDay.toISOString()}`);
 
@@ -2012,19 +2019,19 @@ exports.getInterviewSchedule = async (req, res) => {
       company: company._id,
       date: {
         $gte: filterDate,
-        $lt: nextDay
+        $lte: nextDay
       },
       status: { $ne: 'CANCELLED' }
     })
     .populate({
       path: 'bookedCandidates.candidate',
       model: 'Candidate',
-      select: 'firstName lastName email mobile status profile.currentDesignation profile.middleName'
+      select: 'firstName lastName email mobile status profile.currentDesignation profile.middleName uniqueId interviewConfig'
     })
     .populate('job', 'title location employmentType')
-    .sort({ startTime: 1 });
+    .sort({ date: 1, startTime: 1 });
 
-    console.log(`[COMPANY] Found ${slots.length} slots for today`);
+    console.log(`[COMPANY] Found ${slots.length} slots for range`);
     
     // Format response for dashboard
     const schedule = slots.map(slot => {
@@ -2045,6 +2052,7 @@ exports.getInterviewSchedule = async (req, res) => {
                 // If it's an object but empty
                 return {
                     candidateId: cand._id,
+                    uniqueId: cand.uniqueId || "N/A",
                     name: "Data Missing",
                     email: "Missing",
                     status: b.bookingStatus
@@ -2055,22 +2063,26 @@ exports.getInterviewSchedule = async (req, res) => {
 
           return {
             candidateId: cand._id,
+            uniqueId: cand.uniqueId || "N/A",
             name: `${cand.firstName || ''} ${cand.middleName || ''} ${cand.lastName || ''}`.replace(/\s+/g, ' ').trim(),
             email: cand.email,
             designation: cand.profile?.currentDesignation || 'Candidate',
             status: b.bookingStatus,
-            mobile: cand.mobile
+            mobile: cand.mobile,
+            interviewConfig: cand.interviewConfig || null
           };
         })
         .filter(Boolean);
 
       return {
         id: slot._id,
+        date: slot.date,
         startTime: slot.startTime,
         endTime: slot.endTime,
         interviewMode: slot.interviewMode,
         jobTitle: slot.job?.title || 'Unknown Position',
         jobLocation: slot.job?.location?.city || 'N/A',
+        notes: slot.notes,
         bookings
       };
     });

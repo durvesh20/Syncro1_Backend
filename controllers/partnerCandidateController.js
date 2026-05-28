@@ -443,6 +443,7 @@ exports.applyFromPool = async (req, res) => {
       submittedBy: partner._id,
       job: job._id,
       company,
+      uniqueId: poolCandidate.uniqueId,
 
       // Identity — copied by value
       firstName: poolCandidate.firstName,

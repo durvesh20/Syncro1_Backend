@@ -21,6 +21,11 @@ const candidateSchema = new mongoose.Schema({
   },
 
   // Candidate Info
+  uniqueId: {
+    type: String,
+    unique: true,
+    sparse: true,
+  },
   firstName: {
     type: String,
     required: true,
@@ -663,5 +668,21 @@ candidateSchema.methods.getCommissionSummary = function () {
     isEligible: this.isPayoutEligible()
   };
 };
+
+candidateSchema.pre('save', function (next) {
+  if (!this.uniqueId) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const date = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+
+    this.uniqueId = `${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
+  }
+  next();
+});
 
 module.exports = mongoose.model('Candidate', candidateSchema);
