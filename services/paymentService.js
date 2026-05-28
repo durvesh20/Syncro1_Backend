@@ -147,11 +147,15 @@ class PaymentService {
               ctcRange: plan.ctcRange,
               features: plan.features,
               monthly: null,
+              '3month': null,
+              '6month': null,
               yearly: null
             };
           }
           
           if (plan.billingCycle === 'monthly') planMap[baseKey].monthly = plan;
+          if (plan.billingCycle === '3month') planMap[baseKey]['3month'] = plan;
+          if (plan.billingCycle === '6month') planMap[baseKey]['6month'] = plan;
           if (plan.billingCycle === 'yearly') planMap[baseKey].yearly = plan;
         }
       });

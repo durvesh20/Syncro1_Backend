@@ -937,6 +937,26 @@ exports.getJobDetails = async (req, res) => {
       });
     }
 
+    // Check plan eligibility
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner profile not found'
+      });
+    }
+
+    const partnerPlan = partner.subscription?.plan || 'FREE';
+    const isEligible = await jobAccessService.isPlanEligibleForJob(partnerPlan, job);
+    if (!isEligible) {
+      return res.status(403).json({
+        success: false,
+        message: `This job is not accessible on your ${partnerPlan} plan. Please upgrade your subscription.`,
+        requiredPlans: job.eligiblePlans,
+        currentPlan: partnerPlan
+      });
+    }
+
     job.metrics.views += 1;
     await job.save();
 
@@ -1060,14 +1080,11 @@ exports.submitCandidate = async (req, res) => {
 
     // ✅ STEP 3: Check plan eligibility
     const partnerPlan = partner.subscription?.plan || 'FREE';
-    if (
-      job.eligiblePlans &&
-      job.eligiblePlans.length > 0 &&
-      !job.eligiblePlans.includes(partnerPlan)
-    ) {
+    const isEligible = await jobAccessService.isPlanEligibleForJob(partnerPlan, job);
+    if (!isEligible) {
       return res.status(403).json({
         success: false,
-        message: `This job requires ${job.eligiblePlans.join(' or ')} plan`,
+        message: `This job is not accessible on your ${partnerPlan} plan. Please upgrade your subscription.`,
         requiredPlans: job.eligiblePlans,
         currentPlan: partnerPlan
       });

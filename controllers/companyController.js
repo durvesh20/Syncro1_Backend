@@ -808,6 +808,18 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
+    // Auto-update expired active jobs of this company to ON_HOLD
+    await Job.updateMany(
+      {
+        company: company._id,
+        status: 'ACTIVE',
+        applicationDeadline: { $lt: new Date() }
+      },
+      {
+        $set: { status: 'ON_HOLD' }
+      }
+    );
+
     const jobStats = await Job.aggregate([
       { $match: { company: company._id } },
       { $group: { _id: "$status", count: { $sum: 1 } } },
@@ -1014,6 +1026,18 @@ exports.getJobs = async (req, res) => {
       });
     }
 
+    // Auto-update expired active jobs of this company to ON_HOLD
+    await Job.updateMany(
+      {
+        company: company._id,
+        status: 'ACTIVE',
+        applicationDeadline: { $lt: new Date() }
+      },
+      {
+        $set: { status: 'ON_HOLD' }
+      }
+    );
+
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
     const { status, approvalStatus } = req.query;
 
@@ -1162,6 +1186,12 @@ exports.getJob = async (req, res) => {
       });
     }
 
+    // Auto-update if it is active but application deadline is passed
+    if (job.status === 'ACTIVE' && job.applicationDeadline && new Date(job.applicationDeadline) < new Date()) {
+      job.status = 'ON_HOLD';
+      await job.save();
+    }
+
     res.json({
       success: true,
       data: job,
@@ -1180,10 +1210,7 @@ exports.getJob = async (req, res) => {
 // @route   PUT /api/companies/jobs/:id
 exports.updateJob = async (req, res) => {
   try {
-    const job = await Job.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const job = await Job.findById(req.params.id);
 
     if (!job) {
       return res.status(404).json({
@@ -1191,6 +1218,12 @@ exports.updateJob = async (req, res) => {
         message: "Job not found",
       });
     }
+
+    // Apply fields from body
+    Object.assign(job, req.body);
+
+    // This will trigger the pre-save status sync hooks
+    await job.save();
 
     res.json({
       success: true,

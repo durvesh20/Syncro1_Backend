@@ -238,7 +238,7 @@ const staffingPartnerSchema = new mongoose.Schema({
     },
     billingCycle: {
       type: String,
-      enum: ['monthly', 'yearly'],
+      enum: ['monthly', '3month', '6month', 'yearly'],
       default: 'monthly'
     },
     startDate: Date,

@@ -19,21 +19,29 @@ exports.getAllPlans = async (req, res) => {
   }
 };
 
-// Helper function to calculate yearly price based on monthly and discount
-const calculateYearlyPrice = async (planData) => {
-  if (planData.billingCycle !== 'yearly' || !planData.discountPercentage || planData.discountPercentage <= 0) {
+// Helper function to calculate price based on monthly plan and discount percentage
+const calculateDiscountedPrice = async (planData) => {
+  const { billingCycle, discountPercentage, planKey } = planData;
+  const cycle = billingCycle?.toLowerCase();
+  
+  if (!['3month', '6month', 'yearly'].includes(cycle) || !discountPercentage || discountPercentage <= 0) {
     return planData.price;
   }
 
-  // Get base key (e.g., GROWTH from GROWTH_YEARLY)
-  const baseKey = planData.planKey.split('_')[0];
+  // Get base key (e.g., GROWTH from GROWTH_3MONTH)
+  const baseKey = planKey.split('_')[0].toUpperCase();
   const monthlyKey = `${baseKey}_MONTHLY`;
 
   // Find the monthly plan
   const monthlyPlan = await SubscriptionPlan.findOne({ planKey: monthlyKey });
   if (monthlyPlan) {
-    const originalYearly = monthlyPlan.price * 12;
-    const discounted = originalYearly * (1 - planData.discountPercentage / 100);
+    let multiplier = 1;
+    if (cycle === '3month') multiplier = 3;
+    else if (cycle === '6month') multiplier = 6;
+    else if (cycle === 'yearly') multiplier = 12;
+
+    const originalPrice = monthlyPlan.price * multiplier;
+    const discounted = originalPrice * (1 - discountPercentage / 100);
     return Math.round(discounted);
   }
 
@@ -42,10 +50,11 @@ const calculateYearlyPrice = async (planData) => {
 
 // @desc    Create a new plan
 // @route   POST /api/admin/plans
+// exports.createPlan = async (req, res) => {
 exports.createPlan = async (req, res) => {
   try {
-    const planData = req.body;
-    planData.price = await calculateYearlyPrice(planData);
+    const { _id, __v, createdAt, updatedAt, ...planData } = req.body;
+    planData.price = await calculateDiscountedPrice(planData);
 
     const plan = await SubscriptionPlan.create(planData);
     res.status(201).json({
@@ -66,8 +75,8 @@ exports.createPlan = async (req, res) => {
 // @route   PUT /api/admin/plans/:id
 exports.updatePlan = async (req, res) => {
   try {
-    const planData = req.body;
-    planData.price = await calculateYearlyPrice(planData);
+    const { _id, __v, createdAt, updatedAt, ...planData } = req.body;
+    planData.price = await calculateDiscountedPrice(planData);
 
     const plan = await SubscriptionPlan.findByIdAndUpdate(
       req.params.id,
