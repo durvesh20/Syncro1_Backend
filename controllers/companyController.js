@@ -2013,8 +2013,6 @@ exports.getInterviewSchedule = async (req, res) => {
       nextDay.setDate(nextDay.getDate() + 1);
     }
 
-    console.log(`[COMPANY] Fetching interview schedule for ${filterDate.toISOString()} to ${nextDay.toISOString()}`);
-
     const slots = await InterviewSlot.find({
       company: company._id,
       date: {
@@ -2030,24 +2028,19 @@ exports.getInterviewSchedule = async (req, res) => {
     })
     .populate('job', 'title location employmentType')
     .sort({ date: 1, startTime: 1 });
-
-    console.log(`[COMPANY] Found ${slots.length} slots for range`);
     
     // Format response for dashboard
     const schedule = slots.map(slot => {
-      console.log(`[COMPANY] Slot ${slot._id} (Job: ${slot.job?.title}) has ${slot.bookedCandidates?.length || 0} candidate entries`);
       
       const bookings = (slot.bookedCandidates || [])
         .map(b => {
           if (!b.candidate) {
-            console.log(`[COMPANY] ERROR: Candidate field is missing/null in slot ${slot._id}. Entry:`, b);
             return null;
           }
           
           // Check if it's a populated object or just an ID
           const cand = b.candidate;
           if (!cand.firstName) {
-             console.log(`[COMPANY] ERROR: Candidate ${cand._id || cand} was not properly populated!`);
              if (cand._id) {
                 // If it's an object but empty
                 return {
