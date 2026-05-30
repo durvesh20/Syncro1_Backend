@@ -2344,12 +2344,63 @@ exports.requestJobEdit = async (req, res) => {
       });
     }
 
+    // Helper function for deep value comparison (handles Dates, nested objects, and arrays)
+    const valuesAreEqual = (a, b) => {
+      if (a === b) return true;
+      if (a == null || b == null) return a == b;
+
+      // Handle Dates
+      const isDateLike = (val) => {
+        if (val instanceof Date) return true;
+        if (typeof val === 'string' && !isNaN(Date.parse(val)) && val.includes('-')) {
+          return true;
+        }
+        return false;
+      };
+
+      if (isDateLike(a) && isDateLike(b)) {
+        try {
+          const dateA = new Date(a);
+          const dateB = new Date(b);
+          if (dateA.getTime() === dateB.getTime()) return true;
+          
+          // Fallback to split string comparison for simple dates
+          const ymdA = dateA.toISOString().split('T')[0];
+          const ymdB = dateB.toISOString().split('T')[0];
+          return ymdA === ymdB;
+        } catch (e) {
+          // fall through
+        }
+      }
+
+      // Handle Array
+      if (Array.isArray(a) && Array.isArray(b)) {
+        if (a.length !== b.length) return false;
+        return a.every((item, idx) => valuesAreEqual(item, b[idx]));
+      }
+
+      // Handle Object
+      if (typeof a === 'object' && typeof b === 'object') {
+        const keysA = Object.keys(a);
+        const keysB = Object.keys(b);
+        if (keysA.length !== keysB.length) return false;
+        return keysA.every(key => valuesAreEqual(a[key], b[key]));
+      }
+
+      // Handle string vs number comparison
+      if ((typeof a === 'string' && typeof b === 'number') || (typeof a === 'number' && typeof b === 'string')) {
+        return String(a) === String(b);
+      }
+
+      return JSON.stringify(a) === JSON.stringify(b);
+    };
+
     // Validate that requested fields exist and values are different
     const validatedChanges = {};
     const invalidFields = [];
 
     for (const [field, change] of Object.entries(requestedChanges)) {
-      if (!change.old || !change.new) {
+      if (change.old === undefined || change.new === undefined) {
         invalidFields.push(`${field}: Must provide both 'old' and 'new' values`);
         continue;
       }
@@ -2362,15 +2413,14 @@ exports.requestJobEdit = async (req, res) => {
         continue;
       }
 
-      // Check if old value matches current
-      if (JSON.stringify(currentValue) !== JSON.stringify(change.old)) {
+      // Check if old value matches current (using our robust comparison helper)
+      if (!valuesAreEqual(currentValue, change.old)) {
         invalidFields.push(`${field}: Old value doesn't match current value`);
         continue;
       }
 
-      // Check if new value is different
-      if (JSON.stringify(change.old) === JSON.stringify(change.new)) {
-        invalidFields.push(`${field}: New value is same as old value`);
+      // Check if new value is actually different; if they are same, we just skip it (don't error out)
+      if (valuesAreEqual(change.old, change.new)) {
         continue;
       }
 
@@ -2382,6 +2432,13 @@ exports.requestJobEdit = async (req, res) => {
         success: false,
         message: 'Invalid changes requested',
         errors: invalidFields
+      });
+    }
+
+    if (Object.keys(validatedChanges).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No changes were detected in the requested edit'
       });
     }
 

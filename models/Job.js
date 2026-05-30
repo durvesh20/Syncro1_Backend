@@ -353,7 +353,9 @@ jobSchema.methods.applyEditChanges = function (appliedChanges) {
     for (let i = 0; i < keys.length - 1; i++) {
       obj = obj[keys[i]];
     }
-    obj[keys[keys.length - 1]] = appliedChanges[field];
+    const val = appliedChanges[field];
+    const valueToSet = (val && typeof val === 'object' && 'new' in val) ? val.new : val;
+    obj[keys[keys.length - 1]] = valueToSet;
     this.markModified(field);
   });
 };
