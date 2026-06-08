@@ -11,6 +11,7 @@ const {
   getUsers,
   updateUserStatus,
   getAnalytics,
+  createAdmin,
 
   // Job Approval Workflow
   getPendingJobs,
@@ -56,6 +57,7 @@ const {
 const {
   protect,
   authorizeAdminAccess,
+  authorize,
   checkPermission
 } = require('../middleware/auth');
 
@@ -98,6 +100,12 @@ router.put(
 );
 
 // ==================== USER MANAGEMENT ====================
+router.post(
+  '/admins',
+  authorize('admin'),
+  createAdmin
+);
+
 router.get(
   '/users',
   checkPermission(PERMISSIONS.VIEW_USERS),

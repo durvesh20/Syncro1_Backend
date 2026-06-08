@@ -16,6 +16,122 @@ const hasPermission = (user, permission) => {
   return permissions.includes(permission);
 };
 
+const normalizeUserCredentials = (email, mobile) => ({
+  normalizedEmail: email.toLowerCase().trim(),
+  normalizedMobile: mobile.replace(/\D/g, '').slice(-10)
+});
+
+const validateAdminPayload = ({ email, mobile, password }) => {
+  if (!email || !mobile || !password) {
+    return 'Email, mobile and password are required';
+  }
+
+  if (password.length < 8) {
+    return 'Password must be at least 8 characters';
+  }
+
+  return null;
+};
+
+const createAdminUser = async ({ email, mobile, password, status, createdBy }) => {
+  const { normalizedEmail, normalizedMobile } = normalizeUserCredentials(email, mobile);
+
+  const existingUser = await User.findOne({
+    $or: [
+      { email: normalizedEmail },
+      { mobile: normalizedMobile }
+    ]
+  });
+
+  if (existingUser) {
+    return { error: 'User with this email or mobile already exists' };
+  }
+
+  const adminUser = await User.create({
+    email: normalizedEmail,
+    mobile: normalizedMobile,
+    password,
+    role: 'admin',
+    status,
+    createdBy,
+    emailVerified: true,
+    mobileVerified: true,
+    isPasswordChanged: true
+  });
+
+  const responseUser = await User.findById(adminUser._id).select('-password');
+  return { user: responseUser };
+};
+
+// @desc    Create admin user
+// @route   POST /api/admin/admins
+exports.createAdmin = async (req, res) => {
+  try {
+    const {
+      email,
+      mobile,
+      password,
+      status = 'ACTIVE'
+    } = req.body;
+
+    if (!email || !mobile || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, mobile and password are required'
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters'
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+    const existingUser = await User.findOne({
+      $or: [
+        { email: normalizedEmail },
+        { mobile: normalizedMobile }
+      ]
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or mobile already exists'
+      });
+    }
+
+    const result = await createAdminUser({
+      email,
+      mobile,
+      password,
+      status,
+      createdBy: req.user._id
+    });
+
+    if (result.error) {
+      return res.status(400).json({ success: false, message: result.error });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Admin user created successfully',
+      data: result.user
+    });
+  } catch (error) {
+    console.error('[ADMIN] Create error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create admin user',
+      error: error.message
+    });
+  }
+};
+
 // @desc    Get Dashboard Overview
 // @route   GET /api/admin/dashboard
 exports.getDashboard = async (req, res) => {
