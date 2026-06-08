@@ -150,6 +150,7 @@ STRICT RULES:
 - All scores are integers 0-100
 - All calculations must be shown in output
 - Round all decimals to nearest integer
+- CRITICAL: Do NOT auto-zero, override, or force the weightedScore or finalAdjustedScore to 0 just because skillsMatch or experienceMatch is 0. You must calculate the weightedScore strictly using the mathematical formula: (skillsMatch * 0.30) + (experienceMatch * 0.20) + (domainMatch * 0.15) + (educationMatch * 0.10) + (salaryFit * 0.10) + (locationMatch * 0.05) + (noticePeriodFit * 0.05) + (stabilityScore * 0.05). If other components have positive scores, they MUST be counted in the final sum.
 
 ---
 

@@ -1464,16 +1464,9 @@ exports.submitCandidate = async (req, res) => {
 
     notifyPartner();
 
-    // ✅ Trigger AI parse + score + admin queue (fire and forget)
-    const processCandidate = async () => {
-      try {
-        await candidateQueueService.processAfterConsent(candidate._id);
-      } catch (err) {
-        console.error('[QUEUE] Processing failed:', err.message);
-      }
-    };
-
-    processCandidate();
+    // NOTE: AI parse + scoring + admin queue is triggered ONLY after candidate
+    // confirms WhatsApp consent via GET /api/candidates/consent/agree/:token
+    // DO NOT call processAfterConsent() here — candidate has not consented yet.
 
     // ✅ Success response
     res.status(201).json({

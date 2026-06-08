@@ -4,8 +4,8 @@
   "description": "Complete Syncro1 API",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
+    "start": "NODE_ENV=production node server.js",
+    "dev": "NODE_ENV=production nodemon server.js",
     "seed": "node seeders/seed.js",
     "create-dirs": "node scripts/createDirs.js",
     "setup": "npm run create-dirs && npm run seed",

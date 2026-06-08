@@ -114,19 +114,42 @@ router.get('/consent/agree/:token', async (req, res) => {
     }
 
     // Already actioned
-    if (candidate.whatsappConsent.status === 'CONFIRMED') {
+    const alreadyActionedStatuses = [
+      'CONSENT_CONFIRMED',
+      'ADMIN_REVIEW',
+      'ADMIN_REJECTED',
+      'SUBMITTED',
+      'UNDER_REVIEW',
+      'SHORTLISTED',
+      'REJECTED',
+      'CONSENT_DENIED',
+      'WITHDRAWN'
+    ];
+    
+    if (alreadyActionedStatuses.includes(candidate.status)) {
+      const statusMap = {
+        'CONSENT_CONFIRMED': 'ALREADY_CONFIRMED',
+        'ADMIN_REVIEW': 'ALREADY_CONFIRMED',
+        'ADMIN_REJECTED': 'ALREADY_CONFIRMED',
+        'SUBMITTED': 'ALREADY_CONFIRMED',
+        'UNDER_REVIEW': 'ALREADY_CONFIRMED',
+        'SHORTLISTED': 'ALREADY_CONFIRMED',
+        'REJECTED': 'ALREADY_CONFIRMED',
+        'CONSENT_DENIED': 'ALREADY_DENIED',
+        'WITHDRAWN': 'ALREADY_WITHDRAWN'
+      };
+      
+      const currentActionedStatus = statusMap[candidate.status] || 'ALREADY_CONFIRMED';
+      const message = currentActionedStatus === 'ALREADY_DENIED'
+        ? 'You have already denied consent.'
+        : currentActionedStatus === 'ALREADY_WITHDRAWN'
+          ? 'This consent request has been withdrawn or expired.'
+          : 'You have already confirmed consent. Your profile is being processed.';
+          
       return res.json({
         success: true,
-        message: 'You have already confirmed consent. Your profile is being processed.',
-        data: { status: 'ALREADY_CONFIRMED' }
-      });
-    }
-
-    if (candidate.whatsappConsent.status === 'DENIED') {
-      return res.json({
-        success: true,
-        message: 'You have already denied consent.',
-        data: { status: 'ALREADY_DENIED' }
+        message,
+        data: { status: currentActionedStatus }
       });
     }
 
@@ -231,11 +254,43 @@ router.get('/consent/disagree/:token', async (req, res) => {
       });
     }
 
-    if (candidate.whatsappConsent.status !== 'PENDING') {
+    // Already actioned
+    const alreadyActionedStatuses = [
+      'CONSENT_CONFIRMED',
+      'ADMIN_REVIEW',
+      'ADMIN_REJECTED',
+      'SUBMITTED',
+      'UNDER_REVIEW',
+      'SHORTLISTED',
+      'REJECTED',
+      'CONSENT_DENIED',
+      'WITHDRAWN'
+    ];
+    
+    if (alreadyActionedStatuses.includes(candidate.status)) {
+      const statusMap = {
+        'CONSENT_CONFIRMED': 'ALREADY_CONFIRMED',
+        'ADMIN_REVIEW': 'ALREADY_CONFIRMED',
+        'ADMIN_REJECTED': 'ALREADY_CONFIRMED',
+        'SUBMITTED': 'ALREADY_CONFIRMED',
+        'UNDER_REVIEW': 'ALREADY_CONFIRMED',
+        'SHORTLISTED': 'ALREADY_CONFIRMED',
+        'REJECTED': 'ALREADY_CONFIRMED',
+        'CONSENT_DENIED': 'ALREADY_DENIED',
+        'WITHDRAWN': 'ALREADY_WITHDRAWN'
+      };
+      
+      const currentActionedStatus = statusMap[candidate.status] || 'ALREADY_CONFIRMED';
+      const message = currentActionedStatus === 'ALREADY_DENIED'
+        ? 'You have already denied consent.'
+        : currentActionedStatus === 'ALREADY_WITHDRAWN'
+          ? 'This consent request has been withdrawn or expired.'
+          : 'You have already confirmed consent. Your profile is being processed.';
+          
       return res.json({
         success: true,
-        message: 'Consent already recorded.',
-        data: { status: candidate.whatsappConsent.status }
+        message,
+        data: { status: currentActionedStatus }
       });
     }
 

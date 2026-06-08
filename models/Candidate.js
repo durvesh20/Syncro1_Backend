@@ -135,8 +135,6 @@ const candidateSchema = new mongoose.Schema({
       'CONSENT_DENIED',           // Candidate denied — auto withdrawn
       'ADMIN_REVIEW',             // In admin/subadmin queue for review
       'ADMIN_REJECTED',           // Admin rejected before sending to company
-
-      // ✅ EXISTING STATUSES (after admin approves)
       'SUBMITTED',                // Admin approved → visible to company
       'UNDER_REVIEW',
       'SHORTLISTED',

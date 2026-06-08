@@ -94,6 +94,9 @@ class DuplicateDetectionService {
       return result; // Hard block — no need to check further
     }
 
+    // Only current-job duplicate check is active. Bypass other rules.
+    return result;
+
     // ═══════════════════════════════════════════════════════════════
     // Rule 2: Same company, different job — CONFIGURABLE
     // ═══════════════════════════════════════════════════════════════

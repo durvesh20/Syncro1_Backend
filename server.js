@@ -4,11 +4,9 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
-const dotenv = require('dotenv');
 const connectDB = require('./config/db');
+require('./config/env'); 
 
-// Load env vars
-dotenv.config();
 
 // Connect to database
 connectDB();
