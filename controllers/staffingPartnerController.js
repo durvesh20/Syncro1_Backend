@@ -23,7 +23,7 @@ exports.getProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({
       user: req.user._id
-    }).populate('user', 'email mobile status');
+    }).populate('user', 'email mobile status emailVerified mobileVerified');
 
     if (!partner) {
       return res.status(404).json({
@@ -65,8 +65,72 @@ exports.updateBasicInfo = async (req, res) => {
       designation,
       linkedinProfile,
       city,
-      state
+      state,
+      email,
+      mobile
     } = req.body;
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // If email is not verified, allow updating it
+    if (email && !user.emailVerified) {
+      const normalizedEmail = email.toLowerCase().trim();
+      if (normalizedEmail !== user.email) {
+        const emailExists = await User.findOne({ email: normalizedEmail });
+        if (emailExists) {
+          return res.status(400).json({
+            success: false,
+            message: 'Email is already registered by another user'
+          });
+        }
+
+        // Custom domain check: only one staffing partner allowed per custom domain
+        const domain = normalizedEmail.split('@')[1];
+        const genericEmailDomains = new Set([
+          'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
+          'icloud.com', 'zoho.com', 'protonmail.com', 'yandex.com', 'proton.me',
+          'mail.com', 'gmx.com', 'live.com', 'msn.com'
+        ]);
+        if (!genericEmailDomains.has(domain)) {
+          const domainExists = await User.findOne({
+            role: 'staffing_partner',
+            email: new RegExp(`@${domain}$`, 'i'),
+            _id: { $ne: req.user._id }
+          });
+          if (domainExists) {
+            return res.status(400).json({
+              success: false,
+              message: `The email domain ${domain} is already registered by another Talent partner.`
+            });
+          }
+        }
+
+        user.email = normalizedEmail;
+      }
+    }
+
+    // If mobile/WhatsApp is not verified, allow updating it
+    if (mobile && !user.mobileVerified) {
+      const normalizedMobile = mobile.trim();
+      if (normalizedMobile !== user.mobile) {
+        const mobileExists = await User.findOne({ mobile: normalizedMobile });
+        if (mobileExists) {
+          return res.status(400).json({
+            success: false,
+            message: 'Mobile/WhatsApp number is already registered by another user'
+          });
+        }
+        user.mobile = normalizedMobile;
+      }
+    }
+
+    await user.save();
 
     if (firstName) partner.firstName = firstName;
     if (lastName) partner.lastName = lastName;
@@ -676,11 +740,23 @@ exports.getProfileCompletion = async (req, res) => {
 exports.submitProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const user = await User.findById(req.user._id);
 
     if (!partner) {
       return res.status(404).json({
         success: false,
         message: 'Partner profile not found'
+      });
+    }
+
+    // Check email and mobile verification
+    if (!user.emailVerified || !user.mobileVerified) {
+      const missing = [];
+      if (!user.emailVerified) missing.push("Email");
+      if (!user.mobileVerified) missing.push("WhatsApp Number");
+      return res.status(400).json({
+        success: false,
+        message: `Please verify your ${missing.join(" and ")} first to complete registration.`,
       });
     }
 
@@ -751,7 +827,6 @@ exports.submitProfile = async (req, res) => {
     partner.submittedAt = new Date();
     await partner.save();
 
-    const user = await User.findById(req.user._id);
     user.status = 'UNDER_VERIFICATION';
     await user.save();
 

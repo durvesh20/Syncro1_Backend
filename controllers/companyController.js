@@ -8,6 +8,12 @@ const candidateLifecycleService = require("../services/candidateLifecycleService
 const StatusMachine = require("../utils/statusMachine");
 const InterviewSlot = require("../models/InterviewSlot");
 const whatsappService = require("../services/whatsappService");
+const {
+  COMPANY_PERMISSIONS,
+  COMPANY_ALL_PERMISSIONS,
+  COMPANY_PERMISSION_GROUPS,
+  COMPANY_SUB_ADMIN_BUNDLES
+} = require('../utils/permissions');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -95,7 +101,49 @@ exports.updateBasicInfo = async (req, res) => {
       linkedinProfile,
       city,
       state,
+      email,
+      mobile,
     } = req.body;
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // If email is not verified, allow updating it
+    if (email && !user.emailVerified) {
+      const normalizedEmail = email.toLowerCase().trim();
+      if (normalizedEmail !== user.email) {
+        const emailExists = await User.findOne({ email: normalizedEmail });
+        if (emailExists) {
+          return res.status(400).json({
+            success: false,
+            message: "Email is already registered by another user",
+          });
+        }
+        user.email = normalizedEmail;
+      }
+    }
+
+    // If mobile/WhatsApp is not verified, allow updating it
+    if (mobile && !user.mobileVerified) {
+      const normalizedMobile = mobile.trim();
+      if (normalizedMobile !== user.mobile) {
+        const mobileExists = await User.findOne({ mobile: normalizedMobile });
+        if (mobileExists) {
+          return res.status(400).json({
+            success: false,
+            message: "Mobile/WhatsApp number is already registered by another user",
+          });
+        }
+        user.mobile = normalizedMobile;
+      }
+    }
+
+    await user.save();
 
     // ✅ Combine firstName + lastName if provided
     if (firstName && lastName) {
@@ -664,7 +712,7 @@ exports.getProfile = async (req, res) => {
   try {
     const company = await Company.findOne({ user: req.user._id }).populate(
       "user",
-      "email mobile status",
+      "email mobile status emailVerified mobileVerified",
     );
 
     if (!company) {
@@ -751,6 +799,17 @@ exports.submitProfile = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Company not found",
+      });
+    }
+
+    // Check email and mobile verification
+    if (!user.emailVerified || !user.mobileVerified) {
+      const missing = [];
+      if (!user.emailVerified) missing.push("Email");
+      if (!user.mobileVerified) missing.push("WhatsApp Number");
+      return res.status(400).json({
+        success: false,
+        message: `Please verify your ${missing.join(" and ")} first to complete registration.`,
       });
     }
 
@@ -1730,6 +1789,7 @@ exports.createInterviewSlots = async (req, res) => {
           availableSpots: 1,
           notes: slot.notes || null,
           status: 'ACTIVE',
+          createdBy: req.subAdminUser ? req.subAdminUser._id : req.user._id,
         });
 
         currentStartTime = currentEndTime;
@@ -1783,10 +1843,23 @@ exports.getJobInterviewSlots = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
 
-    const slots = await InterviewSlot.find({
+    const callingUserId = req.subAdminUser ? req.subAdminUser._id : req.user._id;
+    const isSubAdmin = !!req.subAdminUser;
+    const permissions = isSubAdmin ? req.subAdminUser.permissions : [];
+
+    const query = {
       job: req.params.jobId,
       company: company._id,
-    })
+    };
+
+    if (isSubAdmin && !permissions.includes('MANAGE_INTERVIEWS_ALL') && permissions.includes('MANAGE_INTERVIEWS_SELF')) {
+      query.$or = [
+        { createdBy: callingUserId },
+        { createdBy: null }
+      ];
+    }
+
+    const slots = await InterviewSlot.find(query)
       .populate({
         path: 'bookedCandidates.candidate',
         select: 'firstName lastName email mobile status profile.currentDesignation',
@@ -1851,6 +1924,19 @@ exports.cancelInterviewSlot = async (req, res) => {
 
     if (!slot) {
       return res.status(404).json({ success: false, message: 'Slot not found' });
+    }
+
+    const callingUserId = req.subAdminUser ? req.subAdminUser._id : req.user._id;
+    const isSubAdmin = !!req.subAdminUser;
+    const permissions = isSubAdmin ? req.subAdminUser.permissions : [];
+
+    if (isSubAdmin && !permissions.includes('MANAGE_INTERVIEWS_ALL') && permissions.includes('MANAGE_INTERVIEWS_SELF')) {
+      if (slot.createdBy && slot.createdBy.toString() !== callingUserId.toString()) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to cancel interview slots created by other team members.'
+        });
+      }
     }
 
     // Cannot cancel if candidates are already booked
@@ -2013,14 +2099,27 @@ exports.getInterviewSchedule = async (req, res) => {
       nextDay.setDate(nextDay.getDate() + 1);
     }
 
-    const slots = await InterviewSlot.find({
+    const callingUserId = req.subAdminUser ? req.subAdminUser._id : req.user._id;
+    const isSubAdmin = !!req.subAdminUser;
+    const permissions = isSubAdmin ? req.subAdminUser.permissions : [];
+
+    const query = {
       company: company._id,
       date: {
         $gte: filterDate,
         $lte: nextDay
       },
       status: { $ne: 'CANCELLED' }
-    })
+    };
+
+    if (isSubAdmin && !permissions.includes('MANAGE_INTERVIEWS_ALL') && permissions.includes('MANAGE_INTERVIEWS_SELF')) {
+      query.$or = [
+        { createdBy: callingUserId },
+        { createdBy: null }
+      ];
+    }
+
+    const slots = await InterviewSlot.find(query)
     .populate({
       path: 'bookedCandidates.candidate',
       model: 'Candidate',
@@ -2628,6 +2727,414 @@ exports.cancelEditRequest = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to cancel edit request',
+      error: error.message
+    });
+  }
+};
+
+// ==================== COMPANY SUB-ADMIN MANAGEMENT ====================
+
+// Generate a secure random password
+const generatePassword = () => {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghjkmnpqrstuvwxyz';
+  const digits = '23456789';
+  const special = '@#$!';
+  const all = upper + lower + digits + special;
+  const rand = (str) => str[crypto.randomInt(str.length)];
+  const base = rand(upper) + rand(lower) + rand(digits) + rand(special);
+  const rest = Array.from({ length: 8 }, () => rand(all)).join('');
+  // Shuffle the 12-char password
+  return (base + rest).split('').sort(() => crypto.randomInt(3) - 1).join('');
+};
+
+// Helper: validate company permissions
+const validateCompanyPermissions = (permissions = []) => {
+  if (!Array.isArray(permissions)) return false;
+  return permissions.every((permission) => COMPANY_ALL_PERMISSIONS.includes(permission));
+};
+
+// @desc    Create company sub-admin
+// @route   POST /api/companies/sub-admins
+// @access  Company (Main User only)
+exports.createSubAdmin = async (req, res) => {
+  try {
+    const emailService = require('../services/emailService');
+    const {
+      firstName = '',
+      lastName = '',
+      email,
+      mobile,
+      permissions = [],
+      bundle,
+      status = 'ACTIVE'
+    } = req.body;
+
+    if (!email || !mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and WhatsApp number are required'
+      });
+    }
+
+    if (!firstName.trim() || !lastName.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'First name and last name are required'
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+    const existingUser = await User.findOne({
+      $or: [
+        { email: normalizedEmail },
+        { mobile: normalizedMobile }
+      ]
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or WhatsApp number already exists'
+      });
+    }
+
+    let finalPermissions = permissions;
+
+    // If bundle provided and permissions not provided, use bundle
+    if ((!permissions || permissions.length === 0) && bundle) {
+      if (!COMPANY_SUB_ADMIN_BUNDLES[bundle]) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid permission bundle'
+        });
+      }
+      finalPermissions = COMPANY_SUB_ADMIN_BUNDLES[bundle];
+    }
+
+    if (!validateCompanyPermissions(finalPermissions)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid permissions provided'
+      });
+    }
+
+    // Auto-generate a secure password
+    const autoPassword = generatePassword();
+
+    const subAdmin = await User.create({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: normalizedEmail,
+      mobile: normalizedMobile,
+      password: autoPassword,
+      role: 'company',
+      status,
+      permissions: [...new Set(finalPermissions)],
+      createdBy: req.user._id,
+      emailVerified: true,
+      mobileVerified: true,
+      isPasswordChanged: false // Must change on first login
+    });
+
+    // Send onboarding welcome email (fire-and-forget)
+    emailService.sendSubAdminWelcome(
+      normalizedEmail,
+      firstName.trim(),
+      lastName.trim(),
+      autoPassword,
+      [...new Set(finalPermissions)]
+    ).catch(e => console.error('[COMPANY-SUB-ADMIN] Welcome email failed:', e.message));
+
+    const responseUser = await User.findById(subAdmin._id).select('-password');
+
+    res.status(201).json({
+      success: true,
+      message: `Sub-admin created! Welcome email sent to ${normalizedEmail}`,
+      data: responseUser
+    });
+  } catch (error) {
+    console.error('[COMPANY-SUB-ADMIN] Create error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create sub-admin',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all company sub-admins
+// @route   GET /api/companies/sub-admins
+// @access  Company (Main User only)
+exports.getSubAdmins = async (req, res) => {
+  try {
+    const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
+    const { status, search } = req.query;
+
+    const query = { role: 'company', createdBy: req.user._id };
+
+    if (status) {
+      query.status = status;
+    }
+
+    if (search) {
+      query.$or = [
+        { email: new RegExp(search, 'i') },
+        { mobile: new RegExp(search, 'i') }
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [subAdmins, total] = await Promise.all([
+      User.find(query)
+        .select('-password')
+        .populate('createdBy', 'email role')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      User.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        subAdmins,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          limit
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[COMPANY-SUB-ADMIN] List error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch sub-admins',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single company sub-admin
+// @route   GET /api/companies/sub-admins/:id
+// @access  Company (Main User only)
+exports.getSubAdminById = async (req, res) => {
+  try {
+    const subAdmin = await User.findOne({
+      _id: req.params.id,
+      role: 'company',
+      createdBy: req.user._id
+    })
+      .select('-password')
+      .populate('createdBy', 'email role');
+
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Sub-admin not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: subAdmin
+    });
+  } catch (error) {
+    console.error('[COMPANY-SUB-ADMIN] Get by id error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch sub-admin',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update company sub-admin
+// @route   PUT /api/companies/sub-admins/:id
+// @access  Company (Main User only)
+exports.updateSubAdmin = async (req, res) => {
+  try {
+    const {
+      firstName,
+      lastName,
+      mobile,
+      permissions,
+      bundle,
+      status
+    } = req.body;
+
+    const subAdmin = await User.findOne({
+      _id: req.params.id,
+      role: 'company',
+      createdBy: req.user._id
+    });
+
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Sub-admin not found'
+      });
+    }
+
+    if (firstName !== undefined) subAdmin.firstName = firstName.trim();
+    if (lastName !== undefined) subAdmin.lastName = lastName.trim();
+
+    if (mobile) {
+      const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+      const existingMobileUser = await User.findOne({
+        mobile: normalizedMobile,
+        _id: { $ne: subAdmin._id }
+      });
+
+      if (existingMobileUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'WhatsApp number already in use'
+        });
+      }
+
+      subAdmin.mobile = normalizedMobile;
+    }
+
+    let finalPermissions = permissions;
+
+    if ((!permissions || permissions.length === 0) && bundle) {
+      if (!COMPANY_SUB_ADMIN_BUNDLES[bundle]) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid permission bundle'
+        });
+      }
+      finalPermissions = COMPANY_SUB_ADMIN_BUNDLES[bundle];
+    }
+
+    if (finalPermissions !== undefined) {
+      if (!validateCompanyPermissions(finalPermissions)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid permissions provided'
+        });
+      }
+
+      subAdmin.permissions = [...new Set(finalPermissions)];
+    }
+
+    if (status) {
+      subAdmin.status = status;
+
+      if (status === 'SUSPENDED') {
+        subAdmin.suspendedBy = req.user._id;
+        subAdmin.suspendedAt = new Date();
+      } else {
+        subAdmin.suspendedBy = null;
+        subAdmin.suspendedAt = null;
+      }
+    }
+
+    await subAdmin.save();
+
+    const updatedSubAdmin = await User.findById(subAdmin._id)
+      .select('-password')
+      .populate('createdBy', 'email role');
+
+    res.json({
+      success: true,
+      message: 'Sub-admin updated successfully',
+      data: updatedSubAdmin
+    });
+  } catch (error) {
+    console.error('[COMPANY-SUB-ADMIN] Update error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update sub-admin',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update company sub-admin status
+// @route   PUT /api/companies/sub-admins/:id/status
+// @access  Company (Main User only)
+exports.updateSubAdminStatus = async (req, res) => {
+  try {
+    const { status } = req.body;
+
+    if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Allowed: ACTIVE, SUSPENDED'
+      });
+    }
+
+    const subAdmin = await User.findOne({
+      _id: req.params.id,
+      role: 'company',
+      createdBy: req.user._id
+    });
+
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Sub-admin not found'
+      });
+    }
+
+    subAdmin.status = status;
+
+    if (status === 'SUSPENDED') {
+      subAdmin.suspendedBy = req.user._id;
+      subAdmin.suspendedAt = new Date();
+    } else {
+      subAdmin.suspendedBy = null;
+      subAdmin.suspendedAt = null;
+    }
+
+    await subAdmin.save();
+
+    res.json({
+      success: true,
+      message: 'Sub-admin status updated successfully',
+      data: {
+        id: subAdmin._id,
+        email: subAdmin.email,
+        status: subAdmin.status,
+        suspendedAt: subAdmin.suspendedAt
+      }
+    });
+  } catch (error) {
+    console.error('[COMPANY-SUB-ADMIN] Status update error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update sub-admin status',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get company available permissions and bundles
+// @route   GET /api/companies/sub-admins/permissions
+// @access  Company (Main User only)
+exports.getPermissionsMeta = async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        allPermissions: COMPANY_ALL_PERMISSIONS,
+        groups: COMPANY_PERMISSION_GROUPS,
+        bundles: COMPANY_SUB_ADMIN_BUNDLES,
+        totalPermissions: COMPANY_ALL_PERMISSIONS.length
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch permissions metadata',
       error: error.message
     });
   }

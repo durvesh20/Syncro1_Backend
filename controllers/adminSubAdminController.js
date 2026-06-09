@@ -1,7 +1,23 @@
 // backend/controllers/adminSubAdminController.js
 
+const crypto = require('crypto');
 const User = require('../models/User');
 const { ALL_PERMISSIONS, SUB_ADMIN_BUNDLES } = require('../utils/permissions');
+const emailService = require('../services/emailService');
+
+// Generate a secure random password
+const generatePassword = () => {
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const digits = '23456789';
+    const special = '@#$!';
+    const all = upper + lower + digits + special;
+    const rand = (str) => str[crypto.randomInt(str.length)];
+    const base = rand(upper) + rand(lower) + rand(digits) + rand(special);
+    const rest = Array.from({ length: 8 }, () => rand(all)).join('');
+    // Shuffle the 12-char password
+    return (base + rest).split('').sort(() => crypto.randomInt(3) - 1).join('');
+};
 
 // Helper: sanitize pagination
 const sanitizePagination = (page, limit) => ({
@@ -21,25 +37,26 @@ const validatePermissions = (permissions = []) => {
 exports.createSubAdmin = async (req, res) => {
     try {
         const {
+            firstName = '',
+            lastName = '',
             email,
             mobile,
-            password,
             permissions = [],
             bundle,
             status = 'ACTIVE'
         } = req.body;
 
-        if (!email || !mobile || !password) {
+        if (!email || !mobile) {
             return res.status(400).json({
                 success: false,
-                message: 'Email, mobile and password are required'
+                message: 'Email and mobile are required'
             });
         }
 
-        if (password.length < 8) {
+        if (!firstName.trim() || !lastName.trim()) {
             return res.status(400).json({
                 success: false,
-                message: 'Password must be at least 8 characters'
+                message: 'First name and last name are required'
             });
         }
 
@@ -80,24 +97,38 @@ exports.createSubAdmin = async (req, res) => {
             });
         }
 
+        // Auto-generate a secure password
+        const autoPassword = generatePassword();
+
         const subAdmin = await User.create({
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
             email: normalizedEmail,
             mobile: normalizedMobile,
-            password,
+            password: autoPassword,
             role: 'sub_admin',
             status,
             permissions: [...new Set(finalPermissions)],
             createdBy: req.user._id,
             emailVerified: true,
             mobileVerified: true,
-            isPasswordChanged: true
+            isPasswordChanged: false  // Must change on first login
         });
+
+        // Send onboarding welcome email (fire-and-forget)
+        emailService.sendSubAdminWelcome(
+            normalizedEmail,
+            firstName.trim(),
+            lastName.trim(),
+            autoPassword,
+            [...new Set(finalPermissions)]
+        ).catch(e => console.error('[SUB-ADMIN] Welcome email failed:', e.message));
 
         const responseUser = await User.findById(subAdmin._id).select('-password');
 
         res.status(201).json({
             success: true,
-            message: 'Sub-admin created successfully',
+            message: `Sub-admin created! Welcome email sent to ${normalizedEmail}`,
             data: responseUser
         });
     } catch (error) {
@@ -204,6 +235,8 @@ exports.getSubAdminById = async (req, res) => {
 exports.updateSubAdmin = async (req, res) => {
     try {
         const {
+            firstName,
+            lastName,
             mobile,
             permissions,
             bundle,
@@ -221,6 +254,9 @@ exports.updateSubAdmin = async (req, res) => {
                 message: 'Sub-admin not found'
             });
         }
+
+        if (firstName !== undefined) subAdmin.firstName = firstName.trim();
+        if (lastName !== undefined) subAdmin.lastName = lastName.trim();
 
         if (mobile) {
             const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);

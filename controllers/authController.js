@@ -17,35 +17,12 @@ const skipMobileOTP = process.env.WHATSAPP_ENABLED !== 'true';
  * Helper: determine verification state for frontend
  */
 const getVerificationState = (user) => {
-  if (!user.emailVerified && !user.mobileVerified) {
-    return {
-      canLogin: false,
-      nextStep: 'VERIFY_CONTACTS',
-      allowedActions: [
-        'RESEND_EMAIL_VERIFICATION',
-        'RESEND_MOBILE_OTP',
-        'CHECK_VERIFICATION_STATUS'
-      ]
-    };
-  }
-
   if (!user.emailVerified) {
     return {
       canLogin: false,
       nextStep: 'VERIFY_EMAIL',
       allowedActions: [
         'RESEND_EMAIL_VERIFICATION',
-        'CHECK_VERIFICATION_STATUS'
-      ]
-    };
-  }
-
-  if (!user.mobileVerified) {
-    return {
-      canLogin: false,
-      nextStep: 'VERIFY_MOBILE',
-      allowedActions: [
-        'RESEND_MOBILE_OTP',
         'CHECK_VERIFICATION_STATUS'
       ]
     };
@@ -62,7 +39,7 @@ const getVerificationState = (user) => {
  * Helper: set user status based on verification state
  */
 const syncUserStatusAfterVerification = (user) => {
-  if (user.emailVerified && user.mobileVerified) {
+  if (user.emailVerified) {
     user.status = 'ACTIVE';
   } else {
     user.status = 'PENDING_EMAIL_VERIFICATION';
@@ -190,6 +167,26 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       });
     }
 
+    // Custom domain check: only one staffing partner allowed per custom domain
+    const domain = normalizedEmail.split('@')[1];
+    const genericEmailDomains = new Set([
+      'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
+      'icloud.com', 'zoho.com', 'protonmail.com', 'yandex.com', 'proton.me',
+      'mail.com', 'gmx.com', 'live.com', 'msn.com'
+    ]);
+    if (!genericEmailDomains.has(domain)) {
+      const domainExists = await User.findOne({
+        role: 'staffing_partner',
+        email: new RegExp(`@${domain}$`, 'i')
+      });
+      if (domainExists) {
+        return res.status(400).json({
+          success: false,
+          message: `The email domain ${domain} is already registered by another Talent partner.`
+        });
+      }
+    }
+
     const existingFirm = await StaffingPartner.findOne({
       firmName: new RegExp(`^${firmName.trim()}$`, 'i')
     });
@@ -202,7 +199,6 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
     }
 
     const emailToken = crypto.randomBytes(32).toString('hex');
-    const mobileOTP = otpService.generateOTP();
 
     const user = await User.create({
       email: normalizedEmail,
@@ -213,11 +209,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       emailVerified: false,
       emailVerificationToken: emailToken,
       emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
-      mobileOTP: {
-        code: mobileOTP,
-        expiresAt: otpService.getExpiryTime()
-      },
-      mobileVerified: skipMobileOTP,
+      mobileVerified: false,
       isPasswordChanged: true
     });
 
@@ -235,20 +227,11 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
     await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
-    // ✅ Use user.mobile (already in DB) and otp (just generated above)
-    await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
-      action: 'creating',
-      platform: 'Syncro1',
-      merchantName: 'Syncro1',
-      supportContact: process.env.SUPPORT_PHONE || '+919920468129'
-    });
     const verificationState = getVerificationState(user);
 
     res.status(201).json({
       success: true,
-      message: skipMobileOTP
-        ? 'Registration successful. Please verify your email. Mobile OTP skipped in development.'
-        : 'Registration successful. Please verify your email and mobile.',
+      message: 'Registration successful. Please verify your email.',
       data: {
         userId: user._id,
         role: user.role,
@@ -256,7 +239,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
         mobile: user.mobile,
         verification: {
           emailRequired: true,
-          mobileRequired: !skipMobileOTP,
+          mobileRequired: false,
           emailVerified: user.emailVerified,
           mobileVerified: user.mobileVerified
         },
@@ -267,7 +250,6 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
         ...(process.env.NODE_ENV === 'development' && {
           devInfo: {
             emailToken,
-            mobileOTP,
             verifyUrl,
             note: 'Tokens shown only in development mode'
           }
@@ -357,7 +339,6 @@ exports.initCompanyRegistration = async (req, res) => {
     }
 
     const emailToken = crypto.randomBytes(32).toString('hex');
-    const mobileOTP = otpService.generateOTP();
 
     const user = await User.create({
       email: normalizedEmail,
@@ -368,11 +349,7 @@ exports.initCompanyRegistration = async (req, res) => {
       emailVerified: false,
       emailVerificationToken: emailToken,
       emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
-      mobileOTP: {
-        code: mobileOTP,
-        expiresAt: otpService.getExpiryTime()
-      },
-      mobileVerified: skipMobileOTP,
+      mobileVerified: false,
       isPasswordChanged: true
     });
     await Company.create({
@@ -389,21 +366,12 @@ exports.initCompanyRegistration = async (req, res) => {
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
     await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
-    // ✅ Use user.mobile (already in DB) and otp (just generated above)
-    await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
-      action: 'creating',
-      platform: 'Syncro1',
-      merchantName: 'Syncro1',
-      supportContact: process.env.SUPPORT_PHONE || '+919920468129'
-    });
 
     const verificationState = getVerificationState(user);
 
     res.status(201).json({
       success: true,
-      message: skipMobileOTP
-        ? 'Registration successful. Please verify your email. Mobile OTP skipped in development.'
-        : 'Registration successful. Please verify your email and mobile.',
+      message: 'Registration successful. Please verify your email.',
       data: {
         userId: user._id,
         role: user.role,
@@ -411,7 +379,7 @@ exports.initCompanyRegistration = async (req, res) => {
         mobile: user.mobile,
         verification: {
           emailRequired: true,
-          mobileRequired: !skipMobileOTP,
+          mobileRequired: false,
           emailVerified: user.emailVerified,
           mobileVerified: user.mobileVerified
         },
@@ -422,7 +390,6 @@ exports.initCompanyRegistration = async (req, res) => {
         ...(process.env.NODE_ENV === 'development' && {
           devInfo: {
             emailToken,
-            mobileOTP,
             verifyUrl,
             note: 'Tokens shown only in development mode'
           }
@@ -749,28 +716,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (!user.emailVerified && !user.mobileVerified) {
-      return res.status(403).json({
-        success: false,
-        message: 'Please verify your email and mobile number before logging in.',
-        code: 'CONTACTS_NOT_VERIFIED',
-        data: {
-          userId: user._id,
-          verification: {
-            emailVerified: false,
-            mobileVerified: false
-          },
-          canLogin: false,
-          nextStep: 'VERIFY_CONTACTS',
-          allowedActions: [
-            'RESEND_EMAIL_VERIFICATION',
-            'RESEND_MOBILE_OTP',
-            'CHECK_VERIFICATION_STATUS'
-          ]
-        }
-      });
-    }
-
     if (!user.emailVerified) {
       return res.status(403).json({
         success: false,
@@ -780,33 +725,12 @@ exports.login = async (req, res) => {
           userId: user._id,
           verification: {
             emailVerified: false,
-            mobileVerified: true
+            mobileVerified: user.mobileVerified
           },
           canLogin: false,
           nextStep: 'VERIFY_EMAIL',
           allowedActions: [
             'RESEND_EMAIL_VERIFICATION',
-            'CHECK_VERIFICATION_STATUS'
-          ]
-        }
-      });
-    }
-
-    if (!user.mobileVerified) {
-      return res.status(403).json({
-        success: false,
-        message: 'Please verify your mobile number before logging in.',
-        code: 'MOBILE_NOT_VERIFIED',
-        data: {
-          userId: user._id,
-          verification: {
-            emailVerified: true,
-            mobileVerified: false
-          },
-          canLogin: false,
-          nextStep: 'VERIFY_MOBILE',
-          allowedActions: [
-            'RESEND_MOBILE_OTP',
             'CHECK_VERIFICATION_STATUS'
           ]
         }
@@ -838,7 +762,10 @@ exports.login = async (req, res) => {
       permissions: user.permissions || [],
       emailVerified: user.emailVerified,
       mobileVerified: user.mobileVerified,
-      isPasswordChanged: user.isPasswordChanged
+      isPasswordChanged: user.isPasswordChanged,
+      createdBy: user.createdBy,
+      firstName: user.firstName,
+      lastName: user.lastName
     };
 
     return sendTokenResponse(res, token, userPayload, {
@@ -1005,7 +932,7 @@ exports.resendOTP = async (req, res) => {
       };
       await user.save();
       // ✅ Use user.mobile (already in DB) and otp (just generated above)
-      await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
+      await whatsappService.sendOTP(user.mobile, otp, {
         action: 'creating',
         platform: 'Syncro1',
         merchantName: 'Syncro1',
@@ -1130,7 +1057,7 @@ exports.resendMobileOTP = async (req, res) => {
     };
     await user.save();
     // ✅ Use user.mobile (already in DB) and otp (just generated above)
-    await whatsappService.sendOTP(normalizedMobile, mobileOTP, {
+    await whatsappService.sendOTP(user.mobile, otp, {
       action: 'creating',
       platform: 'Syncro1',
       merchantName: 'Syncro1',
@@ -1184,7 +1111,10 @@ exports.getMe = async (req, res) => {
           mobileVerified: user.mobileVerified,
           isPasswordChanged: user.isPasswordChanged,
           lastLogin: user.lastLogin,
-          createdAt: user.createdAt
+          createdAt: user.createdAt,
+          createdBy: user.createdBy,
+          firstName: user.firstName,
+          lastName: user.lastName
         },
         profile,
         profileMeta,

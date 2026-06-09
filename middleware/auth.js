@@ -123,6 +123,37 @@ exports.checkPermission = (permission) => {
   };
 };
 
+// Check company sub-admin permission
+exports.checkCompanyPermission = (permission) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Not authorized'
+      });
+    }
+
+    // Main/parent company user bypasses all permission checks
+    if (!req.user.createdBy) {
+      return next();
+    }
+
+    const userPermissions = req.user.permissions || [];
+    const requiredPermissions = Array.isArray(permission) ? permission : [permission];
+
+    const hasPermission = requiredPermissions.some(p => userPermissions.includes(p));
+
+    if (!hasPermission) {
+      return res.status(403).json({
+        success: false,
+        message: `Missing required permission: ${requiredPermissions.join(' or ')}`
+      });
+    }
+
+    next();
+  };
+};
+
 // Check if user has at least one of the given permissions
 exports.checkAnyPermission = (permissions = []) => {
   return (req, res, next) => {

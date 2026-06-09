@@ -4,8 +4,9 @@ const crypto = require('crypto');
 class OTPService {
   generateOTP(length = 6) {
     const digits = '0123456789';
-    let otp = '';
-    for (let i = 0; i < length; i++) {
+    const nonZeroDigits = '123456789';
+    let otp = nonZeroDigits[Math.floor(Math.random() * 9)]; // First digit: never 0
+    for (let i = 1; i < length; i++) {
       otp += digits[Math.floor(Math.random() * 10)];
     }
     return otp;

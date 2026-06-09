@@ -363,20 +363,27 @@ exports.applyFromPool = async (req, res) => {
       });
     }
 
-    // ── 3. Check partner has shown interest ──
+    // ── 3. Ensure partner has JobInterest — auto-create if missing ──
     const JobInterest = require('../models/JobInterest');
-    const interest = await JobInterest.findOne({
+    let interest = await JobInterest.findOne({
       partner: partner._id,
-      job: job._id,
-      status: 'ACTIVE'
+      job: job._id
     });
 
     if (!interest) {
-      return res.status(403).json({
-        success: false,
-        message: 'Please show interest in this job before submitting candidates',
-        action: 'SHOW_INTEREST_FIRST'
+      // Auto-create interest so pool candidates can be applied to any job seamlessly
+      interest = await JobInterest.create({
+        partner: partner._id,
+        job: job._id,
+        user: req.user._id,
+        status: 'ACTIVE',
+        submissionCount: 0,
+        submissionLimit: 5
       });
+    } else if (interest.status === 'WITHDRAWN') {
+      // Re-activate if previously withdrawn
+      interest.status = 'ACTIVE';
+      await interest.save();
     }
 
     // ── 4. Submission limit ──
@@ -391,12 +398,12 @@ exports.applyFromPool = async (req, res) => {
       });
     }
 
-    // ── 5. Duplicate check (same candidate already submitted to this job) ──
+    // ── 5. Duplicate check (same candidate already submitted to THIS specific job) ──
     const normalizedEmail = poolCandidate.email.toLowerCase().trim();
     const normalizedMobile = normalizeMobile(poolCandidate.mobile);
 
     const existing = await Candidate.findOne({
-      job: job._id,
+      job: job._id,   // ✅ Scoped to this job only — same candidate CAN apply to different jobs
       $or: [
         { email: normalizedEmail },
         { mobile: new RegExp(normalizedMobile + '$') }

@@ -118,6 +118,13 @@ const interviewSlotSchema = new mongoose.Schema(
       enum: ['Virtual', 'Face-to-Face'],
       default: 'Virtual',
     },
+    
+    // Who created this slot (can be main company owner or sub-admin)
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
   },
   {
     timestamps: true,

@@ -71,14 +71,17 @@ const resumeFilter = (req, file, cb) => {
 
 // Logo filter
 const logoFilter = (req, file, cb) => {
-  const allowedMimes = ['image/jpeg', 'image/png', 'image/svg+xml', 'image/webp'];
+  const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/svg+xml', 'image/webp'];
   const ext = path.extname(file.originalname).toLowerCase();
   const allowedExts = ['.jpg', '.jpeg', '.png', '.svg', '.webp'];
 
-  if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
+  const mimeAllowed = allowedMimes.includes(file.mimetype);
+  const extAllowed = allowedExts.includes(ext);
+
+  if (mimeAllowed && extAllowed) {
     cb(null, true);
   } else {
-    cb(new Error('Invalid file type. Allowed: JPG, PNG, SVG, WEBP'), false);
+    cb(new Error('Invalid file type. Allowed formats: JPG, JPEG, PNG, SVG, WEBP'), false);
   }
 };
 
@@ -104,7 +107,7 @@ const uploadResume = multer({
 }).single('resume');
 
 const uploadLogo = multer({
-  storage: logoStorage,
+  storage: multer.memoryStorage(),
   fileFilter: logoFilter,
   limits: { fileSize: 5 * 1024 * 1024 }
 }).single('logo');
@@ -199,11 +202,38 @@ const deleteFromCloudinary = async (publicIdOrUrl) => {
   }
 };
 
+const uploadLogoToCloudinary = (fileBuffer) => {
+  return new Promise((resolve, reject) => {
+    const writeStream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'syncro1/logos',
+        resource_type: 'image',
+        transformation: [
+          { width: 500, height: 500, crop: 'limit', quality: 'auto' }
+        ]
+      },
+      (error, result) => {
+        if (error) {
+          return reject(error);
+        }
+        resolve(result);
+      }
+    );
+
+    const { Readable } = require('stream');
+    const readable = new Readable();
+    readable.push(fileBuffer);
+    readable.push(null);
+    readable.pipe(writeStream);
+  });
+};
+
 // ==================== EXPORTS ====================
 
 module.exports = {
   uploadResume,
   uploadLogo,
+  uploadLogoToCloudinary,
   uploadDocument,
   uploadPartnerDocuments,
   uploadCompanyDocuments,

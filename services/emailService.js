@@ -700,6 +700,129 @@ class EmailService {
     });
   }
 
+  async sendSubAdminWelcome(email, firstName, lastName, password, permissions = []) {
+    const name = `${firstName} ${lastName}`.trim() || email;
+    const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:9696'}/login`;
+
+    console.log('=================================================');
+    console.log('🎉 Sub-Admin Welcome Email');
+    console.log(`   To: ${email}`);
+    console.log(`   Name: ${name}`);
+    console.log(`   Temp Password: ${password}`);
+    console.log('=================================================');
+
+    const permList = permissions.length > 0
+      ? permissions.map(p => `<li style="padding:4px 0; color:#374151;">✔ ${p.replace(/_/g, ' ')}</li>`).join('')
+      : '<li style="color:#6b7280;">No specific permissions assigned yet</li>';
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Welcome to Syncro1</title>
+      </head>
+      <body style="margin:0; padding:0; font-family: 'Segoe UI', Arial, sans-serif; background:#f1f5f9; color:#1e293b;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9; padding:40px 20px;">
+          <tr>
+            <td align="center">
+              <table width="100%" style="max-width:600px; background:#ffffff; border-radius:16px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+                
+                <!-- Header -->
+                <tr>
+                  <td style="background:linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding:40px 40px 32px; text-align:center;">
+                    <div style="font-size:36px; margin-bottom:12px;">🛡️</div>
+                    <h1 style="margin:0; color:#ffffff; font-size:26px; font-weight:700; letter-spacing:-0.5px;">Welcome to Syncro1!</h1>
+                    <p style="margin:8px 0 0; color:#c4b5fd; font-size:15px;">Your Admin Account is Ready</p>
+                  </td>
+                </tr>
+
+                <!-- Body -->
+                <tr>
+                  <td style="padding:36px 40px;">
+                    <p style="margin:0 0 20px; font-size:16px; color:#374151;">Hi <strong>${name}</strong>,</p>
+                    <p style="margin:0 0 24px; font-size:15px; color:#6b7280; line-height:1.6;">
+                      You've been added as a <strong>Sub-Admin</strong> on the Syncro1 platform. Below are your login credentials to get started.
+                    </p>
+
+                    <!-- Credentials Box -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; margin-bottom:28px;">
+                      <tr>
+                        <td style="padding:24px 28px;">
+                          <p style="margin:0 0 16px; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:#64748b;">Your Login Credentials</p>
+                          <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                              <td style="padding:8px 0; border-bottom:1px solid #e2e8f0;">
+                                <span style="font-size:13px; color:#94a3b8;">Email</span><br>
+                                <span style="font-size:15px; font-weight:600; color:#1e293b;">${email}</span>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style="padding:12px 0 4px;">
+                                <span style="font-size:13px; color:#94a3b8;">Temporary Password</span><br>
+                                <span style="font-size:20px; font-weight:700; color:#4f46e5; font-family:'Courier New', monospace; letter-spacing:2px;">${password}</span>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Warning -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background:#fef3c7; border-left:4px solid #f59e0b; border-radius:4px; margin-bottom:28px;">
+                      <tr>
+                        <td style="padding:14px 18px;">
+                          <p style="margin:0; font-size:14px; color:#92400e;">
+                            ⚠️ <strong>Important:</strong> Please change your password immediately after your first login for security purposes.
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Permissions -->
+                    <p style="margin:0 0 10px; font-size:14px; font-weight:700; color:#374151;">Your Assigned Permissions:</p>
+                    <ul style="margin:0 0 28px; padding-left:20px; font-size:14px; line-height:1.8;">
+                      ${permList}
+                    </ul>
+
+                    <!-- CTA Button -->
+                    <div style="text-align:center; margin-bottom:24px;">
+                      <a href="${loginUrl}" style="display:inline-block; padding:14px 36px; background:linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color:#ffffff; text-decoration:none; border-radius:8px; font-size:15px; font-weight:600; letter-spacing:0.3px;">
+                        Login to Dashboard →
+                      </a>
+                    </div>
+
+                    <p style="margin:0; font-size:13px; color:#94a3b8; text-align:center;">
+                      Having trouble? Copy and paste this link:<br>
+                      <a href="${loginUrl}" style="color:#4f46e5;">${loginUrl}</a>
+                    </p>
+                  </td>
+                </tr>
+
+                <!-- Footer -->
+                <tr>
+                  <td style="background:#f8fafc; padding:24px 40px; text-align:center; border-top:1px solid #e2e8f0;">
+                    <p style="margin:0 0 6px; font-size:13px; color:#64748b;">© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
+                    <p style="margin:0; font-size:12px; color:#94a3b8;">This is an automated message sent on behalf of Syncro1. Do not reply to this email.</p>
+                  </td>
+                </tr>
+
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `;
+
+    return this.sendEmail({
+      to: email,
+      subject: '🛡️ Welcome to Syncro1 — Your Admin Account is Ready',
+      html
+    });
+  }
+
   _formatValue(value) {
     if (value === null || value === undefined) return '<em>Not set</em>';
     if (typeof value === 'object') return JSON.stringify(value);
