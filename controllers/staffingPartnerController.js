@@ -2621,3 +2621,107 @@ exports.getInvoice = async (req, res) => {
     });
   }
 };
+
+// @desc    Get Worked Jobs (Jobs the partner has submitted candidates to)
+// @route   GET /api/staffing-partners/worked-jobs
+exports.getWorkedJobs = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Profile not found'
+      });
+    }
+
+    const { limit = 10, page = 1 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Aggregate unique jobs this partner has submitted candidates to
+    const pipeline = [
+      { $match: { submittedBy: partner._id } },
+      { $group: {
+          _id: "$job",
+          submissionCount: { $sum: 1 },
+          lastSubmittedAt: { $max: "$createdAt" },
+          statusCounts: {
+            $push: "$status"
+          }
+      }},
+      { $lookup: {
+          from: "jobs",
+          localField: "_id",
+          foreignField: "_id",
+          as: "jobDetails"
+      }},
+      { $unwind: "$jobDetails" },
+      { $lookup: {
+          from: "companies",
+          localField: "jobDetails.company",
+          foreignField: "_id",
+          as: "companyDetails"
+      }},
+      { $unwind: { path: "$companyDetails", preserveNullAndEmptyArrays: true } },
+      { $sort: { lastSubmittedAt: -1 } },
+      { $facet: {
+          metadata: [ { $count: "total" } ],
+          data: [ { $skip: skip }, { $limit: parseInt(limit) } ]
+      }}
+    ];
+
+    const Candidate = require('../models/Candidate');
+    const aggregationResult = await Candidate.aggregate(pipeline);
+
+    const total = aggregationResult[0].metadata[0]?.total || 0;
+    const items = aggregationResult[0].data.map(item => {
+      const statuses = item.statusCounts || [];
+      const hired = statuses.filter(s => s === 'HIRED').length;
+      const rejected = statuses.filter(s => s === 'REJECTED').length;
+      const interviewing = statuses.filter(s => ['SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEWED'].includes(s)).length;
+      const active = statuses.length - hired - rejected - interviewing;
+      return {
+        job: {
+          _id: item.jobDetails._id,
+          title: item.jobDetails.title,
+          category: item.jobDetails.category,
+          employmentType: item.jobDetails.employmentType,
+          status: item.jobDetails.status,
+          approvalStatus: item.jobDetails.approvalStatus,
+          location: item.jobDetails.location,
+          salary: item.jobDetails.salary,
+          uniqueId: item.jobDetails.uniqueId
+        },
+        company: {
+          companyName: item.companyDetails?.companyName || "N/A"
+        },
+        stats: {
+          total: item.submissionCount,
+          active,
+          interviewing,
+          hired,
+          rejected
+        },
+        lastSubmittedAt: item.lastSubmittedAt
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        jobs: items,
+        pagination: {
+          page: parseInt(page),
+          pages: Math.ceil(total / parseInt(limit)),
+          total
+        }
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch worked jobs',
+      error: error.message
+    });
+  }
+};

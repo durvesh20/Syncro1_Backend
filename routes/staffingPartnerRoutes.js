@@ -35,7 +35,8 @@ const {
   proposeInterviewSlots,
   getAvailableSlotsForPartner,
   assignCandidateToSlot,
-  removeCandidateFromSlot
+  removeCandidateFromSlot,
+  getWorkedJobs
 } = require('../controllers/staffingPartnerController');
 
 const {
@@ -291,6 +292,7 @@ router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', remove
 // ==================== SUBMISSIONS ROUTES ====================
 router.get('/submissions', getMySubmissions);
 router.get('/submissions/:id', getSubmission);
+router.get('/worked-jobs', getWorkedJobs);
 
 // @desc    Withdraw a submitted candidate
 // @route   PUT /api/staffing-partners/submissions/:id/withdraw

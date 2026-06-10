@@ -2262,9 +2262,15 @@ exports.getAllPartners = async (req, res) => {
 // @route   GET /api/admin/partners/:id
 exports.getPartnerDetail = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findById(req.params.id)
-      .populate('user', 'email mobile status lastLogin createdAt')
+    let partner = await StaffingPartner.findById(req.params.id)
+      .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
       .populate('verifiedBy', 'email role');
+
+    if (!partner) {
+      partner = await StaffingPartner.findOne({ user: req.params.id })
+        .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
+        .populate('verifiedBy', 'email role');
+    }
 
     if (!partner) {
       return res.status(404).json({
@@ -2294,6 +2300,16 @@ exports.getPartnerDetail = async (req, res) => {
       { $group: { _id: '$status', count: { $sum: 1 }, amount: { $sum: '$amount.netPayable' } } }
     ]);
 
+    const AdminActionLog = require('../models/AdminActionLog');
+    const historyLogs = await AdminActionLog.find({
+      $or: [
+        { entityId: partner._id },
+        { entityId: partner.user?._id || partner.user }
+      ]
+    })
+      .populate('actor', 'firstName lastName email')
+      .sort({ createdAt: -1 });
+
     res.json({
       success: true,
       data: {
@@ -2306,7 +2322,8 @@ exports.getPartnerDetail = async (req, res) => {
           acc[item._id] = { count: item.count, amount: item.amount };
           return acc;
         }, {}),
-        recentSubmissions
+        recentSubmissions,
+        historyLogs
       }
     });
   } catch (error) {
@@ -2385,9 +2402,15 @@ exports.getAllCompanies = async (req, res) => {
 // @route   GET /api/admin/companies/:id
 exports.getCompanyDetail = async (req, res) => {
   try {
-    const company = await Company.findById(req.params.id)
-      .populate('user', 'email mobile status lastLogin createdAt')
+    let company = await Company.findById(req.params.id)
+      .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
       .populate('verifiedBy', 'email role');
+
+    if (!company) {
+      company = await Company.findOne({ user: req.params.id })
+        .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
+        .populate('verifiedBy', 'email role');
+    }
 
     if (!company) {
       return res.status(404).json({
@@ -2414,6 +2437,16 @@ exports.getCompanyDetail = async (req, res) => {
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
+    const AdminActionLog = require('../models/AdminActionLog');
+    const historyLogs = await AdminActionLog.find({
+      $or: [
+        { entityId: company._id },
+        { entityId: company.user?._id || company.user }
+      ]
+    })
+      .populate('actor', 'firstName lastName email')
+      .sort({ createdAt: -1 });
+
     res.json({
       success: true,
       data: {
@@ -2426,7 +2459,8 @@ exports.getCompanyDetail = async (req, res) => {
           acc[item._id] = item.count;
           return acc;
         }, {}),
-        recentJobs
+        recentJobs,
+        historyLogs
       }
     });
   } catch (error) {

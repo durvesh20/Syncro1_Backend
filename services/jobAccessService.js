@@ -14,30 +14,30 @@ const PLAN_HIERARCHY = {
 
 function parseCtcLimit(ctcRangeStr) {
   if (!ctcRangeStr) return Infinity;
-  
+
   const str = ctcRangeStr.toUpperCase().replace(/\s+/g, '');
-  
+
   if (str.includes('ALL') || str.includes('NO_LIMIT') || str.includes('ANY') || str === '') {
     return Infinity;
   }
-  
+
   const match = str.match(/(\d+(?:\.\d+)?)/);
   if (match) {
     const value = parseFloat(match[1]);
-    
+
     // Check if the range implies Lakhs/L/LPA
     if (str.includes('L') || str.includes('LPA') || str.includes('LAKH')) {
       return value * 100000;
     }
-    
+
     // If it's a raw number without L, but is small (e.g. <= 100), assume it's in LPA
     if (value <= 100) {
       return value * 100000;
     }
-    
+
     return value;
   }
-  
+
   return Infinity;
 }
 
@@ -47,18 +47,18 @@ class JobAccessService {
     const SubscriptionPlan = require('../models/SubscriptionPlan');
     try {
       const plans = await SubscriptionPlan.find({ isActive: true });
-      
+
       const limits = {
         'FREE': 500000,
         'GROWTH': 2000000,
         'PROFESSIONAL': 3500000,
         'PREMIUM': Infinity
       };
-      
+
       for (const plan of plans) {
         const key = plan.planKey.toUpperCase();
         const limit = parseCtcLimit(plan.ctcRange);
-        
+
         if (key === 'FREE') {
           limits['FREE'] = limit;
         } else if (key.startsWith('GROWTH')) {
@@ -69,7 +69,7 @@ class JobAccessService {
           limits['PREMIUM'] = limit;
         }
       }
-      
+
       return limits;
     } catch (error) {
       console.error('[JobAccessService] Failed to fetch subscription plans for CTC limits:', error);
@@ -84,7 +84,7 @@ class JobAccessService {
 
   async isPlanEligibleForJob(partnerPlan, job, providedCtcLimits = null) {
     const plan = partnerPlan || 'FREE';
-    
+
     const ctcLimits = providedCtcLimits || await this.getPlanCtcLimits();
     const ctcLimit = ctcLimits[plan] || 500000;
     if (ctcLimit !== Infinity) {
@@ -97,7 +97,7 @@ class JobAccessService {
         return false;
       }
     }
-    
+
     if (job.eligiblePlans && job.eligiblePlans.length > 0) {
       const partnerAccessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
       const hasPlanAccess = job.eligiblePlans.some(p => partnerAccessiblePlans.includes(p));
@@ -105,7 +105,7 @@ class JobAccessService {
         return false;
       }
     }
-    
+
     return true;
   }
 
@@ -116,7 +116,7 @@ class JobAccessService {
   async getAccessibleJobs(partnerId, partnerPlan, filters = {}) {
     const plan = partnerPlan || 'FREE';
     const accessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
-    
+
     // Fetch CTC limits from DB
     const ctcLimits = await this.getPlanCtcLimits();
     const ctcLimit = ctcLimits[plan] || 500000;
@@ -152,7 +152,7 @@ class JobAccessService {
       conditions.push({
         $or: [
           // If stored as raw Rupees (value > 100)
-          { 
+          {
             $and: [
               { 'salary.min': { $gt: 100 } },
               { 'salary.min': { $lte: ctcLimit } }

@@ -184,35 +184,86 @@ exports.withdrawInterest = async (req, res) => {
 // @access  Staffing Partner
 exports.getMyInterestedJobs = async (req, res) => {
     try {
+        const mongoose = require('mongoose');
         const partner = await StaffingPartner.findOne({ user: req.user._id });
+        if (!partner) {
+            return res.status(404).json({
+                success: false,
+                message: 'Partner profile not found'
+            });
+        }
 
         const { page = 1, limit = 20 } = req.query;
         const sanitizedPage = Math.max(1, parseInt(page));
         const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
         const skip = (sanitizedPage - 1) * sanitizedLimit;
 
-        const [interests, total] = await Promise.all([
-            JobInterest.find({
-                partner: partner._id,
-                status: 'ACTIVE'
-            })
-                .populate({
-                    path: 'job',
-                    select: 'title category location salary experienceLevel vacancies status approvalStatus metrics eligiblePlans isUrgent',
-                    populate: {
-                        path: 'company',
-                        select: 'companyName kyc.logo kyc.industry'
-                    }
-                })
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(sanitizedLimit),
-            JobInterest.countDocuments({ partner: partner._id, status: 'ACTIVE' })
+        const partnerId = new mongoose.Types.ObjectId(partner._id.toString());
+
+        // Use aggregation to join Job and filter out ON_HOLD status
+        const countPipeline = [
+            { $match: { partner: partnerId, status: 'ACTIVE' } },
+            { $lookup: {
+                from: 'jobs',
+                localField: 'job',
+                foreignField: '_id',
+                as: 'jobDetails'
+            }},
+            { $unwind: '$jobDetails' },
+            { $match: { 'jobDetails.status': { $ne: 'ON_HOLD' } } },
+            { $count: 'total' }
+        ];
+
+        const dataPipeline = [
+            { $match: { partner: partnerId, status: 'ACTIVE' } },
+            { $lookup: {
+                from: 'jobs',
+                localField: 'job',
+                foreignField: '_id',
+                as: 'jobDetails'
+            }},
+            { $unwind: '$jobDetails' },
+            { $match: { 'jobDetails.status': { $ne: 'ON_HOLD' } } },
+            { $lookup: {
+                from: 'companies',
+                localField: 'jobDetails.company',
+                foreignField: '_id',
+                as: 'companyDetails'
+            }},
+            { $unwind: { path: '$companyDetails', preserveNullAndEmptyArrays: true } },
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: sanitizedLimit }
+        ];
+
+        const [countResult, interests] = await Promise.all([
+            JobInterest.aggregate(countPipeline),
+            JobInterest.aggregate(dataPipeline)
         ]);
+
+        const total = countResult[0]?.total || 0;
 
         const enriched = interests.map(i => ({
             interestId: i._id,
-            job: i.job,
+            job: {
+                _id: i.jobDetails._id,
+                title: i.jobDetails.title,
+                category: i.jobDetails.category,
+                location: i.jobDetails.location,
+                salary: i.jobDetails.salary,
+                experienceLevel: i.jobDetails.experienceLevel,
+                vacancies: i.jobDetails.vacancies,
+                status: i.jobDetails.status,
+                approvalStatus: i.jobDetails.approvalStatus,
+                metrics: i.jobDetails.metrics,
+                eligiblePlans: i.jobDetails.eligiblePlans,
+                isUrgent: i.jobDetails.isUrgent,
+                company: i.companyDetails ? {
+                    companyName: i.companyDetails.companyName,
+                    logo: i.companyDetails.kyc?.logo || i.companyDetails.logo,
+                    industry: i.companyDetails.kyc?.industry || i.companyDetails.industry
+                } : null
+            },
             submissionCount: i.submissionCount,
             submissionLimit: i.submissionLimit,
             remainingSlots: i.submissionLimit - i.submissionCount,
