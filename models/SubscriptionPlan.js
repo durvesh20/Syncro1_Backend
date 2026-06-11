@@ -53,6 +53,11 @@ const subscriptionPlanSchema = new mongoose.Schema({
   discountPercentage: {
     type: Number,
     default: 0
+  },
+  accessiblePlanJobs: {
+    type: [String],
+    enum: ['FREE', 'GROWTH', 'PROFESSIONAL', 'PREMIUM'],
+    default: ['FREE']
   }
 }, {
   timestamps: true

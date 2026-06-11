@@ -258,6 +258,7 @@ exports.getMyInterestedJobs = async (req, res) => {
                 metrics: i.jobDetails.metrics,
                 eligiblePlans: i.jobDetails.eligiblePlans,
                 isUrgent: i.jobDetails.isUrgent,
+                uniqueId: i.jobDetails.uniqueId,
                 company: i.companyDetails ? {
                     companyName: i.companyDetails.companyName,
                     logo: i.companyDetails.kyc?.logo || i.companyDetails.logo,

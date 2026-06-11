@@ -85,8 +85,41 @@ class JobAccessService {
   async isPlanEligibleForJob(partnerPlan, job, providedCtcLimits = null) {
     const plan = partnerPlan || 'FREE';
 
+    // 1. Resolve accessible plans dynamically from the database
+    const SubscriptionPlan = require('../models/SubscriptionPlan');
+    let partnerAccessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
+    try {
+      const planDoc = await SubscriptionPlan.findOne({
+        $or: [
+          { planKey: plan },
+          { planKey: new RegExp(`^${plan}`, 'i') }
+        ]
+      });
+      if (planDoc && planDoc.accessiblePlanJobs && planDoc.accessiblePlanJobs.length > 0) {
+        partnerAccessiblePlans = planDoc.accessiblePlanJobs;
+      }
+    } catch (err) {
+      console.error('[JobAccessService] Failed to load dynamic accessible plan jobs, using fallback:', err);
+    }
+
+    // 2. Determine CTC limit as the highest limit among all accessible plans
     const ctcLimits = providedCtcLimits || await this.getPlanCtcLimits();
-    const ctcLimit = ctcLimits[plan] || 500000;
+    let ctcLimit = 0;
+    for (const p of partnerAccessiblePlans) {
+      const limit = ctcLimits[p] || 0;
+      if (limit === Infinity) {
+        ctcLimit = Infinity;
+        break;
+      }
+      if (limit > ctcLimit) {
+        ctcLimit = limit;
+      }
+    }
+    if (ctcLimit === 0) {
+      ctcLimit = ctcLimits[plan] || 500000;
+    }
+
+    // 3. CTC Limit check
     if (ctcLimit !== Infinity) {
       let jobMinSalary = job.salary?.min || job.salary?.max || 0;
       // Normalize salary: if <= 100, treat it as LPA and convert to raw Rupees
@@ -98,8 +131,8 @@ class JobAccessService {
       }
     }
 
+    // 4. Plan tier eligibility check
     if (job.eligiblePlans && job.eligiblePlans.length > 0) {
-      const partnerAccessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
       const hasPlanAccess = job.eligiblePlans.some(p => partnerAccessiblePlans.includes(p));
       if (!hasPlanAccess) {
         return false;
@@ -115,11 +148,38 @@ class JobAccessService {
    */
   async getAccessibleJobs(partnerId, partnerPlan, filters = {}) {
     const plan = partnerPlan || 'FREE';
-    const accessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
+    const SubscriptionPlan = require('../models/SubscriptionPlan');
+    let accessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
+    try {
+      const planDoc = await SubscriptionPlan.findOne({
+        $or: [
+          { planKey: plan },
+          { planKey: new RegExp(`^${plan}`, 'i') }
+        ]
+      });
+      if (planDoc && planDoc.accessiblePlanJobs && planDoc.accessiblePlanJobs.length > 0) {
+        accessiblePlans = planDoc.accessiblePlanJobs;
+      }
+    } catch (err) {
+      console.error('[JobAccessService] Failed to load dynamic accessible plan jobs, using fallback:', err);
+    }
 
     // Fetch CTC limits from DB
     const ctcLimits = await this.getPlanCtcLimits();
-    const ctcLimit = ctcLimits[plan] || 500000;
+    let ctcLimit = 0;
+    for (const p of accessiblePlans) {
+      const limit = ctcLimits[p] || 0;
+      if (limit === Infinity) {
+        ctcLimit = Infinity;
+        break;
+      }
+      if (limit > ctcLimit) {
+        ctcLimit = limit;
+      }
+    }
+    if (ctcLimit === 0) {
+      ctcLimit = ctcLimits[plan] || 500000;
+    }
 
     // Auto-update expired active jobs on the platform to ON_HOLD
     await Job.updateMany(
@@ -392,6 +452,84 @@ class JobAccessService {
         totalAccessibleJobs: total
       }
     };
+  }
+
+  async getAccessibleJobsCount(partnerPlan) {
+    const plan = partnerPlan || 'FREE';
+    const SubscriptionPlan = require('../models/SubscriptionPlan');
+    let accessiblePlans = PLAN_HIERARCHY[plan] || ['FREE'];
+    try {
+      const planDoc = await SubscriptionPlan.findOne({
+        $or: [
+          { planKey: plan },
+          { planKey: new RegExp(`^${plan}`, 'i') }
+        ]
+      });
+      if (planDoc && planDoc.accessiblePlanJobs && planDoc.accessiblePlanJobs.length > 0) {
+        accessiblePlans = planDoc.accessiblePlanJobs;
+      }
+    } catch (err) {
+      console.error('[JobAccessService] Failed to load dynamic accessible plan jobs, using fallback:', err);
+    }
+
+    const ctcLimits = await this.getPlanCtcLimits();
+    let ctcLimit = 0;
+    for (const p of accessiblePlans) {
+      const limit = ctcLimits[p] || 0;
+      if (limit === Infinity) {
+        ctcLimit = Infinity;
+        break;
+      }
+      if (limit > ctcLimit) {
+        ctcLimit = limit;
+      }
+    }
+    if (ctcLimit === 0) {
+      ctcLimit = ctcLimits[plan] || 500000;
+    }
+
+    const query = {
+      status: 'ACTIVE',
+      eligiblePlans: { $in: accessiblePlans }
+    };
+
+    if (ctcLimit !== Infinity) {
+      const lpaLimit = ctcLimit / 100000;
+      query.$and = [
+        {
+          $or: [
+            {
+              $and: [
+                { 'salary.min': { $gt: 100 } },
+                { 'salary.min': { $lte: ctcLimit } }
+              ]
+            },
+            {
+              $and: [
+                { 'salary.min': { $lte: 100 } },
+                { 'salary.min': { $lte: lpaLimit } }
+              ]
+            },
+            {
+              $and: [
+                { $or: [{ 'salary.min': { $exists: false } }, { 'salary.min': null }] },
+                { 'salary.max': { $gt: 100 } },
+                { 'salary.max': { $lte: ctcLimit } }
+              ]
+            },
+            {
+              $and: [
+                { $or: [{ 'salary.min': { $exists: false } }, { 'salary.min': null }] },
+                { 'salary.max': { $lte: 100 } },
+                { 'salary.max': { $lte: lpaLimit } }
+              ]
+            }
+          ]
+        }
+      ];
+    }
+
+    return await Job.countDocuments(query);
   }
 
   _getLowestPlan(plans) {

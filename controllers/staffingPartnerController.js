@@ -706,10 +706,11 @@ exports.getProfileCompletion = async (req, res) => {
       });
     }
 
-    const completion = partner.profileCompletion;
-    const total = Object.keys(completion).length;
-    const completed = Object.values(completion).filter(Boolean).length;
-    const percentage = Math.round((completed / total) * 100);
+    const completion = partner.profileCompletion ? (partner.profileCompletion.toObject ? partner.profileCompletion.toObject() : partner.profileCompletion) : {};
+    const completionKeys = Object.keys(completion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id');
+    const total = completionKeys.length;
+    const completed = completionKeys.filter(k => !!completion[k]).length;
+    const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
 
     res.json({
       success: true,
@@ -2255,6 +2256,80 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
+    const PartnerCandidate = require('../models/PartnerCandidate');
+
+    // 1. Worked Jobs Count (unique jobs partner has submitted candidate(s) to)
+    const workedJobs = await Candidate.distinct('job', { submittedBy: partner._id });
+    const totalWorkedJobs = workedJobs.length;
+
+    // 2. Shortlisted Jobs Count (unique jobs with shortlisted/interview/joined candidate)
+    const shortlistedJobs = await Candidate.distinct('job', {
+      submittedBy: partner._id,
+      status: { $in: ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'] }
+    });
+    const totalShortlistedJobs = shortlistedJobs.length;
+
+    // 3. Total Candidates in Partner's Candidate Pool
+    const totalPoolCandidates = await PartnerCandidate.countDocuments({ partner: partner._id });
+
+    // 4. Total Manual Candidates submitted to jobs (where poolCandidateRef is null/undefined)
+    const totalManualSubmissions = await Candidate.countDocuments({
+      submittedBy: partner._id,
+      $or: [
+        { poolCandidateRef: null },
+        { poolCandidateRef: { $exists: false } }
+      ]
+    });
+
+    // 5. Active Interviews count
+    const activeInterviewsCount = await Candidate.countDocuments({
+      submittedBy: partner._id,
+      status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED'] }
+    });
+
+    // 6. Calculate monthly placements for the last 6 months dynamically
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
+    sixMonthsAgo.setDate(1);
+    sixMonthsAgo.setHours(0, 0, 0, 0);
+
+    const monthlyPlacements = await Candidate.aggregate([
+      {
+        $match: {
+          submittedBy: partner._id,
+          status: { $in: ['JOINED', 'OFFER_ACCEPTED', 'HIRED', 'PLACED'] },
+          createdAt: { $gte: sixMonthsAgo }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { '_id.year': 1, '_id.month': 1 } }
+    ]);
+
+    const placementData = [];
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(d.getMonth() - i);
+      const year = d.getFullYear();
+      const monthIndex = d.getMonth(); // 0-11
+      const label = `${monthNames[monthIndex]} ${year}`;
+      
+      const match = monthlyPlacements.find(item => item._id.year === year && item._id.month === (monthIndex + 1));
+      placementData.push({
+        month: label,
+        placements: match ? match.count : 0
+      });
+    }
+
     const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
       .populate('job', 'title')
       .populate('company', 'companyName')
@@ -2266,15 +2341,13 @@ exports.getDashboard = async (req, res) => {
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
-    const availableJobsCount = await Job.countDocuments({
-      status: 'ACTIVE',
-      eligiblePlans: partner.subscription?.plan || 'FREE'
-    });
+    const availableJobsCount = await jobAccessService.getAccessibleJobsCount(partner.subscription?.plan || 'FREE');
 
-    const profileCompletion = partner.profileCompletion;
-    const completedSections = Object.values(profileCompletion).filter(Boolean).length;
-    const totalSections = Object.keys(profileCompletion).length;
-    const completionPercentage = Math.round((completedSections / totalSections) * 100);
+    const profileCompletion = partner.profileCompletion ? (partner.profileCompletion.toObject ? partner.profileCompletion.toObject() : partner.profileCompletion) : {};
+    const completionKeys = Object.keys(profileCompletion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id');
+    const totalSections = completionKeys.length;
+    const completedSections = completionKeys.filter(k => !!profileCompletion[k]).length;
+    const completionPercentage = totalSections > 0 ? Math.round((completedSections / totalSections) * 100) : 0;
 
     const Payout = require('../models/Payout');
 
@@ -2317,7 +2390,14 @@ exports.getDashboard = async (req, res) => {
           firmName: partner.firmName,
           verificationStatus: partner.verificationStatus
         },
-        metrics: partner.metrics,
+        metrics: {
+          ...partner.metrics,
+          totalWorkedJobs,
+          totalShortlistedJobs,
+          totalPoolCandidates,
+          totalManualSubmissions,
+          activeInterviewsCount
+        },
         subscription: partner.subscription,
         profileCompletion: {
           ...profileCompletion,
@@ -2342,7 +2422,8 @@ exports.getDashboard = async (req, res) => {
         },
         recentSubmissions,
         statusBreakdown,
-        availableJobsCount
+        availableJobsCount,
+        placementData
       }
     });
   } catch (error) {

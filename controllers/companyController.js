@@ -758,10 +758,11 @@ exports.getProfileCompletion = async (req, res) => {
       });
     }
 
-    const completion = company.profileCompletion;
-    const total = Object.keys(completion).length;
-    const completed = Object.values(completion).filter(Boolean).length;
-    const percentage = Math.round((completed / total) * 100);
+    const completion = company.profileCompletion ? (company.profileCompletion.toObject ? company.profileCompletion.toObject() : company.profileCompletion) : {};
+    const completionKeys = Object.keys(completion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id');
+    const total = completionKeys.length;
+    const completed = completionKeys.filter(k => !!completion[k]).length;
+    const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
 
     res.json({
       success: true,
@@ -934,13 +935,11 @@ exports.getDashboard = async (req, res) => {
       status: "ACTIVE",
     }).limit(5);
 
-    const profileCompletion = company.profileCompletion;
-    const completedSections =
-      Object.values(profileCompletion).filter(Boolean).length;
-    const totalSections = Object.keys(profileCompletion).length;
-    const completionPercentage = Math.round(
-      (completedSections / totalSections) * 100,
-    );
+    const profileCompletion = company.profileCompletion ? (company.profileCompletion.toObject ? company.profileCompletion.toObject() : company.profileCompletion) : {};
+    const completionKeys = Object.keys(profileCompletion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id');
+    const totalSections = completionKeys.length;
+    const completedSections = completionKeys.filter(k => !!profileCompletion[k]).length;
+    const completionPercentage = totalSections > 0 ? Math.round((completedSections / totalSections) * 100) : 0;
 
     res.json({
       success: true,

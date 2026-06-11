@@ -172,7 +172,26 @@ exports.getPoolCandidate = async (req, res) => {
 
     if (!candidate) return res.status(404).json({ success: false, message: 'Candidate not found in your pool' });
 
-    res.json({ success: true, data: candidate });
+    // Fetch this candidate's submissions (jobs applied to)
+    const submissions = await Candidate.find({ poolCandidateRef: candidate._id })
+      .populate('job', 'title uniqueId status')
+      .populate('company', 'companyName logo')
+      .select('status createdAt job company')
+      .lean();
+
+    res.json({
+      success: true,
+      data: {
+        ...candidate,
+        submissions: submissions.map(sub => ({
+          submissionId: sub._id,
+          status: sub.status,
+          appliedAt: sub.createdAt,
+          job: sub.job,
+          company: sub.company
+        }))
+      }
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to fetch candidate', error: err.message });
   }

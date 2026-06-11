@@ -336,19 +336,22 @@ jobSchema.pre('save', function (next) {
 });
 
 jobSchema.pre('save', function (next) {
-  const salaryVal = (this.salary && (this.salary.min || this.salary.max)) || 0;
-  let salary = Number(salaryVal) || 0;
-  if (salary <= 100) {
-    salary = salary * 100000;
+  // Only calculate eligible plans automatically if they are not already set/provided
+  if (!this.eligiblePlans || this.eligiblePlans.length === 0) {
+    const salaryVal = (this.salary && (this.salary.min || this.salary.max)) || 0;
+    let salary = Number(salaryVal) || 0;
+    if (salary <= 100) {
+      salary = salary * 100000;
+    }
+
+    const plans = [];
+    if (salary <= 500000) plans.push('FREE');
+    if (salary <= 2000000) plans.push('GROWTH');
+    if (salary <= 3500000) plans.push('PROFESSIONAL');
+    plans.push('PREMIUM');
+
+    this.eligiblePlans = plans;
   }
-
-  const plans = [];
-  if (salary <= 500000) plans.push('FREE');
-  if (salary <= 2000000) plans.push('GROWTH');
-  if (salary <= 3500000) plans.push('PROFESSIONAL');
-  plans.push('PREMIUM');
-
-  this.eligiblePlans = plans;
   next();
 });
 

@@ -87,14 +87,14 @@ const logoFilter = (req, file, cb) => {
 
 // Document filter
 const documentFilter = (req, file, cb) => {
-  const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png'];
+  const allowedMimes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
   const ext = path.extname(file.originalname).toLowerCase();
   const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png'];
 
   if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error(`Invalid file type for ${file.fieldname}. Allowed: PDF, JPG, PNG`), false);
+    cb(new Error(`Invalid file type for ${file.fieldname}. Allowed: PDF, JPG, JPEG, PNG`), false);
   }
 };
 
@@ -115,13 +115,13 @@ const uploadLogo = multer({
 const uploadDocument = multer({
   storage: documentStorage,
   fileFilter: documentFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 2 * 1024 * 1024 }
 }).single('document');
 
 const uploadPartnerDocuments = multer({
   storage: documentStorage,
   fileFilter: documentFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 2 * 1024 * 1024 }
 }).fields([
   { name: 'panCard', maxCount: 1 },
   { name: 'gstCertificate', maxCount: 1 },
@@ -134,7 +134,7 @@ const uploadPartnerDocuments = multer({
 const uploadCompanyDocuments = multer({
   storage: documentStorage,
   fileFilter: documentFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 2 * 1024 * 1024 }
 }).fields([
   { name: 'gstCertificate', maxCount: 1 },
   { name: 'panCard', maxCount: 1 },
@@ -150,7 +150,7 @@ const uploadCompanyDocuments = multer({
 const uploadAny = multer({
   storage: documentStorage,
   fileFilter: documentFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 2 * 1024 * 1024 }
 }).any();
 
 // ==================== ERROR HANDLER ====================
@@ -160,7 +160,7 @@ const handleUploadError = (err, req, res, next) => {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
-        message: 'File too large. Maximum size is 10MB'
+        message: 'File too large. Maximum size is 2MB'
       });
     }
     return res.status(400).json({
