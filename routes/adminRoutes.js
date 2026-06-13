@@ -202,6 +202,46 @@ router.get(
   getCandidateDetail
 );
 
+router.post(
+  '/candidates/:id/notes',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const { content } = req.body;
+
+      if (!content || !content.trim()) {
+        return res.status(400).json({ success: false, message: 'Note content is required' });
+      }
+
+      const candidate = await Candidate.findById(req.params.id);
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      candidate.notes.push({
+        content,
+        addedBy: req.user._id,
+        addedAt: new Date(),
+        isInternal: true
+      });
+
+      await candidate.save();
+
+      const updatedCandidate = await Candidate.findById(candidate._id)
+        .populate('notes.addedBy', 'email role');
+
+      res.json({
+        success: true,
+        message: 'Internal note added successfully',
+        data: updatedCandidate.notes
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
 // All partners
 router.get(
   '/partners',
@@ -432,7 +472,8 @@ router.get(
         .populate('job', 'title category location experienceLevel salary skills')
         .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')
         .populate('company', 'companyName kyc.industry')
-        .populate('statusHistory.changedBy', 'email role');
+        .populate('statusHistory.changedBy', 'email role')
+        .populate('notes.addedBy', 'email role');
 
       if (!candidate) {
         return res.status(404).json({

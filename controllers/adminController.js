@@ -2116,7 +2116,8 @@ exports.getAllCandidates = async (req, res) => {
         { firstName: new RegExp(search, 'i') },
         { lastName: new RegExp(search, 'i') },
         { email: new RegExp(search, 'i') },
-        { mobile: new RegExp(search, 'i') }
+        { mobile: new RegExp(search, 'i') },
+        { uniqueId: new RegExp(search, 'i') }
       ];
     }
 
@@ -2172,7 +2173,8 @@ exports.getCandidateDetail = async (req, res) => {
       .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
       .populate('job', 'title uniqueId company')
       .populate('company', 'companyName uniqueId')
-      .populate('statusHistory.changedBy', 'email role');
+      .populate('statusHistory.changedBy', 'email role')
+      .populate('notes.addedBy', 'email role');
 
     if (!candidate) {
       return res.status(404).json({

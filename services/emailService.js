@@ -1,26 +1,25 @@
 // backend/services/emailService.js
-const nodemailer = require('nodemailer');
+const { BrevoClient } = require('@getbrevo/brevo');
 
 class EmailService {
   constructor() {
     this.skipEmail = process.env.SKIP_EMAIL === 'true';
     
     if (!this.skipEmail) {
-      this.transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: process.env.SMTP_PORT,
-        secure: false,
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS
-        }
+      this.brevo = new BrevoClient({
+        apiKey: process.env.BREVO_API_KEY,
+        timeoutInSeconds: 30,
+        maxRetries: 2
       });
     }
+
+    this.senderName = process.env.BREVO_SENDER_NAME || 'Syncro1';
+    this.senderEmail = process.env.BREVO_SENDER_EMAIL || 'developer@syncro1.com';
   }
 
   async sendEmail(options) {
     console.log('=================================================');
-    console.log('📧 Email Notification');
+    console.log('📧 Email Notification (Brevo)');
     console.log(`   To: ${options.to}`);
     console.log(`   Subject: ${options.subject}`);
     console.log('=================================================');
@@ -30,19 +29,17 @@ class EmailService {
       return { success: true, skipped: true };
     }
 
-    const mailOptions = {
-      from: `Syncro1 <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-      to: options.to,
-      subject: options.subject,
-      html: options.html
-    };
-
     try {
-      const info = await this.transporter.sendMail(mailOptions);
-      console.log('   Email sent:', info.messageId);
-      return { success: true, messageId: info.messageId };
+      const result = await this.brevo.transactionalEmails.sendTransacEmail({
+        subject: options.subject,
+        htmlContent: options.html,
+        sender: { name: this.senderName, email: this.senderEmail },
+        to: [{ email: options.to }]
+      });
+      console.log('   Email sent via Brevo:', result.messageId || 'OK');
+      return { success: true, messageId: result.messageId };
     } catch (error) {
-      console.error('   Email error:', error.message);
+      console.error('   Brevo email error:', error.message);
       if (process.env.NODE_ENV === 'development') {
         return { success: true, error: error.message, fallback: true };
       }
