@@ -398,7 +398,7 @@ class JobAccessService {
       const interest = interestMap[jobIdStr] || {
         hasInterest: false,
         submissionCount: 0,
-        submissionLimit: 5,
+        submissionLimit: (job.vacancies || 1) * 5,
         remainingSlots: 0,
         canSubmit: false
       };

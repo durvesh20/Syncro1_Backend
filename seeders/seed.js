@@ -842,7 +842,7 @@ const seedDatabase = async () => {
           user: partnerUser._id,
           status: "ACTIVE",
           submissionCount: 0,
-          submissionLimit: 5,
+          submissionLimit: (job1.vacancies || 1) * 5,
           limitExtended: false,
         });
 

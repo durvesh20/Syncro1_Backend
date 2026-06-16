@@ -4,7 +4,7 @@ const { BrevoClient } = require('@getbrevo/brevo');
 class EmailService {
   constructor() {
     this.skipEmail = process.env.SKIP_EMAIL === 'true';
-    
+
     if (!this.skipEmail) {
       this.brevo = new BrevoClient({
         apiKey: process.env.BREVO_API_KEY,
@@ -105,8 +105,8 @@ class EmailService {
   }
 
   async sendOTP(email, otp, type = 'verification') {
-    const subject = type === 'verification' 
-      ? 'Email Verification OTP' 
+    const subject = type === 'verification'
+      ? 'Email Verification OTP'
       : 'Password Reset OTP';
 
     console.log('=================================================');
@@ -116,7 +116,7 @@ class EmailService {
     console.log(`   Type: ${type}`);
     console.log(`   Valid for: 10 minutes`);
     console.log('=================================================');
-    
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -221,7 +221,7 @@ class EmailService {
   }
 
   async sendVerificationApproved(email, name, role) {
-    const dashboardUrl = role === 'staffing_partner' 
+    const dashboardUrl = role === 'staffing_partner'
       ? `${process.env.FRONTEND_URL}/partner/dashboard`
       : `${process.env.FRONTEND_URL}/company/dashboard`;
 

@@ -2133,6 +2133,234 @@ exports.getSubmission = async (req, res) => {
   }
 };
 
+// @desc    Update Candidate Submission Details (Before Consent Confirmation)
+// @route   PUT /api/staffing-partners/submissions/:id
+exports.updateSubmission = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({ success: false, message: 'Partner profile not found' });
+    }
+
+    const submission = await Candidate.findOne({
+      _id: req.params.id,
+      submittedBy: partner._id
+    });
+
+    if (!submission) {
+      return res.status(404).json({ success: false, message: 'Submission not found' });
+    }
+
+    // Check status lock
+    const CONSENT_LOCKED_STATUSES = ['CONSENT_CONFIRMED', 'ADMIN_REVIEW', 'SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'];
+    if (CONSENT_LOCKED_STATUSES.includes(submission.status)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Editing is locked because the candidate has already confirmed consent or is in active stages.'
+      });
+    }
+
+    // Update main identity info
+    const {
+      firstName,
+      middleName,
+      lastName,
+      email,
+      mobile,
+      location,
+      willingToRelocate,
+      totalExperience,
+      relevantExperience,
+      noticePeriod,
+      currentSalary,
+      expectedSalary,
+      writeup
+    } = req.body;
+
+    if (firstName) submission.firstName = firstName.trim();
+    if (middleName !== undefined) submission.middleName = middleName.trim();
+    if (lastName) submission.lastName = lastName.trim();
+    
+    if (email) {
+      submission.email = email.trim().toLowerCase();
+    }
+    
+    if (mobile) {
+      submission.mobile = mobile.trim();
+      // Update whatsappConsent sentTo if it was pending
+      if (submission.whatsappConsent && submission.status === 'CONSENT_PENDING') {
+        submission.whatsappConsent.sentTo = mobile.trim();
+      }
+    }
+
+    // Update profile object
+    if (!submission.profile) submission.profile = {};
+    if (location !== undefined) submission.profile.location = location.trim();
+    if (willingToRelocate !== undefined && willingToRelocate !== null && willingToRelocate !== '') {
+      submission.profile.willingToRelocate = willingToRelocate === 'true' || willingToRelocate === true;
+    }
+    if (totalExperience !== undefined && totalExperience !== '') submission.profile.totalExperience = Number(totalExperience);
+    if (relevantExperience !== undefined && relevantExperience !== '') submission.profile.relevantExperience = Number(relevantExperience);
+    if (noticePeriod !== undefined) submission.profile.noticePeriod = noticePeriod;
+    if (currentSalary !== undefined && currentSalary !== '') submission.profile.currentSalary = Number(currentSalary);
+    if (expectedSalary !== undefined && expectedSalary !== '') submission.profile.expectedSalary = Number(expectedSalary);
+    if (writeup !== undefined) submission.profile.writeup = writeup.trim();
+
+    // If new resume file uploaded
+    if (req.file && req.file.path) {
+      submission.resume = {
+        url: req.file.path,
+        fileName: req.file.originalname,
+        uploadedAt: new Date()
+      };
+    }
+
+    await submission.save();
+
+    // Also update pool candidate if referenced
+    if (submission.poolCandidateRef) {
+      const PartnerCandidate = require('../models/PartnerCandidate');
+      const poolCandidate = await PartnerCandidate.findOne({
+        _id: submission.poolCandidateRef,
+        partner: partner._id
+      });
+
+      if (poolCandidate) {
+        if (firstName) poolCandidate.firstName = firstName.trim();
+        if (middleName !== undefined) poolCandidate.middleName = middleName.trim();
+        if (lastName) poolCandidate.lastName = lastName.trim();
+        if (email) poolCandidate.email = email.trim().toLowerCase();
+        if (mobile) poolCandidate.mobile = mobile.trim();
+        if (location !== undefined) poolCandidate.location = location.trim();
+        if (willingToRelocate !== undefined && willingToRelocate !== null && willingToRelocate !== '') {
+          poolCandidate.willingToRelocate = willingToRelocate === 'true' || willingToRelocate === true;
+        }
+        if (totalExperience !== undefined && totalExperience !== '') poolCandidate.totalExperience = Number(totalExperience);
+        if (relevantExperience !== undefined && relevantExperience !== '') poolCandidate.relevantExperience = Number(relevantExperience);
+        if (noticePeriod !== undefined) poolCandidate.noticePeriod = noticePeriod;
+        if (currentSalary !== undefined && currentSalary !== '') poolCandidate.currentSalary = Number(currentSalary);
+        if (expectedSalary !== undefined && expectedSalary !== '') poolCandidate.expectedSalary = Number(expectedSalary);
+        if (writeup !== undefined) poolCandidate.writeup = writeup.trim();
+        
+        if (req.file && req.file.path) {
+          poolCandidate.resume = {
+            url: req.file.path,
+            fileName: req.file.originalname,
+            uploadedAt: new Date()
+          };
+        }
+
+        if (req.body.tags !== undefined) {
+          let tagsArray = [];
+          if (Array.isArray(req.body.tags)) {
+            tagsArray = req.body.tags;
+          } else if (typeof req.body.tags === 'string') {
+            tagsArray = req.body.tags.split(',').map(t => t.trim()).filter(Boolean);
+          }
+          poolCandidate.tags = tagsArray;
+        }
+
+        await poolCandidate.save();
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Candidate details updated successfully',
+      data: submission
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update candidate details',
+      error: error.message
+    });
+  }
+};
+
+
+// ============================================================
+// RESEND WHATSAPP CONSENT
+// ============================================================
+
+// @desc    Resend WhatsApp consent to candidate
+// @route   POST /api/staffing-partners/submissions/:id/resend-consent
+// @access  Staffing Partner — only when candidate status is CONSENT_PENDING
+exports.resendConsent = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+
+    if (!partner) {
+      return res.status(404).json({ success: false, message: 'Partner profile not found' });
+    }
+
+    const candidate = await Candidate.findOne({
+      _id: req.params.id,
+      submittedBy: partner._id
+    }).populate('job', 'title company');
+
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Submission not found' });
+    }
+
+    // Only allow resend if consent is still pending
+    if (candidate.status !== 'CONSENT_PENDING') {
+      return res.status(400).json({
+        success: false,
+        message: candidate.status === 'CONSENT_CONFIRMED'
+          ? 'Candidate has already confirmed consent. Resend is not allowed.'
+          : `Cannot resend consent. Current status is: ${candidate.status}`
+      });
+    }
+
+    const whatsappService = require('../services/whatsappService');
+    const Company = require('../models/Company');
+
+    const company = await Company.findById(candidate.job?.company || candidate.company).select('companyName');
+    const companyName = company?.companyName || 'a leading company';
+    const consentToken = candidate.whatsappConsent?.token;
+
+    if (!consentToken) {
+      return res.status(400).json({ success: false, message: 'Consent token missing. Cannot resend.' });
+    }
+
+    const result = await whatsappService.sendCandidateConsent(
+      candidate.mobile,
+      candidate.firstName,
+      candidate.job?.title || 'the role',
+      companyName,
+      consentToken
+    );
+
+    if (!result.success) {
+      return res.status(500).json({ success: false, message: 'Failed to resend WhatsApp consent', error: result.error });
+    }
+
+    // Update resent timestamp
+    candidate.whatsappConsent.resentAt = new Date();
+    candidate.whatsappConsent.sentAt = new Date();
+    candidate.statusHistory.push({
+      status: 'CONSENT_PENDING',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: 'WhatsApp consent resent by partner'
+    });
+    await candidate.save();
+
+    console.log(`[CONSENT] 🔄 Resent to ${candidate.mobile} by partner ${partner._id}`);
+
+    res.json({
+      success: true,
+      message: `WhatsApp consent resent to ${candidate.firstName} (${candidate.mobile})`
+    });
+
+  } catch (error) {
+    console.error('[CONSENT] Resend error:', error);
+    res.status(500).json({ success: false, message: 'Failed to resend consent', error: error.message });
+  }
+};
+
 // ============================================================
 // WITHDRAW CANDIDATE
 // ============================================================

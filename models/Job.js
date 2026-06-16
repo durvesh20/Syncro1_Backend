@@ -280,10 +280,12 @@ jobSchema.virtual('requiresApproval').get(function () {
 // ==================== MIDDLEWARE ====================
 jobSchema.pre('save', function (next) {
   const now = new Date();
-  if (this.status === 'ACTIVE' && this.applicationDeadline && this.applicationDeadline < now) {
-    this.status = 'ON_HOLD';
-  } else if (this.status === 'ON_HOLD' && this.applicationDeadline && this.applicationDeadline > now) {
-    this.status = 'ACTIVE';
+  if (!this.isModified('status')) {
+    if (this.status === 'ACTIVE' && this.applicationDeadline && this.applicationDeadline < now) {
+      this.status = 'ON_HOLD';
+    } else if (this.status === 'ON_HOLD' && this.applicationDeadline && this.applicationDeadline > now) {
+      this.status = 'ACTIVE';
+    }
   }
   next();
 });

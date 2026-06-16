@@ -36,7 +36,9 @@ const {
   getAvailableSlotsForPartner,
   assignCandidateToSlot,
   removeCandidateFromSlot,
-  getWorkedJobs
+  getWorkedJobs,
+  resendConsent,
+  updateSubmission
 } = require('../controllers/staffingPartnerController');
 
 const {
@@ -297,6 +299,15 @@ router.get('/worked-jobs', getWorkedJobs);
 // @desc    Withdraw a submitted candidate
 // @route   PUT /api/staffing-partners/submissions/:id/withdraw
 router.put('/submissions/:id/withdraw', withdrawCandidate);
+
+// @desc    Update a submission's candidate details
+// @route   PUT /api/staffing-partners/submissions/:id
+router.put('/submissions/:id', uploadResumeMiddleware, handleUploadError, updateSubmission);
+
+// @desc    Resend WhatsApp consent to candidate
+// @route   POST /api/staffing-partners/submissions/:id/resend-consent
+// @access  Only when candidate status is CONSENT_PENDING
+router.post('/submissions/:id/resend-consent', resendConsent);
 
 // ==================== EARNINGS & INVOICES ====================
 router.get('/earnings', getEarnings);

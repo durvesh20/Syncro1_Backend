@@ -306,13 +306,15 @@ exports.getInterestStatus = async (req, res) => {
         });
 
         if (!interest) {
+            const job = await Job.findById(req.params.jobId);
+            const submissionLimit = job ? (job.vacancies || 1) * 5 : 5;
             return res.json({
                 success: true,
                 data: {
                     hasInterest: false,
                     canSubmit: false,
                     submissionCount: 0,
-                    submissionLimit: 5,
+                    submissionLimit: submissionLimit,
                     remainingSlots: 0
                 }
             });

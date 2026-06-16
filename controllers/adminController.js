@@ -187,7 +187,7 @@ exports.getPendingVerifications = async (req, res) => {
 
     if (!type || type === 'partners') {
       partners = await StaffingPartner.find({
-        verificationStatus: { $in: ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
+        verificationStatus: { $in: ['UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
       })
         .populate('user', 'email mobile createdAt status')
         .populate('verifiedBy', 'email role')
@@ -203,7 +203,7 @@ exports.getPendingVerifications = async (req, res) => {
 
     if (!type || type === 'companies') {
       companies = await Company.find({
-        verificationStatus: { $in: ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
+        verificationStatus: { $in: ['UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
       })
         .populate('user', 'email mobile createdAt status')
         .populate('verifiedBy', 'email role')
@@ -254,7 +254,7 @@ exports.getPendingVerifications = async (req, res) => {
           partners: {
             total: partners.length,
             pending: partners.filter(p =>
-              ['PENDING', 'UNDER_REVIEW'].includes(p.verificationStatus)
+              p.verificationStatus === 'UNDER_REVIEW'
             ).length,
             approved: partners.filter(p => p.verificationStatus === 'APPROVED').length,
             rejected: partners.filter(p => p.verificationStatus === 'REJECTED').length
@@ -262,7 +262,7 @@ exports.getPendingVerifications = async (req, res) => {
           companies: {
             total: companies.length,
             pending: companies.filter(c =>
-              ['PENDING', 'UNDER_REVIEW'].includes(c.verificationStatus)
+              c.verificationStatus === 'UNDER_REVIEW'
             ).length,
             approved: companies.filter(c => c.verificationStatus === 'APPROVED').length,
             rejected: companies.filter(c => c.verificationStatus === 'REJECTED').length
@@ -958,12 +958,41 @@ exports.getUsers = async (req, res) => {
       .skip((sanitizedPage - 1) * sanitizedLimit)
       .limit(sanitizedLimit);
 
+    const userIds = users.map(u => u._id);
+    let enrichedUsers = users.map(u => u.toObject());
+
+    if (role === 'company') {
+      const companies = await Company.find({ user: { $in: userIds } }).select('user companyName');
+      const companyMap = {};
+      companies.forEach(c => {
+        if (c.user) {
+          companyMap[c.user.toString()] = c.companyName;
+        }
+      });
+      enrichedUsers = enrichedUsers.map(u => ({
+        ...u,
+        companyName: companyMap[u._id.toString()] || null
+      }));
+    } else if (role === 'staffing_partner') {
+      const partners = await StaffingPartner.find({ user: { $in: userIds } }).select('user firmName');
+      const partnerMap = {};
+      partners.forEach(p => {
+        if (p.user) {
+          partnerMap[p.user.toString()] = p.firmName;
+        }
+      });
+      enrichedUsers = enrichedUsers.map(u => ({
+        ...u,
+        firmName: partnerMap[u._id.toString()] || null
+      }));
+    }
+
     const total = await User.countDocuments(query);
 
     res.json({
       success: true,
       data: {
-        users,
+        users: enrichedUsers,
         pagination: {
           current: sanitizedPage,
           pages: Math.ceil(total / sanitizedLimit),
@@ -2052,7 +2081,8 @@ exports.getJobDetail = async (req, res) => {
       .populate('company', 'companyName kyc billing uniqueId verificationStatus')
       .populate('postedBy', 'email mobile')
       .populate('approvedBy', 'email role')
-      .populate('discontinuedBy', 'email role');
+      .populate('discontinuedBy', 'email role')
+      .populate('changeHistory.changedBy', 'email role');
 
     if (!job) {
       return res.status(404).json({
@@ -2665,8 +2695,14 @@ exports.getAllJobsWithCandidates = async (req, res) => {
             withdrawn: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'WITHDRAWN'] } } } }
           },
 
-          // ✅ Slot calculation: vacancies × 5
-          totalSlots: { $multiply: ['$vacancies', 5] },
+          // ✅ Slot calculation: Sum of all partner submission limits (falling back to vacancies * 5)
+          totalSlots: {
+            $cond: {
+              if: { $gt: [{ $size: '$interests' }, 0] },
+              then: { $sum: '$interests.submissionLimit' },
+              else: { $multiply: ['$vacancies', 5] }
+            }
+          },
 
           // Slots used = total candidates (excluding withdrawn)
           slotsUsed: {
@@ -2887,8 +2923,8 @@ exports.getJobWithCandidates = async (req, res) => {
       .populate('partner', 'firmName firstName lastName')
       .select('partner submissionCount submissionLimit createdAt');
 
-    // ✅ Slot calculation
-    const totalSlots = job.vacancies * 5;
+    // ✅ Slot calculation: Sum of all partner submission limits (falling back to vacancies * 5)
+    const totalSlots = interests.reduce((sum, i) => sum + (i.submissionLimit || 5), 0) || (job.vacancies * 5);
     const activeCandidates = candidates.filter(
       c => !['WITHDRAWN', 'ADMIN_REJECTED', 'CONSENT_DENIED'].includes(c.status)
     );
@@ -2984,6 +3020,68 @@ exports.getJobWithCandidates = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch job with candidates',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update job status by admin/sub-admin
+// @route   PUT /api/admin/jobs/:id/status
+exports.updateJobStatusByAdmin = async (req, res) => {
+  try {
+    const { status } = req.body;
+    const allowedStatuses = ['ACTIVE', 'ON_HOLD', 'FILLED', 'CLOSED'];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status: ${status}. Allowed values are: ${allowedStatuses.join(', ')}`
+      });
+    }
+
+    const job = await Job.findById(req.params.id);
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    const oldStatus = job.status;
+    job.status = status;
+    
+    // Sync approvalStatus based on active/closed status
+    if (status === 'CLOSED') {
+      job.approvalStatus = 'DISCONTINUED';
+    } else if (status === 'ACTIVE') {
+      job.approvalStatus = 'ACTIVE';
+    }
+
+    job.addToHistory('UPDATED', req.user._id, { status: { old: oldStatus, new: status } }, `Job status updated to ${status} by admin`);
+    await job.save();
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'JOB_STATUS_UPDATED',
+      entityType: 'Job',
+      entityId: job._id,
+      description: `Job status updated to ${status} by admin`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.json({
+      success: true,
+      message: `Job status updated to ${status} successfully`,
+      data: job
+    });
+  } catch (error) {
+    console.error('[ADMIN] Update job status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update job status',
       error: error.message
     });
   }

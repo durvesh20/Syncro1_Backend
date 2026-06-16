@@ -43,7 +43,8 @@ const {
   getPartnerDetail,
   getAllCompanies,
   getCompanyDetail,
-  getAuditLogs
+  getAuditLogs,
+  updateJobStatusByAdmin
 } = require('../controllers/adminController');
 
 const {
@@ -58,7 +59,8 @@ const {
   protect,
   authorizeAdminAccess,
   authorize,
-  checkPermission
+  checkPermission,
+  checkAnyPermission
 } = require('../middleware/auth');
 
 const { PERMISSIONS } = require('../utils/permissions');
@@ -147,6 +149,12 @@ router.post(
   '/jobs/:id/discontinue',
   checkPermission(PERMISSIONS.DISCONTINUE_JOB),
   discontinueJob
+);
+
+router.put(
+  '/jobs/:id/status',
+  checkAnyPermission([PERMISSIONS.APPROVE_JOB, PERMISSIONS.DISCONTINUE_JOB]),
+  updateJobStatusByAdmin
 );
 
 // ==================== EDIT REQUESTS ====================

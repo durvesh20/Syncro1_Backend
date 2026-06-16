@@ -391,13 +391,14 @@ exports.applyFromPool = async (req, res) => {
 
     if (!interest) {
       // Auto-create interest so pool candidates can be applied to any job seamlessly
+      const submissionLimit = (job.vacancies || 1) * 5;
       interest = await JobInterest.create({
         partner: partner._id,
         job: job._id,
         user: req.user._id,
         status: 'ACTIVE',
         submissionCount: 0,
-        submissionLimit: 5
+        submissionLimit: submissionLimit
       });
     } else if (interest.status === 'WITHDRAWN') {
       // Re-activate if previously withdrawn
@@ -469,7 +470,6 @@ exports.applyFromPool = async (req, res) => {
       submittedBy: partner._id,
       job: job._id,
       company,
-      uniqueId: poolCandidate.uniqueId,
 
       // Identity — copied by value
       firstName: poolCandidate.firstName,
