@@ -2279,7 +2279,7 @@ exports.submitJobForApproval = async (req, res) => {
     }
 
     // Validate required fields are complete
-    const requiredFields = ['title', 'description', 'category', 'employmentType', 'experienceLevel', 'location.city', 'location.state'];
+    const requiredFields = ['title', 'description', 'category', 'employmentType', 'experienceLevel', 'location.city'];
     const missingFields = [];
 
     requiredFields.forEach(field => {
@@ -2326,7 +2326,7 @@ exports.submitJobForApproval = async (req, res) => {
                 jobTitle: job.title,
                 companyName: company.companyName,
                 category: job.category,
-                location: `${job.location.city}, ${job.location.state}`,
+                location: Array.isArray(job.location.city) ? job.location.city.join(', ') : (job.location.city || 'N/A'),
                 vacancies: job.vacancies
               }
             },

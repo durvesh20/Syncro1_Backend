@@ -989,6 +989,33 @@ exports.getUsers = async (req, res) => {
 
     const total = await User.countDocuments(query);
 
+    // Calculate stats
+    let stats = null;
+    if (role) {
+      const totalCount = await User.countDocuments({ role });
+      const activeCount = await User.countDocuments({ 
+        role, 
+        status: { $in: ['ACTIVE', 'VERIFIED'] } 
+      });
+      const emailPendingCount = await User.countDocuments({ role, emailVerified: false });
+      const mobilePendingCount = await User.countDocuments({ role, mobileVerified: false });
+      
+      let verifiedCount = 0;
+      if (role === 'staffing_partner') {
+        verifiedCount = await StaffingPartner.countDocuments({ verificationStatus: 'APPROVED' });
+      } else if (role === 'company') {
+        verifiedCount = await Company.countDocuments({ verificationStatus: 'APPROVED' });
+      }
+
+      stats = {
+        total: totalCount,
+        active: activeCount,
+        emailPending: emailPendingCount,
+        mobilePending: mobilePendingCount,
+        verified: verifiedCount
+      };
+    }
+
     res.json({
       success: true,
       data: {
@@ -997,7 +1024,8 @@ exports.getUsers = async (req, res) => {
           current: sanitizedPage,
           pages: Math.ceil(total / sanitizedLimit),
           total
-        }
+        },
+        stats
       }
     });
   } catch (error) {
@@ -2025,7 +2053,10 @@ exports.getAllJobs = async (req, res) => {
     if (search) {
       query.$or = [
         { title: new RegExp(search, 'i') },
-        { category: new RegExp(search, 'i') }
+        { category: new RegExp(search, 'i') },
+        { uniqueId: new RegExp(search, 'i') },
+        { 'location.city': new RegExp(search, 'i') },
+        { 'location.state': new RegExp(search, 'i') }
       ];
     }
 
@@ -2375,7 +2406,8 @@ exports.getAllCompanies = async (req, res) => {
       verificationStatus,
       page = 1,
       limit = 20,
-      search
+      search,
+      hasJobsOnly
     } = req.query;
 
     const query = {};
@@ -2385,6 +2417,11 @@ exports.getAllCompanies = async (req, res) => {
         { companyName: new RegExp(search, 'i') },
         { 'kyc.industry': new RegExp(search, 'i') }
       ];
+    }
+
+    if (hasJobsOnly === 'true') {
+      const activeCompanyIds = await Job.distinct('company');
+      query._id = { $in: activeCompanyIds };
     }
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
@@ -2570,7 +2607,8 @@ exports.getAllJobsWithCandidates = async (req, res) => {
       company,
       page = 1,
       limit = 20,
-      search
+      search,
+      needsAdminReview
     } = req.query;
 
     const query = {};
@@ -2592,8 +2630,6 @@ exports.getAllJobsWithCandidates = async (req, res) => {
     const jobs = await Job.aggregate([
       { $match: query },
       { $sort: { createdAt: -1 } },
-      { $skip: skip },
-      { $limit: sanitizedLimit },
 
       // ✅ Lookup company info
       {
@@ -2726,6 +2762,13 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         }
       },
 
+      // Filter if needsAdminReview is requested
+      ...(needsAdminReview === 'true' ? [{ $match: { 'candidateStatusBreakdown.adminReview': { $gt: 0 } } }] : []),
+
+      // Pagination
+      { $skip: skip },
+      { $limit: sanitizedLimit },
+
       // ✅ Clean output — remove raw lookup arrays
       {
         $project: {
@@ -2829,7 +2872,37 @@ exports.getAllJobsWithCandidates = async (req, res) => {
       }))
     }));
 
-    const total = await Job.countDocuments(query);
+    let total;
+    if (needsAdminReview === 'true') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            adminReviewCount: {
+              $size: {
+                $filter: {
+                  input: '$candidates',
+                  cond: { $eq: ['$$this.status', 'ADMIN_REVIEW'] }
+                }
+              }
+            }
+          }
+        },
+        { $match: { adminReviewCount: { $gt: 0 } } },
+        { $count: 'count' }
+      ]);
+      total = countResult[0]?.count || 0;
+    } else {
+      total = await Job.countDocuments(query);
+    }
 
     res.json({
       success: true,

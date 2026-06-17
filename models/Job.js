@@ -96,7 +96,7 @@ const jobSchema = new mongoose.Schema({
   // ==================== LOCATION ====================
   location: {
     city: { type: [String], required: true },
-    state: { type: String, required: true },
+    state: { type: String, default: 'N/A' },
     country: { type: String, default: 'India' },
     isRemote: { type: Boolean, default: false },
     isHybrid: { type: Boolean, default: false },
