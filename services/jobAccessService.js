@@ -264,12 +264,22 @@ class JobAccessService {
     if (filters.search) {
       const searchTerm = filters.search.slice(0, 100);
       const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      // Find matching companies to allow search by company name
+      const Company = require('../models/Company');
+      const matchingCompanies = await Company.find({
+        companyName: new RegExp(escaped, 'i')
+      }).select('_id').lean();
+      const companyIds = matchingCompanies.map(c => c._id);
+
       conditions.push({
         $or: [
           { title: new RegExp(escaped, 'i') },
+          { uniqueId: new RegExp(escaped, 'i') },
           { category: new RegExp(escaped, 'i') },
           { 'skills.required': new RegExp(escaped, 'i') },
-          { tags: new RegExp(escaped, 'i') }
+          { tags: new RegExp(escaped, 'i') },
+          { company: { $in: companyIds } }
         ]
       });
     }

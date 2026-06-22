@@ -178,6 +178,8 @@ const staffingPartnerSchema = new mongoose.Schema({
     agreementAcceptedIp: String,
     digitalSignature: String,
     termsAccepted: { type: Boolean, default: false },
+    privacyPolicyAccepted: { type: Boolean, default: false },
+    cookiePolicyAccepted: { type: Boolean, default: false },
     ndaSigned: { type: Boolean, default: false },
   },
 

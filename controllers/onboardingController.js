@@ -265,12 +265,53 @@ exports.updateGeographicReach = async (req, res) => {
 // Step 5: Update Compliance
 exports.updateCompliance = async (req, res) => {
     try {
+        const {
+            syncrotechAgreement,
+            digitalSignature,
+            termsAccepted,
+            privacyPolicyAccepted,
+            cookiePolicyAccepted,
+            allClausesAccepted,
+            ndaSigned,
+            agreementSigned,
+        } = req.body;
+
+        const now = new Date();
+
+        // Build the flat update using dot notation so Mongoose strict mode keeps all fields
+        const update = {
+            'compliance.termsAccepted': !!termsAccepted,
+            'compliance.privacyPolicyAccepted': !!privacyPolicyAccepted,
+            'compliance.cookiePolicyAccepted': !!cookiePolicyAccepted,
+            'compliance.allClausesAccepted': !!allClausesAccepted,
+            'compliance.ndaSigned': !!ndaSigned,
+            'compliance.agreementSigned': !!agreementSigned,
+            'compliance.digitalSignature': digitalSignature || null,
+            'compliance.agreementAcceptedAt': allClausesAccepted ? now : undefined,
+            'profileCompletion.compliance': true,
+        };
+
+        // Map syncrotechAgreement flat booleans → schema structure {accepted, acceptedAt, acceptedIp}
+        if (syncrotechAgreement && typeof syncrotechAgreement === 'object') {
+            const AGREEMENT_KEYS = [
+                'noCvRecycling', 'noFakeProfiles', 'noDoubleRepresentation',
+                'vendorCodeOfConduct', 'dataPrivacyPolicy', 'candidateConsentPolicy',
+                'nonCircumventionClause', 'commissionPayoutTerms', 'replacementBackoutLiability'
+            ];
+            AGREEMENT_KEYS.forEach(key => {
+                if (key in syncrotechAgreement) {
+                    const accepted = !!syncrotechAgreement[key];
+                    update[`compliance.syncrotechAgreement.${key}.accepted`] = accepted;
+                    if (accepted) {
+                        update[`compliance.syncrotechAgreement.${key}.acceptedAt`] = now;
+                    }
+                }
+            });
+        }
+
         const partner = await StaffingPartner.findOneAndUpdate(
             { user: req.user._id },
-            {
-                compliance: req.body,
-                'profileCompletion.compliance': true
-            },
+            { $set: update },
             { new: true }
         );
 

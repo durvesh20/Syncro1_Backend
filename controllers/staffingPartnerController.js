@@ -349,6 +349,8 @@ exports.updateCompliance = async (req, res) => {
     complianceData.agreementAcceptedIp = ipAddress;
     complianceData.digitalSignature = digitalSignature;
     complianceData.termsAccepted = true;
+    complianceData.privacyPolicyAccepted = true;
+    complianceData.cookiePolicyAccepted = true;
     complianceData.ndaSigned = true;
     complianceData.agreementSigned = true;
     complianceData.agreementSignedAt = timestamp;
@@ -807,7 +809,14 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    const requiredDocs = ['panCard', 'gstCertificate'];
+    const requiredDocs = [
+      'panCard',
+      'gstCertificate',
+      'incorporationCertificate',
+      'authorizedSignatoryProof',
+      'cancelledCheque',
+      'addressProof'
+    ];
     const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
 
     if (missingDocs.length > 0) {
@@ -815,7 +824,7 @@ exports.submitProfile = async (req, res) => {
         success: false,
         message: 'Required documents missing',
         missingDocuments: missingDocs,
-        hint: 'PAN card and GST certificate are mandatory'
+        hint: `Missing: ${missingDocs.join(', ')}`
       });
     }
 
