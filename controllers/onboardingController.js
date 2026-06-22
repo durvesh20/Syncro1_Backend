@@ -15,7 +15,10 @@ const getCompletedFields = (partner, fields) => {
 // @route GET /api/onboarding/status
 exports.getOnboardingStatus = async (req, res) => {
     try {
-        const partner = await StaffingPartner.findOne({ user: req.user._id });
+        const partner = await StaffingPartner.findOne({ user: req.user._id }).populate(
+            'user',
+            'emailVerified mobileVerified'
+        );
 
         if (!partner) {
             return res.status(404).json({
@@ -28,7 +31,7 @@ exports.getOnboardingStatus = async (req, res) => {
             {
                 step: 1,
                 name: 'Basic Information',
-                completed: partner.profileCompletion.basicInfo,
+                completed: !!(partner.profileCompletion?.basicInfo && partner.user?.emailVerified && partner.user?.mobileVerified),
                 fields: ['firstName', 'lastName', 'firmName', 'designation', 'city', 'state'],
                 completedFields: getCompletedFields(partner, ['firstName', 'lastName', 'firmName', 'designation', 'city', 'state']),
                 required: true,
@@ -37,7 +40,7 @@ exports.getOnboardingStatus = async (req, res) => {
             {
                 step: 2,
                 name: 'Firm Details',
-                completed: partner.profileCompletion.firmDetails,
+                completed: partner.profileCompletion?.firmDetails || false,
                 fields: ['firmDetails.gstNumber', 'firmDetails.panNumber', 'firmDetails.yearEstablished', 'firmDetails.teamSize'],
                 completedFields: getCompletedFields(partner, ['firmDetails.gstNumber', 'firmDetails.panNumber', 'firmDetails.yearEstablished', 'firmDetails.teamSize']),
                 required: true,

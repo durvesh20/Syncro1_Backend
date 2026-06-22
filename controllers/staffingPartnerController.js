@@ -697,7 +697,10 @@ exports.getTeamMembers = async (req, res) => {
 // @route   GET /api/staffing-partners/profile/completion
 exports.getProfileCompletion = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partner = await StaffingPartner.findOne({ user: req.user._id }).populate(
+      'user',
+      'emailVerified mobileVerified'
+    );
 
     if (!partner) {
       return res.status(404).json({
@@ -707,6 +710,12 @@ exports.getProfileCompletion = async (req, res) => {
     }
 
     const completion = partner.profileCompletion ? (partner.profileCompletion.toObject ? partner.profileCompletion.toObject() : partner.profileCompletion) : {};
+    
+    // Force basicInfo to false if email or mobile is not verified
+    if (!partner.user?.emailVerified || !partner.user?.mobileVerified) {
+      completion.basicInfo = false;
+    }
+
     const completionKeys = Object.keys(completion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id');
     const total = completionKeys.length;
     const completed = completionKeys.filter(k => !!completion[k]).length;
@@ -2054,39 +2063,64 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { limit = 10, status, cursor } = req.query;
+    const { page = 1, limit = 10, status, search } = req.query;
+    const parsedPage = parseInt(page, 10) || 1;
+    const parsedLimit = parseInt(limit, 10) || 10;
+    const skip = (parsedPage - 1) * parsedLimit;
 
     const query = { submittedBy: partner._id };
     if (status) query.status = status;
-    if (cursor) query._id = { $lt: cursor };
 
-    const submissions = await Candidate.find(query)
-      .populate('job', 'title company commission')
-      .populate('company', 'companyName')
-      .sort({ _id: -1 })
-      .limit(parseInt(limit) + 1)
-      .select(
-        'firstName middleName lastName email mobile status ' +
-        'profile.location profile.totalExperience profile.relevantExperience ' +
-        'profile.noticePeriod profile.currentSalary profile.expectedSalary ' +
-        'profile.writeup profile.currentCompany profile.currentDesignation ' +
-        'resume interviewConfig whatsappConsent.status resumeAnalysis.profileScore ' +
-        'resumeAnalysis.matchLevel createdAt job company assignedSlot'
-      )
-      .populate('assignedSlot', 'date startTime endTime status interviewMode');
+    if (search && search.trim()) {
+      const rx = new RegExp(search.trim(), 'i');
+      
+      // Find matching jobs
+      const matchingJobs = await Job.find({ title: rx }).select('_id');
+      const jobIds = matchingJobs.map(j => j._id);
+      
+      // Find matching companies
+      const matchingCompanies = await Company.find({ companyName: rx }).select('_id');
+      const companyIds = matchingCompanies.map(c => c._id);
+      
+      query.$or = [
+        { firstName: rx },
+        { lastName: rx },
+        { email: rx },
+        { mobile: rx },
+        { job: { $in: jobIds } },
+        { company: { $in: companyIds } }
+      ];
+    }
 
-    const hasMore = submissions.length > limit;
-    const results = hasMore ? submissions.slice(0, limit) : submissions;
-    const nextCursor = results.length > 0 ? results[results.length - 1]._id : null;
+    const [submissions, total] = await Promise.all([
+      Candidate.find(query)
+        .populate('job', 'title company commission')
+        .populate('company', 'companyName')
+        .sort({ _id: -1 })
+        .skip(skip)
+        .limit(parsedLimit)
+        .select(
+          'firstName middleName lastName email mobile status ' +
+          'profile.location profile.totalExperience profile.relevantExperience ' +
+          'profile.noticePeriod profile.currentSalary profile.expectedSalary ' +
+          'profile.writeup profile.currentCompany profile.currentDesignation ' +
+          'resume interviewConfig whatsappConsent.status resumeAnalysis.profileScore ' +
+          'resumeAnalysis.matchLevel createdAt job company assignedSlot'
+        )
+        .populate('assignedSlot', 'date startTime endTime status interviewMode'),
+      Candidate.countDocuments(query)
+    ]);
 
     res.json({
       success: true,
       data: {
-        submissions: results,
+        submissions,
         pagination: {
-          nextCursor,
-          hasMore,
-          limit: parseInt(limit)
+          total,
+          page: parsedPage,
+          current: parsedPage,
+          limit: parsedLimit,
+          pages: Math.ceil(total / parsedLimit)
         }
       }
     });
@@ -2475,7 +2509,10 @@ exports.withdrawCandidate = async (req, res) => {
 // @route   GET /api/staffing-partners/dashboard
 exports.getDashboard = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partner = await StaffingPartner.findOne({ user: req.user._id }).populate(
+      'user',
+      'emailVerified mobileVerified'
+    );
 
     if (!partner) {
       return res.status(404).json({
@@ -2572,6 +2609,12 @@ exports.getDashboard = async (req, res) => {
     const availableJobsCount = await jobAccessService.getAccessibleJobsCount(partner.subscription?.plan || 'FREE');
 
     const profileCompletion = partner.profileCompletion ? (partner.profileCompletion.toObject ? partner.profileCompletion.toObject() : partner.profileCompletion) : {};
+    
+    // Force basicInfo to false if email or mobile is not verified
+    if (!partner.user?.emailVerified || !partner.user?.mobileVerified) {
+      profileCompletion.basicInfo = false;
+    }
+
     const completionKeys = Object.keys(profileCompletion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id');
     const totalSections = completionKeys.length;
     const completedSections = completionKeys.filter(k => !!profileCompletion[k]).length;

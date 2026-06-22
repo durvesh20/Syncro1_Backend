@@ -81,9 +81,12 @@ const getPostLoginNextStep = async (user) => {
     };
   }
 
-  const completion = profile.profileCompletion || {};
-  const total = Object.keys(completion).length || 1;
-  const completed = Object.values(completion).filter(Boolean).length;
+  const completion = profile.profileCompletion ? (profile.profileCompletion.toObject ? profile.profileCompletion.toObject() : { ...profile.profileCompletion }) : {};
+  if (!user.emailVerified || !user.mobileVerified) {
+    completion.basicInfo = false;
+  }
+  const total = Object.keys(completion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id').length || 1;
+  const completed = Object.keys(completion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id').filter(k => !!completion[k]).length;
   const completionPercentage = Math.round((completed / total) * 100);
 
   let nextStep = 'COMPLETE_PROFILE';

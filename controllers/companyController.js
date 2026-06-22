@@ -749,7 +749,10 @@ exports.getProfile = async (req, res) => {
 // @route   GET /api/companies/profile/completion
 exports.getProfileCompletion = async (req, res) => {
   try {
-    const company = await Company.findOne({ user: req.user._id });
+    const company = await Company.findOne({ user: req.user._id }).populate(
+      'user',
+      'emailVerified mobileVerified'
+    );
 
     if (!company) {
       return res.status(404).json({
@@ -759,6 +762,12 @@ exports.getProfileCompletion = async (req, res) => {
     }
 
     const completion = company.profileCompletion ? (company.profileCompletion.toObject ? company.profileCompletion.toObject() : company.profileCompletion) : {};
+    
+    // Force basicInfo to false if email or mobile is not verified
+    if (!company.user?.emailVerified || !company.user?.mobileVerified) {
+      completion.basicInfo = false;
+    }
+
     const completionKeys = Object.keys(completion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id');
     const total = completionKeys.length;
     const completed = completionKeys.filter(k => !!completion[k]).length;
@@ -859,7 +868,10 @@ exports.submitProfile = async (req, res) => {
 // @route   GET /api/companies/dashboard
 exports.getDashboard = async (req, res) => {
   try {
-    const company = await Company.findOne({ user: req.user._id });
+    const company = await Company.findOne({ user: req.user._id }).populate(
+      'user',
+      'emailVerified mobileVerified'
+    );
 
     if (!company) {
       return res.status(404).json({
@@ -936,6 +948,12 @@ exports.getDashboard = async (req, res) => {
     }).limit(5);
 
     const profileCompletion = company.profileCompletion ? (company.profileCompletion.toObject ? company.profileCompletion.toObject() : company.profileCompletion) : {};
+    
+    // Force basicInfo to false if email or mobile is not verified
+    if (!company.user?.emailVerified || !company.user?.mobileVerified) {
+      profileCompletion.basicInfo = false;
+    }
+
     const completionKeys = Object.keys(profileCompletion).filter(k => !k.startsWith('$') && k !== '_id' && k !== 'id');
     const totalSections = completionKeys.length;
     const completedSections = completionKeys.filter(k => !!profileCompletion[k]).length;
