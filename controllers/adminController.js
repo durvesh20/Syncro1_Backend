@@ -3098,6 +3098,126 @@ exports.getJobWithCandidates = async (req, res) => {
   }
 };
 
+// ==================== ADMIN CANDIDATE WITHDRAWAL ====================
+
+// @desc    Admin withdraws a submitted candidate at ANY pipeline level
+// @route   PUT /api/admin/candidates/:id/withdraw
+// @access  Admin / Sub-admin (VIEW_ALL_CANDIDATES permission)
+exports.withdrawCandidateByAdmin = async (req, res) => {
+  try {
+    const { reason } = req.body;
+
+    const candidate = await Candidate.findById(req.params.id)
+      .populate('job', 'title')
+      .populate('company', 'companyName user')
+      .populate('submittedBy', 'firmName firstName lastName user');
+
+    if (!candidate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Candidate not found'
+      });
+    }
+
+    // Admin can withdraw from any status except already terminal ones
+    const terminalStatuses = ['WITHDRAWN', 'JOINED'];
+    if (terminalStatuses.includes(candidate.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot withdraw: candidate is already in status "${candidate.status}"`
+      });
+    }
+
+    const previousStatus = candidate.status;
+    const withdrawalNote = reason?.trim() || 'Withdrawn by admin';
+
+    candidate.status = 'WITHDRAWN';
+    candidate.statusHistory.push({
+      status: 'WITHDRAWN',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: withdrawalNote
+    });
+
+    await candidate.save();
+
+    // Audit log
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'CANDIDATE_WITHDRAWN_BY_ADMIN',
+      entityType: 'Candidate',
+      entityId: candidate._id,
+      description: `Admin withdrew candidate "${candidate.firstName} ${candidate.lastName}" from status "${previousStatus}". Reason: ${withdrawalNote}`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Notify the staffing partner (fire-and-forget)
+    try {
+      const notificationEngine = require('./notificationEngine');
+      // Resolve partner user ID
+      let partnerUserId;
+      if (candidate.submittedBy?.user?._id) {
+        partnerUserId = candidate.submittedBy.user._id;
+      } else if (candidate.submittedBy?.user) {
+        partnerUserId = candidate.submittedBy.user;
+      } else {
+        const StaffingPartner = require('../models/StaffingPartner');
+        const partnerId = candidate.submittedBy?._id || candidate.submittedBy;
+        const partner = partnerId ? await StaffingPartner.findById(partnerId).select('user') : null;
+        partnerUserId = partner?.user;
+      }
+
+      if (partnerUserId) {
+        const notificationEngine = require('./notificationEngine');
+        await notificationEngine.send({
+          recipientId: partnerUserId,
+          type: 'CANDIDATE_WITHDRAWN',
+          title: '⚠️ Candidate withdrawn by Admin',
+          message: `Admin has withdrawn ${candidate.firstName} ${candidate.lastName}'s application for "${candidate.job?.title}" at ${candidate.company?.companyName}.${reason ? ` Reason: ${reason}` : ''}`,
+          data: {
+            entityType: 'Candidate',
+            entityId: candidate._id,
+            actionUrl: `/partner/submissions/${candidate._id}`,
+            metadata: {
+              candidateName: `${candidate.firstName} ${candidate.lastName}`,
+              jobTitle: candidate.job?.title,
+              companyName: candidate.company?.companyName,
+              previousStatus,
+              reason: reason || null
+            }
+          },
+          channels: { inApp: true, email: true },
+          priority: 'high'
+        });
+      }
+    } catch (notifErr) {
+      console.error('[ADMIN] Withdrawal notification failed:', notifErr.message);
+    }
+
+    return res.json({
+      success: true,
+      message: `Candidate ${candidate.firstName} ${candidate.lastName} withdrawn successfully`,
+      data: {
+        candidateId: candidate._id,
+        previousStatus,
+        newStatus: 'WITHDRAWN'
+      }
+    });
+
+  } catch (error) {
+    console.error('[ADMIN] Withdraw candidate error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to withdraw candidate',
+      error: error.message
+    });
+  }
+};
+
+
 // @desc    Update job status by admin/sub-admin
 // @route   PUT /api/admin/jobs/:id/status
 exports.updateJobStatusByAdmin = async (req, res) => {

@@ -44,7 +44,8 @@ const {
   getAllCompanies,
   getCompanyDetail,
   getAuditLogs,
-  updateJobStatusByAdmin
+  updateJobStatusByAdmin,
+  withdrawCandidateByAdmin
 } = require('../controllers/adminController');
 
 const {
@@ -593,6 +594,14 @@ router.put(
       });
     }
   }
+);
+
+// @desc    Admin withdraws a submitted candidate at ANY pipeline stage
+// @route   PUT /api/admin/candidates/:id/withdraw
+router.put(
+  '/candidates/:id/withdraw',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  withdrawCandidateByAdmin
 );
 
 // ==================== JOBS WITH CANDIDATES ====================
