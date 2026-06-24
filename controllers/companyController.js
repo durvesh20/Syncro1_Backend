@@ -4,6 +4,7 @@ const Company = require("../models/Company");
 const User = require("../models/User");
 const Job = require("../models/Job");
 const Candidate = require("../models/Candidate");
+const { parseJobPosition } = require("../services/jobPositionParser");
 const candidateLifecycleService = require("../services/candidateLifecycleService");
 const StatusMachine = require("../utils/statusMachine");
 const InterviewSlot = require("../models/InterviewSlot");
@@ -1068,6 +1069,11 @@ exports.createJob = async (req, res) => {
     company.metrics.totalJobsPosted += 1;
     await company.save();
 
+    // Trigger asynchronous JD parsing for JobPosition structure
+    parseJobPosition(job).catch(err => {
+      console.error(`[JD-PARSER] Asynchronous parsing error on job creation: ${err.message}`);
+    });
+
     console.log(
       `[JOB] Created as DRAFT: "${job.title}" — Requires admin approval before becoming visible`,
     );
@@ -1268,9 +1274,15 @@ exports.getJob = async (req, res) => {
       await job.save();
     }
 
+    const JobPosition = require('../models/JobPosition');
+    const jobPosition = await JobPosition.findOne({ jobId: job._id });
+
+    const jobData = job.toObject();
+    jobData.jobPosition = jobPosition;
+
     res.json({
       success: true,
-      data: job,
+      data: jobData,
     });
   } catch (error) {
     console.error('[COMPANY] Get job error:', error);
@@ -1300,6 +1312,11 @@ exports.updateJob = async (req, res) => {
 
     // This will trigger the pre-save status sync hooks
     await job.save();
+
+    // Trigger asynchronous JD parsing for JobPosition structure
+    parseJobPosition(job).catch(err => {
+      console.error(`[JD-PARSER] Asynchronous parsing error on job update: ${err.message}`);
+    });
 
     res.json({
       success: true,

@@ -1082,10 +1082,13 @@ exports.getJobDetails = async (req, res) => {
     const jobData = job.toObject();
     delete jobData.company;
 
+    const JobPosition = require('../models/JobPosition');
+    const jobPosition = await JobPosition.findOne({ jobId: job._id });
+
     res.json({
       success: true,
       data: {
-        job: { ...jobData, company: safeCompanyInfo },
+        job: { ...jobData, company: safeCompanyInfo, jobPosition },
         shareableLink: job.shareableLink
       }
     });

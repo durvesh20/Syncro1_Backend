@@ -68,6 +68,7 @@ class CandidateQueueService {
                 console.log(`[QUEUE] 🤖 Starting AI analysis for: ${candidate.firstName} ${candidate.lastName}`);
 
                 const formData = {
+                    candidateId: candidate._id,
                     firstName: candidate.firstName,
                     lastName: candidate.lastName,
                     email: candidate.email,

@@ -211,6 +211,26 @@ router.get(
   getCandidateDetail
 );
 
+// Get all AI scoring logs for a candidate application
+router.get(
+  '/scoring-logs/:applicationId',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  async (req, res) => {
+    try {
+      const ScoringLog = require('../models/ScoringLog');
+      const logs = await ScoringLog.find({ applicationId: req.params.applicationId })
+        .sort({ createdAt: -1 });
+
+      res.json({
+        success: true,
+        data: logs
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
 router.post(
   '/candidates/:id/notes',
   checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
@@ -491,10 +511,14 @@ router.get(
         });
       }
 
+      const JobPosition = require('../models/JobPosition');
+      const jobPosition = await JobPosition.findOne({ jobId: candidate.job?._id });
+
       res.json({
         success: true,
         data: {
           candidate,
+          jobPosition,
           queueInfo: {
             score: candidate.resumeAnalysis?.profileScore || 0,
             matchLevel: candidate.resumeAnalysis?.matchLevel || 'UNKNOWN',

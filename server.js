@@ -27,6 +27,7 @@ require('./models/JobInterest');
 require('./models/LimitExtensionRequest');
 require('./models/Payout');
 require('./models/Invoice');
+require('./models/ScoringLog');
 
 const app = express();
 

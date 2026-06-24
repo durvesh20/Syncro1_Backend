@@ -4,6 +4,7 @@ const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
 const Job = require('../models/Job');
 const Candidate = require('../models/Candidate');
+const { parseJobPosition } = require('../services/jobPositionParser');
 const { PERMISSIONS } = require('../utils/permissions');
 const emailService = require('../services/emailService');
 const auditService = require('../services/auditService');
@@ -1285,6 +1286,11 @@ exports.approveJob = async (req, res) => {
     job.addToHistory('APPROVED', req.user._id, {}, notes || 'Job approved by admin');
     await job.save();
 
+    // Trigger asynchronous JD parsing for JobPosition structure
+    parseJobPosition(job).catch(err => {
+      console.error(`[JD-PARSER] Asynchronous parsing error on job approval: ${err.message}`);
+    });
+
     await auditService.log({
       actor: req.user._id,
       actorRole: req.user.role,
@@ -1642,6 +1648,11 @@ exports.approveEditRequest = async (req, res) => {
       notes || 'Edit request approved'
     );
     await job.save();
+
+    // Trigger asynchronous JD parsing for JobPosition structure
+    parseJobPosition(job).catch(err => {
+      console.error(`[JD-PARSER] Asynchronous parsing error on edit approval: ${err.message}`);
+    });
 
     editRequest.status = 'APPROVED';
     editRequest.reviewedBy = req.user._id;
@@ -2132,10 +2143,13 @@ exports.getJobDetail = async (req, res) => {
       .populate('reviewedBy', 'email')
       .sort({ createdAt: -1 });
 
+    const JobPosition = require('../models/JobPosition');
+    const jobPosition = await JobPosition.findOne({ jobId: job._id });
+
     res.json({
       success: true,
       data: {
-        job,
+        job: { ...job.toObject(), jobPosition },
         candidates: {
           total: candidates.length,
           list: candidates
