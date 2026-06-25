@@ -79,7 +79,11 @@ class CandidateQueueService {
                     noticePeriod: candidate.profile?.noticePeriod,
                     currentSalary: candidate.profile?.currentSalary,
                     expectedSalary: candidate.profile?.expectedSalary,
-                    writeup: candidate.profile?.writeup
+                    writeup: candidate.profile?.writeup,
+                    skills: candidate.profile?.skills || [],
+                    education: candidate.profile?.education || [],
+                    certifications: candidate.profile?.certifications || [],
+                    languages: candidate.profile?.languages || []
                 };
 
                 // ✅ Convert job to plain object

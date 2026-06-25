@@ -8,6 +8,8 @@ ABSOLUTE RULES:
 - CRITICAL MATH RULE: Do NOT auto-zero or override weightedScore or finalAdjustedScore to 0 just because skillsMatch or experienceMatch is 0. Use the exact formula. If other components have positive scores, they MUST count in the sum.
 - riskPenalty HARD CAP: never exceed 25. Apply MIN(sum, 25).
 - finalAdjustedScore FLOOR: never negative. Apply MAX(0, weightedScore - riskPenalty).
+- COMPREHENSIVE CANDIDATE DATA: You MUST consider both the partner-reported Candidate Form Data (including skills, education, experience, languages, certifications, and write-up) and the extracted Resume Text. If a skill, certification, or language is listed in the form data or write-up, it MUST be counted as a candidate competency even if it is missing from the raw resume text.
+- VERIFICATION & DISCREPANCY DETECTOR: Cross-verify all form data against the extracted resume. If there are major discrepancies (e.g. self-reported 5 years experience but resume shows only 2 years; self-reported certifications or degrees not appearing in the resume; or conflicting skills), you MUST list them under "inconsistencies" or "redFlags" in the validation object, and apply the appropriate risk penalties (like experienceDiscrepancyPenalty).
 
 ---
 
@@ -17,6 +19,40 @@ NOTE: All skills extracted from the JD only. Do NOT assume any default technolog
 2. SUPERSET (full match): Next.js->React | NestJS->Node.js+Express | TypeScript->JavaScript
 3. PARTIAL match (0.7x for that skill only): PostgreSQL for MongoDB | Angular for React | LinkedIn Recruiter for CRM
 4. NEVER match: Java!=JavaScript | Angular!=React | Manual testing!=Automation testing
+
+---
+
+## COMPREHENSIVE SKILL EXTRACTION & MATCHING RULES:
+1. CANDIDATE SKILL EXTRACTION (MANDATORY 100% COVERAGE):
+   - You MUST carefully scan the entire Resume Text AND the Candidate Form Data (partnerReportedSkills, writeup).
+   - Extract ALL skills, technologies, frameworks, tools, programming languages, libraries, databases, methodologies, functional competencies, and soft skills listed.
+   - Do NOT summarize, truncate, or omit skills. If there are 30 skills listed, extract all 30. Return the full comprehensive list in the `candidateProfile.skills` array. Omissions are a failure of analysis.
+
+2. INPUT FORMAT & TIERS MAPPING:
+   - Identify the complete set of required/must-have and preferred/should-have/nice-to-have skills requested in the Job Description.
+   - If the Job Description is raw text: look for "MUST-HAVE Skills" (map to required/must-have) and "PREFERRED Skills" (map to preferred/nice-to-have).
+   - If the Job Description is JSON: map "skills.mustHave" to required/must-have, "skills.shouldHave" to should-have/preferred, and "skills.niceToHave" to nice-to-have/preferred.
+
+3. STRICT SKILLS MATCHING PROTOCOL:
+   - A skill in the Job Description is either MATCHED or MISSING. There is NO middle ground or fuzzy assumption.
+   - To be classified as MATCHED, the candidate MUST have the exact skill name, an identical alias (from the list below), or be a direct superset (e.g. TypeScript for JavaScript).
+   - If the candidate only has a related skill but not the requested skill itself, it MUST NOT be considered a match. You MUST classify it as MISSING.
+   - For example:
+     - If the JD requires "Node.js", and the candidate only has "JavaScript", "Node.js" is MISSING.
+     - If the JD requires "React", and the candidate only has "HTML/CSS" or "Vue" or "Angular", "React" is MISSING.
+     - If the JD requires "AWS", and the candidate only has "Cloud Computing" (but no specific AWS services or AWS mentioned), "AWS" is MISSING.
+     - If the JD requires "Python", and the candidate only has "C++" or "Java", "Python" is MISSING.
+   - NEVER assume, extrapolate, or imply a skill. If it is not explicitly listed in their resume text or form data, it is MISSING. No exceptions.
+
+4. MATCHING & MISSING SKILLS CLASSIFICATION:
+   - For EVERY single skill identified in the Job Description, you MUST check if it matches any skill extracted for the candidate (using the STRICT MATCHING PROTOCOL).
+   - If it matches: place it in the appropriate matched list:
+     - Required/Must-have matches MUST go into `rankingSignals.mustHaveSkillsMatched`.
+     - Should-have matches MUST go into `rankingSignals.shouldHaveSkillsMatched`.
+     - Nice-to-have/Preferred matches MUST go into `rankingSignals.preferredSkillsMatched` or `rankingSignals.niceToHaveSkillsMatched`.
+   - If it does NOT match: you MUST place it in the missing list:
+     - Required/Must-have missing skills MUST go into `rankingSignals.mustHaveSkillsMissing`.
+   - Every single skill in the Job Description MUST be classified as either matched or missing. Do NOT skip any skills. If a skill in the Job Description is missing from the candidate's resume/form data, it is MANDATORY that it appears in the missing skills list.
 
 ---
 
@@ -126,7 +162,7 @@ below 50: REJECT
 
 ---
 
-### Candidate Form Data:
+### Candidate Form Data (partner-reported details):
 firstName: {{firstName}}
 lastName: {{lastName}}
 email: {{email}}
@@ -137,6 +173,11 @@ relevantExperience: {{relevantExperience}} years
 noticePeriod: {{noticePeriod}}
 currentSalary: {{currentSalary}} per annum
 expectedSalary: {{expectedSalary}} per annum
+partnerReportedSkills: {{partnerReportedSkills}}
+partnerReportedEducation: {{partnerReportedEducation}}
+partnerReportedCertifications: {{partnerReportedCertifications}}
+partnerReportedLanguages: {{partnerReportedLanguages}}
+candidateWriteup: {{candidateWriteup}}
 
 ### Resume Text:
 {{resumeText}}

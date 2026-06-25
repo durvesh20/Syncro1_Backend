@@ -512,7 +512,21 @@ router.get(
       }
 
       const JobPosition = require('../models/JobPosition');
-      const jobPosition = await JobPosition.findOne({ jobId: candidate.job?._id });
+      let jobPosition = await JobPosition.findOne({ jobId: candidate.job?._id });
+
+      if (!jobPosition && candidate.job?._id) {
+        console.log(`[QUEUE-DETAIL] JobPosition not found for job ${candidate.job._id}. Auto-creating/parsing...`);
+        try {
+          const { getOrParseJobPosition } = require('../services/jobPositionParser');
+          const Job = require('../models/Job');
+          const jobDoc = await Job.findById(candidate.job._id);
+          if (jobDoc) {
+            jobPosition = await getOrParseJobPosition(jobDoc);
+          }
+        } catch (err) {
+          console.error(`[QUEUE-DETAIL] Error auto-creating JobPosition:`, err.message);
+        }
+      }
 
       res.json({
         success: true,
@@ -536,6 +550,281 @@ router.get(
         success: false,
         message: 'Failed to fetch candidate',
         error: error.message
+      });
+    }
+  }
+);
+
+// @desc    Trigger/Generate market intelligence for a job position manually
+// @route   POST /api/admin/job-positions/:id/market-intel
+router.post(
+  '/job-positions/:id/market-intel',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  async (req, res) => {
+    try {
+      const JobPosition = require('../models/JobPosition');
+      const { triggerMarketIntel } = require('../services/marketIntelService');
+
+      let jobPosition = await JobPosition.findById(req.params.id);
+      if (!jobPosition) {
+        // Fallback 1: try finding by jobId
+        jobPosition = await JobPosition.findOne({ jobId: req.params.id });
+      }
+
+      if (!jobPosition) {
+        // Fallback 2: try parsing it from Job model
+        const Job = require('../models/Job');
+        const jobDoc = await Job.findById(req.params.id);
+        if (jobDoc) {
+          const { getOrParseJobPosition } = require('../services/jobPositionParser');
+          jobPosition = await getOrParseJobPosition(jobDoc);
+        }
+      }
+
+      if (!jobPosition) {
+        return res.status(404).json({
+          success: false,
+          message: 'Job position not found or could not be initialized/parsed'
+        });
+      }
+
+      console.log(`[ADMIN-MANUAL-INTEL] Triggering manual market intel for JobPosition ${jobPosition._id}`);
+      
+      const updated = await triggerMarketIntel(jobPosition._id, {
+        title: jobPosition.title,
+        category: jobPosition.category,
+        subCategory: jobPosition.subCategory
+      });
+
+      if (!updated) {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to generate market intelligence. Check server logs.'
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Market intelligence generated successfully',
+        data: updated
+      });
+    } catch (err) {
+      console.error('[ADMIN-MANUAL-INTEL] Error:', err.message);
+      res.status(500).json({
+        success: false,
+        message: err.message
+      });
+    }
+  }
+);
+
+// @desc    Manually re-run AI parsing/scoring for a candidate
+// @route   POST /api/admin/candidates/:id/re-score
+router.post(
+  '/candidates/:id/re-score',
+  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const aiService = require('../services/aiService');
+
+      const candidate = await Candidate.findById(req.params.id)
+        .populate('job');
+
+      if (!candidate) {
+        return res.status(404).json({
+          success: false,
+          message: 'Candidate not found'
+        });
+      }
+
+      if (!candidate.resume?.url) {
+        return res.status(400).json({
+          success: false,
+          message: 'Candidate does not have a resume uploaded'
+        });
+      }
+
+      console.log(`[ADMIN-RE-SCORE] Triggering manual AI re-scoring for candidate: ${candidate.firstName} ${candidate.lastName}`);
+
+      const formData = {
+        candidateId: candidate._id,
+        firstName: candidate.firstName,
+        lastName: candidate.lastName,
+        email: candidate.email,
+        mobile: candidate.mobile,
+        location: candidate.profile?.location,
+        totalExperience: candidate.profile?.totalExperience,
+        relevantExperience: candidate.profile?.relevantExperience,
+        noticePeriod: candidate.profile?.noticePeriod,
+        currentSalary: candidate.profile?.currentSalary,
+        expectedSalary: candidate.profile?.expectedSalary,
+        writeup: candidate.profile?.writeup,
+        skills: candidate.profile?.skills || [],
+        education: candidate.profile?.education || [],
+        certifications: candidate.profile?.certifications || [],
+        languages: candidate.profile?.languages || []
+      };
+
+      const jobData = candidate.job?.toObject ? candidate.job.toObject() : candidate.job;
+
+      const result = await aiService.parseResume(
+        candidate.resume.url,
+        candidate.resume.fileName,
+        formData,
+        jobData
+      );
+
+      if (!result.success || !result.fullAnalysis) {
+        return res.status(500).json({
+          success: false,
+          message: result.message || 'AI parsing failed'
+        });
+      }
+
+      const fullAnalysis = result.fullAnalysis;
+      const screening = fullAnalysis.screening || {};
+      const scoring = fullAnalysis.scoring || {};
+      const validation = fullAnalysis.validation || {};
+      const rec = fullAnalysis.recommendation || {};
+      const ranking = fullAnalysis.rankingSignals || {};
+
+      // Map AI scoring fields to DB shape
+      const scoreBreakdown = {
+        skills: {
+          score: scoring.skillsMatch || 0,
+          weight: 0.30,
+          matchedRequired: ranking.mustHaveSkillsMatched || [],
+          missingRequired: ranking.mustHaveSkillsMissing || [],
+          matchedPreferred: ranking.preferredSkillsMatched || [],
+          coveragePercent: scoring.skillCoveragePercent || 0
+        },
+        experience: {
+          score: scoring.experienceMatch || 0,
+          weight: 0.20,
+          actual: screening.experienceRange?.actual || '',
+          required: screening.experienceRange?.required || '',
+          status: screening.experienceRange?.status || '',
+          detail: validation.experienceDiscrepancyDetail || '',
+          relevancePercent: 100
+        },
+        domain: {
+          score: scoring.domainMatch || 0,
+          weight: 0.15,
+          jobDomain: screening.domainMatch?.jobDomain || '',
+          candidateDomain: screening.domainMatch?.candidateDomain || '',
+          status: screening.domainMatch?.status || ''
+        },
+        education: {
+          score: scoring.educationMatch || 0,
+          weight: 0.10,
+          minimumRequired: screening.educationMatch?.minimumRequired || '',
+          candidateEducation: screening.educationMatch?.candidateEducation || '',
+          status: screening.educationMatch?.status || ''
+        },
+        salary: {
+          score: scoring.salaryFit || 0,
+          weight: 0.10,
+          budget: screening.salaryFit?.budget || '',
+          expected: screening.salaryFit?.expected || '',
+          deltaPercent: screening.salaryFit?.deltaPercent || 0,
+          status: screening.salaryFit?.status || '',
+          withinBudget: ranking.salaryWithinBudget ?? true
+        },
+        location: {
+          score: scoring.locationMatch || 0,
+          weight: 0.05,
+          jobLocation: screening.locationFit?.jobLocation || '',
+          candidateLocation: screening.locationFit?.candidateLocation || '',
+          status: screening.locationFit?.status || '',
+          detail: validation.locationMatch || ''
+        },
+        noticePeriod: {
+          score: scoring.noticePeriodFit || 0,
+          weight: 0.05,
+          required: screening.noticePeriod?.required || '',
+          actual: screening.noticePeriod?.actual || '',
+          days: ranking.noticePeriodDays || 0,
+          status: screening.noticePeriod?.status || ''
+        },
+        stability: {
+          score: scoring.stabilityScore || 0,
+          weight: 0.05,
+          averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
+          isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
+          risk: screening.stabilityAnalysis?.stabilityRisk || 'LOW',
+          detail: screening.stabilityAnalysis?.detail || ''
+        },
+        summary: {
+          weightedScore: scoring.weightedScore || 0,
+          riskPenalty: scoring.riskPenalty || 0,
+          riskBreakdown: {
+            careerGapPenalty: scoring.riskBreakdown?.careerGapPenalty || 0,
+            jobHopperPenalty: scoring.riskBreakdown?.jobHopperPenalty || 0,
+            domainMismatchPenalty: scoring.riskBreakdown?.domainMismatchPenalty || 0,
+            experienceDiscrepancyPenalty: scoring.riskBreakdown?.experienceDiscrepancyPenalty || 0,
+            salaryOverBudgetPenalty: scoring.riskBreakdown?.salaryOverBudgetPenalty || 0
+          },
+          finalAdjustedScore: scoring.finalAdjustedScore || 0
+        }
+      };
+
+      // Update candidate's resume analysis
+      candidate.resumeAnalysis = {
+        parsed: true,
+        parsedAt: new Date(),
+        profileScore: scoring.finalAdjustedScore || 0,
+        matchLevel: fullAnalysis.matchLevel || 'UNKNOWN',
+        recommendation: rec.decision || 'HOLD',
+        scoreBreakdown,
+        flags: validation.redFlags?.map(msg => ({ type: 'RED', message: msg })) || [],
+        advice: rec.suggestedActions?.map(msg => ({ message: msg })) || []
+      };
+
+      if (candidate.submissionMetadata) {
+        candidate.submissionMetadata.matchScore = scoring.finalAdjustedScore || 0;
+      }
+
+      // Merge candidate profile fields if they were missing or updated
+      candidate.firstName = result.data.firstName || candidate.firstName;
+      candidate.lastName = result.data.lastName || candidate.lastName;
+      candidate.email = result.data.email || candidate.email;
+      candidate.mobile = result.data.mobile || candidate.mobile;
+      if (result.data.profile) {
+        candidate.profile.skills = result.data.profile.skills || candidate.profile.skills;
+        candidate.profile.education = result.data.profile.education || candidate.profile.education;
+        candidate.profile.languages = result.data.profile.languages || candidate.profile.languages;
+        candidate.profile.certifications = result.data.profile.certifications || candidate.profile.certifications;
+      }
+
+      await candidate.save();
+
+      // Return fully populated candidate details
+      const updatedCandidate = await Candidate.findById(candidate._id)
+        .populate('job', 'title category location experienceLevel salary skills')
+        .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')
+        .populate('company', 'companyName kyc.industry')
+        .populate('statusHistory.changedBy', 'email role')
+        .populate('notes.addedBy', 'email role');
+
+      res.json({
+        success: true,
+        message: 'AI re-scoring completed successfully',
+        data: {
+          candidate: updatedCandidate,
+          queueInfo: {
+            score: updatedCandidate.resumeAnalysis?.profileScore || 0,
+            matchLevel: updatedCandidate.resumeAnalysis?.matchLevel || 'UNKNOWN',
+            recommendation: updatedCandidate.resumeAnalysis?.recommendation,
+            breakdown: updatedCandidate.resumeAnalysis?.scoreBreakdown || {}
+          }
+        }
+      });
+    } catch (err) {
+      console.error('[ADMIN-RE-SCORE] Error:', err.message);
+      res.status(500).json({
+        success: false,
+        message: err.message
       });
     }
   }

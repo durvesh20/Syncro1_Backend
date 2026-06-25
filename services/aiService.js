@@ -192,6 +192,20 @@ Be deterministic, consistent and evidence-based in all scoring.`
             template = 'Score the candidate. Output JSON only.';
         }
 
+        const skillsString = Array.isArray(formData.skills) && formData.skills.length > 0 
+            ? formData.skills.join(', ') 
+            : 'Not provided';
+        const educationString = Array.isArray(formData.education) && formData.education.length > 0
+            ? formData.education.map(e => `${e.degree || ''} from ${e.institution || ''} (${e.year || ''})`).join('; ')
+            : 'Not provided';
+        const certificationsString = Array.isArray(formData.certifications) && formData.certifications.length > 0
+            ? formData.certifications.join(', ')
+            : 'Not provided';
+        const languagesString = Array.isArray(formData.languages) && formData.languages.length > 0
+            ? formData.languages.join(', ')
+            : 'Not provided';
+        const writeupString = formData.writeup || 'Not provided';
+
         // Fill in template variables
         return template
             .replace('{{firstName}}',         formData.firstName || 'Not provided')
@@ -204,6 +218,11 @@ Be deterministic, consistent and evidence-based in all scoring.`
             .replace('{{noticePeriod}}',      formData.noticePeriod || 'Not provided')
             .replace('{{currentSalary}}',     formData.currentSalary ? '₹' + Number(formData.currentSalary).toLocaleString('en-IN') : 'Not provided')
             .replace('{{expectedSalary}}',    formData.expectedSalary ? '₹' + Number(formData.expectedSalary).toLocaleString('en-IN') : 'Not provided')
+            .replace('{{partnerReportedSkills}}',        skillsString)
+            .replace('{{partnerReportedEducation}}',     educationString)
+            .replace('{{partnerReportedCertifications}}',  certificationsString)
+            .replace('{{partnerReportedLanguages}}',     languagesString)
+            .replace('{{candidateWriteup}}',             writeupString)
             .replace('{{resumeText}}',        resumeText.substring(0, 14000))
             .replace('{{jobDescription}}',    jobDescription);
     }
