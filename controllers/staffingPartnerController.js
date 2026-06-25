@@ -2240,7 +2240,7 @@ exports.updateSubmission = async (req, res) => {
     if (!submission.profile) submission.profile = {};
     if (location !== undefined) submission.profile.location = location.trim();
     if (willingToRelocate !== undefined && willingToRelocate !== null && willingToRelocate !== '') {
-      submission.profile.willingToRelocate = willingToRelocate === 'true' || willingToRelocate === true;
+      submission.profile.canRelocate = willingToRelocate === 'true' || willingToRelocate === true;
     }
     if (totalExperience !== undefined && totalExperience !== '') submission.profile.totalExperience = Number(totalExperience);
     if (relevantExperience !== undefined && relevantExperience !== '') submission.profile.relevantExperience = Number(relevantExperience);
@@ -2347,8 +2347,9 @@ exports.resendConsent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Submission not found' });
     }
 
-    // Only allow resend if consent is still pending
-    if (candidate.status !== 'CONSENT_PENDING') {
+    // Allow resend if consent is pending or candidate is still in draft (consent never sent)
+    const allowedResendStatuses = ['CONSENT_PENDING', 'DRAFT'];
+    if (!allowedResendStatuses.includes(candidate.status)) {
       return res.status(400).json({
         success: false,
         message: candidate.status === 'CONSENT_CONFIRMED'
@@ -2359,13 +2360,21 @@ exports.resendConsent = async (req, res) => {
 
     const whatsappService = require('../services/whatsappService');
     const Company = require('../models/Company');
+    const crypto = require('crypto');
 
     const company = await Company.findById(candidate.job?.company || candidate.company).select('companyName');
     const companyName = company?.companyName || 'a leading company';
-    const consentToken = candidate.whatsappConsent?.token;
+    let consentToken = candidate.whatsappConsent?.token;
 
+    // For DRAFT candidates, consent was never sent — generate a fresh token
     if (!consentToken) {
-      return res.status(400).json({ success: false, message: 'Consent token missing. Cannot resend.' });
+      if (candidate.status !== 'DRAFT') {
+        return res.status(400).json({ success: false, message: 'Consent token missing. Cannot resend.' });
+      }
+      consentToken = crypto.randomBytes(32).toString('hex');
+      if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
+      candidate.whatsappConsent.token = consentToken;
+      candidate.whatsappConsent.sentTo = candidate.mobile;
     }
 
     const result = await whatsappService.sendCandidateConsent(
@@ -2380,14 +2389,21 @@ exports.resendConsent = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Failed to resend WhatsApp consent', error: result.error });
     }
 
-    // Update resent timestamp
+    // Update consent timestamps and promote DRAFT → CONSENT_PENDING
+    if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
     candidate.whatsappConsent.resentAt = new Date();
     candidate.whatsappConsent.sentAt = new Date();
+
+    const previousStatus = candidate.status;
+    candidate.status = 'CONSENT_PENDING';
+
     candidate.statusHistory.push({
       status: 'CONSENT_PENDING',
       changedBy: req.user._id,
       changedAt: new Date(),
-      notes: 'WhatsApp consent resent by partner'
+      notes: previousStatus === 'DRAFT'
+        ? 'WhatsApp consent sent for the first time (from DRAFT) by partner'
+        : 'WhatsApp consent resent by partner'
     });
     await candidate.save();
 
