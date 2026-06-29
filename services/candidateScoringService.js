@@ -267,11 +267,24 @@ class CandidateScoringService {
   _scoreLocation(current, preferred, canRelocate, jobLoc) {
     if (!jobLoc?.city) return { score: 50, status: 'UNKNOWN', detail: 'Job location not specified' };
 
-    const city = jobLoc.city.toLowerCase();
+    const cities = Array.isArray(jobLoc.city) 
+      ? jobLoc.city.map(c => c.toLowerCase()) 
+      : [jobLoc.city.toLowerCase()];
+    
+    const displayCities = Array.isArray(jobLoc.city) ? jobLoc.city.join(', ') : jobLoc.city;
 
     if (jobLoc.isRemote) return { score: 100, status: 'EXACT', detail: 'Remote — no location constraint' };
-    if (current?.toLowerCase().includes(city)) return { score: 100, status: 'EXACT', detail: `Already in ${jobLoc.city}` };
-    if (preferred?.some(l => l.toLowerCase().includes(city))) return { score: 80, status: 'NEARBY', detail: `${jobLoc.city} is preferred` };
+    
+    const currentLower = current?.toLowerCase();
+    const isExact = currentLower && cities.some(c => currentLower.includes(c) || c.includes(currentLower));
+    if (isExact) return { score: 100, status: 'EXACT', detail: `Already in ${displayCities}` };
+    
+    const isPreferred = preferred?.some(pref => {
+      const prefLower = pref.toLowerCase();
+      return cities.some(c => prefLower.includes(c) || c.includes(prefLower));
+    });
+    if (isPreferred) return { score: 80, status: 'NEARBY', detail: `${displayCities} is preferred` };
+    
     if (jobLoc.isHybrid && canRelocate) return { score: 60, status: 'NEARBY', detail: 'Hybrid + willing to relocate' };
     if (canRelocate) return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
     return { score: 20, status: 'DIFFERENT', detail: `In ${current || 'unknown city'} — relocation not confirmed` };

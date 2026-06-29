@@ -88,6 +88,14 @@ exports.createPoolCandidate = async (req, res) => {
     if (!lastName?.trim()) missing.push('lastName');
     if (!email?.trim()) missing.push('email');
     if (!mobile?.trim()) missing.push('mobile');
+    if (!location?.trim()) missing.push('location');
+    if (willingToRelocate === undefined || willingToRelocate === '') missing.push('willingToRelocate');
+    if (totalExperience === undefined || totalExperience === '') missing.push('totalExperience');
+    if (relevantExperience === undefined || relevantExperience === '') missing.push('relevantExperience');
+    if (!noticePeriod?.trim()) missing.push('noticePeriod');
+    if (currentSalary === undefined || currentSalary === '') missing.push('currentSalary');
+    if (expectedSalary === undefined || expectedSalary === '') missing.push('expectedSalary');
+
     if (missing.length) {
       return res.status(400).json({ success: false, message: 'Missing required fields', missingFields: missing });
     }

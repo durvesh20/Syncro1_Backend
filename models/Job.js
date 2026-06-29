@@ -64,8 +64,8 @@ const jobSchema = new mongoose.Schema({
 
   // ==================== COMPENSATION ====================
   salary: {
-    min: Number,
-    max: Number,
+    min: { type: Number, min: 0 },
+    max: { type: Number, min: 0 },
     currency: {
       type: String,
       default: 'INR'
@@ -290,7 +290,7 @@ jobSchema.pre('save', function (next) {
   next();
 });
 
-jobSchema.pre('save', function (next) {
+jobSchema.pre('save', async function (next) {
   // Auto-generate slug
   if (this.isModified('title') && !this.slug) {
     this.slug = this.title
@@ -301,16 +301,35 @@ jobSchema.pre('save', function (next) {
 
   // Auto-generate uniqueId
   if (!this.uniqueId) {
-    const now = new Date();
-    const year = now.getFullYear();
-    const date = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
-
-    this.uniqueId = `${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
+    try {
+      const companyDoc = await mongoose.model('Company').findById(this.company);
+      const name = companyDoc?.companyName || 'JOB';
+      const prefix = name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 3).padEnd(3, 'x');
+      
+      const jobs = await mongoose.model('Job').find({ company: this.company });
+      let maxNum = 0;
+      const prefixPattern = new RegExp(`^${prefix}(\\d+)$`, 'i');
+      
+      jobs.forEach(j => {
+        if (j.uniqueId) {
+          const match = j.uniqueId.match(prefixPattern);
+          if (match) {
+            const num = parseInt(match[1], 10);
+            if (num > maxNum) {
+              maxNum = num;
+            }
+          }
+        }
+      });
+      
+      const nextNum = maxNum + 1;
+      const formattedNum = String(nextNum).padStart(3, '0');
+      this.uniqueId = `${prefix}${formattedNum}`;
+    } catch (error) {
+      console.error('Error generating uniqueId for Job:', error);
+      const random = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+      this.uniqueId = `job${Date.now()}${random}`;
+    }
   }
 
   next();

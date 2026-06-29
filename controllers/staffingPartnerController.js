@@ -952,7 +952,9 @@ exports.getAvailableJobs = async (req, res) => {
         salaryMax: req.query.salaryMax,
         search: req.query.search,
         sortBy: req.query.sortBy,
-        isUrgent: req.query.urgentOnly
+        isUrgent: req.query.isUrgent || req.query.urgentOnly,
+        companyName: req.query.companyName,
+        workMode: req.query.workMode
       }
     );
 
@@ -2072,13 +2074,32 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status, search } = req.query;
+    const { page = 1, limit = 10, status, search, isManual, isInterview } = req.query;
     const parsedPage = parseInt(page, 10) || 1;
     const parsedLimit = parseInt(limit, 10) || 10;
     const skip = (parsedPage - 1) * parsedLimit;
 
     const query = { submittedBy: partner._id };
-    if (status) query.status = status;
+    if (isInterview === 'true') {
+      query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED'] };
+    } else if (status) {
+      query.status = status;
+    }
+
+    const andConditions = [];
+
+    if (isManual === 'true') {
+      andConditions.push({
+        $or: [
+          { poolCandidateRef: null },
+          { poolCandidateRef: { $exists: false } }
+        ]
+      });
+    } else if (isManual === 'false') {
+      andConditions.push({
+        poolCandidateRef: { $ne: null, $exists: true }
+      });
+    }
 
     if (search && search.trim()) {
       const rx = new RegExp(search.trim(), 'i');
@@ -2091,14 +2112,20 @@ exports.getMySubmissions = async (req, res) => {
       const matchingCompanies = await Company.find({ companyName: rx }).select('_id');
       const companyIds = matchingCompanies.map(c => c._id);
       
-      query.$or = [
-        { firstName: rx },
-        { lastName: rx },
-        { email: rx },
-        { mobile: rx },
-        { job: { $in: jobIds } },
-        { company: { $in: companyIds } }
-      ];
+      andConditions.push({
+        $or: [
+          { firstName: rx },
+          { lastName: rx },
+          { email: rx },
+          { mobile: rx },
+          { job: { $in: jobIds } },
+          { company: { $in: companyIds } }
+        ]
+      });
+    }
+
+    if (andConditions.length > 0) {
+      query.$and = andConditions;
     }
 
     const [submissions, total] = await Promise.all([
@@ -3011,8 +3038,75 @@ exports.getWorkedJobs = async (req, res) => {
       });
     }
 
-    const { limit = 10, page = 1 } = req.query;
+    const { 
+      limit = 10, page = 1, search, 
+      category, location, experienceLevel, companyName, 
+      salaryMin, salaryMax, workMode, isUrgent 
+    } = req.query;
+    
     const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Construct match object
+    const filterMatch = {};
+    const andConditions = [];
+
+    if (search) {
+      filterMatch['$or'] = [
+        { 'jobDetails.title': { $regex: search, $options: 'i' } },
+        { 'jobDetails.uniqueId': { $regex: search, $options: 'i' } },
+        { 'companyDetails.companyName': { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    if (category) filterMatch['jobDetails.category'] = category;
+    
+    if (experienceLevel) filterMatch['jobDetails.experienceLevel'] = experienceLevel;
+    
+    if (isUrgent !== undefined && isUrgent !== '') {
+      filterMatch['jobDetails.isUrgent'] = isUrgent === 'true';
+    }
+    
+    if (salaryMin) filterMatch['jobDetails.salary.max'] = { $gte: Number(salaryMin) };
+    if (salaryMax) filterMatch['jobDetails.salary.min'] = { $lte: Number(salaryMax) };
+    
+    if (location) {
+      const cities = location.split(',').map(s => s.trim()).filter(Boolean);
+      if (cities.length > 0) {
+        const cityConditions = cities.map(city => {
+          const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { 'jobDetails.location.city': new RegExp(escaped, 'i') };
+        });
+        andConditions.push({ $or: cityConditions });
+      }
+    }
+    
+    if (companyName) {
+      const companies = companyName.split(',').map(s => s.trim()).filter(Boolean);
+      if (companies.length > 0) {
+        const companyConditions = companies.map(name => {
+          const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { 'companyDetails.companyName': new RegExp(escaped, 'i') };
+        });
+        andConditions.push({ $or: companyConditions });
+      }
+    }
+    
+    if (workMode) {
+      const modes = workMode.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (modes.length > 0) {
+        const modeConditions = [];
+        if (modes.includes('remote')) modeConditions.push({ 'jobDetails.location.isRemote': true });
+        if (modes.includes('hybrid')) modeConditions.push({ 'jobDetails.location.isHybrid': true });
+        if (modes.includes('onsite')) modeConditions.push({ 'jobDetails.location.isOnSite': true });
+        if (modeConditions.length > 0) {
+          andConditions.push({ $or: modeConditions });
+        }
+      }
+    }
+    
+    if (andConditions.length > 0) {
+      filterMatch['$and'] = andConditions;
+    }
 
     // Aggregate unique jobs this partner has submitted candidates to
     const pipeline = [
@@ -3038,18 +3132,31 @@ exports.getWorkedJobs = async (req, res) => {
           foreignField: "_id",
           as: "companyDetails"
       }},
-      { $unwind: { path: "$companyDetails", preserveNullAndEmptyArrays: true } },
+      { $unwind: { path: "$companyDetails", preserveNullAndEmptyArrays: true } }
+    ];
+    
+    if (Object.keys(filterMatch).length > 0) {
+      pipeline.push({ $match: filterMatch });
+    }
+    
+    pipeline.push(
       { $sort: { lastSubmittedAt: -1 } },
       { $facet: {
           metadata: [ { $count: "total" } ],
-          data: [ { $skip: skip }, { $limit: parseInt(limit) } ]
+          data: [ { $skip: skip }, { $limit: parseInt(limit) } ],
+          locations: [ { $unwind: "$jobDetails.location.city" }, { $group: { _id: "$jobDetails.location.city" } } ],
+          companies: [ { $match: { "companyDetails.companyName": { $ne: null } } }, { $group: { _id: "$companyDetails.companyName" } } ]
       }}
-    ];
+    );
 
     const Candidate = require('../models/Candidate');
     const aggregationResult = await Candidate.aggregate(pipeline);
 
     const total = aggregationResult[0].metadata[0]?.total || 0;
+    
+    // Process filter options
+    const uniqueLocations = aggregationResult[0].locations.map(l => l._id).filter(Boolean).sort();
+    const uniqueCompanies = aggregationResult[0].companies.map(c => c._id).filter(Boolean).sort();
     const items = aggregationResult[0].data.map(item => {
       const statuses = item.statusCounts || [];
       const hired = statuses.filter(s => s === 'HIRED').length;
@@ -3090,6 +3197,10 @@ exports.getWorkedJobs = async (req, res) => {
           page: parseInt(page),
           pages: Math.ceil(total / parseInt(limit)),
           total
+        },
+        filterOptions: {
+          locations: uniqueLocations,
+          companies: uniqueCompanies
         }
       }
     });

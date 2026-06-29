@@ -248,17 +248,54 @@ class JobAccessService {
     // Apply filters
     if (filters.category) query.category = filters.category;
     if (filters.employmentType) query.employmentType = filters.employmentType;
-    if (filters.isUrgent === 'true' || filters.isUrgent === true) query.isUrgent = true;
+    
+    if (filters.isUrgent === 'true' || filters.isUrgent === true) {
+      query.isUrgent = true;
+    } else if (filters.isUrgent === 'false' || filters.isUrgent === false) {
+      query.isUrgent = false;
+    }
+
+    if (filters.workMode) {
+      const modes = filters.workMode.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (modes.length > 0) {
+        const modeConditions = [];
+        if (modes.includes('remote')) modeConditions.push({ 'location.isRemote': true });
+        if (modes.includes('hybrid')) modeConditions.push({ 'location.isHybrid': true });
+        if (modes.includes('onsite')) modeConditions.push({ 'location.isOnSite': true });
+        if (modeConditions.length > 0) {
+          conditions.push({ $or: modeConditions });
+        }
+      }
+    }
+
+    if (filters.companyName) {
+      const companyNames = filters.companyName.split(',').map(s => s.trim()).filter(Boolean);
+      if (companyNames.length > 0) {
+        const companyConditions = companyNames.map(name => {
+          const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { companyName: new RegExp(escaped, 'i') };
+        });
+        const Company = require('../models/Company');
+        const matchingCompanies = await Company.find({
+          $or: companyConditions
+        }).select('_id').lean();
+        const companyIds = matchingCompanies.map(c => c._id);
+        query.company = { $in: companyIds };
+      }
+    }
 
     if (filters.location) {
-      const searchTerm = filters.location.slice(0, 100);
-      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      conditions.push({
-        $or: [
-          { 'location.city': new RegExp(escaped, 'i') },
-          { 'location.isRemote': true }
-        ]
-      });
+      const cities = filters.location.split(',').map(s => s.trim()).filter(Boolean);
+      if (cities.length > 0) {
+        const locationConditions = cities.map(city => {
+          const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { 'location.city': new RegExp(escaped, 'i') };
+        });
+        locationConditions.push({ 'location.isRemote': true });
+        conditions.push({
+          $or: locationConditions
+        });
+      }
     }
 
     if (filters.search) {
@@ -447,6 +484,31 @@ class JobAccessService {
 
     const total = await Job.countDocuments(query);
 
+    // Fetch unique locations and companies for filter options
+    const activeJobs = await Job.find({
+      status: 'ACTIVE',
+      eligiblePlans: { $in: accessiblePlans }
+    }).select('location company').populate('company', 'companyName').lean();
+
+    const locationsSet = new Set();
+    const companiesSet = new Set();
+
+    activeJobs.forEach(j => {
+      if (j.location?.city) {
+        if (Array.isArray(j.location.city)) {
+          j.location.city.forEach(c => locationsSet.add(c));
+        } else {
+          locationsSet.add(j.location.city);
+        }
+      }
+      if (j.company?.companyName) {
+        companiesSet.add(j.company.companyName);
+      }
+    });
+
+    const uniqueLocations = Array.from(locationsSet).filter(Boolean).sort();
+    const uniqueCompanies = Array.from(companiesSet).filter(Boolean).sort();
+
     return {
       jobs: enrichedJobs,
       pagination: {
@@ -460,6 +522,10 @@ class JobAccessService {
         plan,
         accessiblePlans,
         totalAccessibleJobs: total
+      },
+      filterOptions: {
+        locations: uniqueLocations,
+        companies: uniqueCompanies
       }
     };
   }

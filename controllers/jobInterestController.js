@@ -193,28 +193,82 @@ exports.getMyInterestedJobs = async (req, res) => {
             });
         }
 
-        const { page = 1, limit = 20 } = req.query;
+        const { 
+          page = 1, limit = 20, search, 
+          category, location, experienceLevel, companyName, 
+          salaryMin, salaryMax, workMode, isUrgent 
+        } = req.query;
+        
         const sanitizedPage = Math.max(1, parseInt(page));
         const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
         const skip = (sanitizedPage - 1) * sanitizedLimit;
 
         const partnerId = new mongoose.Types.ObjectId(partner._id.toString());
 
-        // Use aggregation to join Job and filter out ON_HOLD status
-        const countPipeline = [
-            { $match: { partner: partnerId, status: 'ACTIVE' } },
-            { $lookup: {
-                from: 'jobs',
-                localField: 'job',
-                foreignField: '_id',
-                as: 'jobDetails'
-            }},
-            { $unwind: '$jobDetails' },
-            { $match: { 'jobDetails.status': { $ne: 'ON_HOLD' } } },
-            { $count: 'total' }
-        ];
+        // Construct match object
+        const filterMatch = {};
+        const andConditions = [];
 
-        const dataPipeline = [
+        if (search) {
+          filterMatch['$or'] = [
+            { 'jobDetails.title': { $regex: search, $options: 'i' } },
+            { 'jobDetails.uniqueId': { $regex: search, $options: 'i' } },
+            { 'companyDetails.companyName': { $regex: search, $options: 'i' } }
+          ];
+        }
+        
+        if (category) filterMatch['jobDetails.category'] = category;
+        
+        if (experienceLevel) filterMatch['jobDetails.experienceLevel'] = experienceLevel;
+        
+        if (isUrgent !== undefined && isUrgent !== '') {
+          filterMatch['jobDetails.isUrgent'] = isUrgent === 'true';
+        }
+        
+        if (salaryMin) filterMatch['jobDetails.salary.max'] = { $gte: Number(salaryMin) };
+        if (salaryMax) filterMatch['jobDetails.salary.min'] = { $lte: Number(salaryMax) };
+        
+        if (location) {
+          const cities = location.split(',').map(s => s.trim()).filter(Boolean);
+          if (cities.length > 0) {
+            const cityConditions = cities.map(city => {
+              const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return { 'jobDetails.location.city': new RegExp(escaped, 'i') };
+            });
+            andConditions.push({ $or: cityConditions });
+          }
+        }
+        
+        if (companyName) {
+          const companies = companyName.split(',').map(s => s.trim()).filter(Boolean);
+          if (companies.length > 0) {
+            const companyConditions = companies.map(name => {
+              const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              return { 'companyDetails.companyName': new RegExp(escaped, 'i') };
+            });
+            andConditions.push({ $or: companyConditions });
+          }
+        }
+        
+        if (workMode) {
+          const modes = workMode.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+          if (modes.length > 0) {
+            const modeConditions = [];
+            if (modes.includes('remote')) modeConditions.push({ 'jobDetails.location.isRemote': true });
+            if (modes.includes('hybrid')) modeConditions.push({ 'jobDetails.location.isHybrid': true });
+            if (modes.includes('onsite')) modeConditions.push({ 'jobDetails.location.isOnSite': true });
+            if (modeConditions.length > 0) {
+              andConditions.push({ $or: modeConditions });
+            }
+          }
+        }
+        
+        if (andConditions.length > 0) {
+          filterMatch['$and'] = andConditions;
+        }
+
+        // Shared base pipeline
+        const basePipeline = [
             { $match: { partner: partnerId, status: 'ACTIVE' } },
             { $lookup: {
                 from: 'jobs',
@@ -230,18 +284,31 @@ exports.getMyInterestedJobs = async (req, res) => {
                 foreignField: '_id',
                 as: 'companyDetails'
             }},
-            { $unwind: { path: '$companyDetails', preserveNullAndEmptyArrays: true } },
-            { $sort: { createdAt: -1 } },
-            { $skip: skip },
-            { $limit: sanitizedLimit }
+            { $unwind: { path: '$companyDetails', preserveNullAndEmptyArrays: true } }
         ];
 
-        const [countResult, interests] = await Promise.all([
-            JobInterest.aggregate(countPipeline),
-            JobInterest.aggregate(dataPipeline)
-        ]);
+        if (Object.keys(filterMatch).length > 0) {
+            basePipeline.push({ $match: filterMatch });
+        }
 
-        const total = countResult[0]?.total || 0;
+        const facetPipeline = [
+            ...basePipeline,
+            { $sort: { createdAt: -1 } },
+            { $facet: {
+                metadata: [ { $count: 'total' } ],
+                data: [ { $skip: skip }, { $limit: sanitizedLimit } ],
+                locations: [ { $unwind: "$jobDetails.location.city" }, { $group: { _id: "$jobDetails.location.city" } } ],
+                companies: [ { $match: { "companyDetails.companyName": { $ne: null } } }, { $group: { _id: "$companyDetails.companyName" } } ]
+            }}
+        ];
+
+        const aggregationResult = await JobInterest.aggregate(facetPipeline);
+
+        const total = aggregationResult[0].metadata[0]?.total || 0;
+        const interests = aggregationResult[0].data;
+        
+        const uniqueLocations = aggregationResult[0].locations.map(l => l._id).filter(Boolean).sort();
+        const uniqueCompanies = aggregationResult[0].companies.map(c => c._id).filter(Boolean).sort();
 
         const enriched = interests.map(i => ({
             interestId: i._id,
@@ -281,6 +348,10 @@ exports.getMyInterestedJobs = async (req, res) => {
                     current: sanitizedPage,
                     pages: Math.ceil(total / sanitizedLimit),
                     total
+                },
+                filterOptions: {
+                    locations: uniqueLocations,
+                    companies: uniqueCompanies
                 }
             }
         });
