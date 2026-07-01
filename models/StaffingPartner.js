@@ -276,6 +276,11 @@ const staffingPartnerSchema = new mongoose.Schema({
   verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   verifiedAt: Date,
   rejectionReason: String,
+  assignedTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
 
   // ==================== PROFILE COMPLETION (UPDATED) ====================
   profileCompletion: {

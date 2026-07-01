@@ -77,6 +77,10 @@ const partnerCandidateSchema = new mongoose.Schema({
       'More than 90 days'
     ]
   },
+  lastWorkingDay: {
+    type: Date,
+    default: null
+  },
   currentSalary: {
     type: Number,
     required: [true, 'Current salary is required'],

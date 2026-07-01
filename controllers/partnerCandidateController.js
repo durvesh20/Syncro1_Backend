@@ -79,7 +79,7 @@ exports.createPoolCandidate = async (req, res) => {
       email, mobile,
       location, willingToRelocate, totalExperience, relevantExperience,
       noticePeriod, currentSalary, expectedSalary,
-      writeup, tags
+      writeup, tags, lastWorkingDay
     } = req.body;
 
     // ── Required fields ──
@@ -140,6 +140,7 @@ exports.createPoolCandidate = async (req, res) => {
       totalExperience: totalExperience !== '' && totalExperience !== undefined ? Number(totalExperience) : undefined,
       relevantExperience: relevantExperience !== '' && relevantExperience !== undefined ? Number(relevantExperience) : undefined,
       noticePeriod,
+      lastWorkingDay: lastWorkingDay ? new Date(lastWorkingDay) : null,
       currentSalary: currentSalary !== '' && currentSalary !== undefined ? Number(currentSalary) : undefined,
       expectedSalary: expectedSalary !== '' && expectedSalary !== undefined ? Number(expectedSalary) : undefined,
       writeup: writeup?.trim(),
@@ -228,7 +229,7 @@ exports.updatePoolCandidate = async (req, res) => {
       email, mobile,
       location, willingToRelocate, totalExperience, relevantExperience,
       noticePeriod, currentSalary, expectedSalary,
-      writeup, tags
+      writeup, tags, lastWorkingDay
     } = req.body;
 
     // ── Check uniqueness if email/mobile is being changed ──
@@ -270,6 +271,9 @@ exports.updatePoolCandidate = async (req, res) => {
     if (relevantExperience !== undefined && relevantExperience !== '')
       candidate.relevantExperience = Number(relevantExperience);
     if (noticePeriod) candidate.noticePeriod = noticePeriod;
+    if (lastWorkingDay !== undefined) {
+      candidate.lastWorkingDay = lastWorkingDay ? new Date(lastWorkingDay) : null;
+    }
     if (currentSalary !== undefined && currentSalary !== '')
       candidate.currentSalary = Number(currentSalary);
     if (expectedSalary !== undefined && expectedSalary !== '')
@@ -502,6 +506,7 @@ exports.applyFromPool = async (req, res) => {
         noticePeriod: poolCandidate.noticePeriod,
         currentSalary: poolCandidate.currentSalary,
         expectedSalary: poolCandidate.expectedSalary,
+        lastWorkingDay: poolCandidate.lastWorkingDay,
         // Partner may override writeup for this specific job
         writeup: submissionWriteup || poolCandidate.writeup
       },

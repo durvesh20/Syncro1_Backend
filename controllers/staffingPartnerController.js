@@ -1203,7 +1203,8 @@ exports.submitCandidate = async (req, res) => {
       expectedSalary,
       writeup,
       profile,
-      forceSubmit
+      forceSubmit,
+      lastWorkingDay
     } = req.body;
 
     // Resume comes from multer (uploaded to Cloudinary before this runs)
@@ -1444,6 +1445,7 @@ exports.submitCandidate = async (req, res) => {
         totalExperience: parsedTotalExp,     // ✅ parsed float
         relevantExperience: parsedRelevantExp, // ✅ parsed float
         noticePeriod,
+        lastWorkingDay: lastWorkingDay ? new Date(lastWorkingDay) : null,
         currentSalary: parsedCurrentSalary,  // ✅ parsed int (no comma issue)
         expectedSalary: parsedExpectedSalary, // ✅ parsed int (no comma issue)
         writeup: writeup?.trim() || '',
@@ -2244,7 +2246,8 @@ exports.updateSubmission = async (req, res) => {
       noticePeriod,
       currentSalary,
       expectedSalary,
-      writeup
+      writeup,
+      lastWorkingDay
     } = req.body;
 
     if (firstName) submission.firstName = firstName.trim();
@@ -2272,6 +2275,9 @@ exports.updateSubmission = async (req, res) => {
     if (totalExperience !== undefined && totalExperience !== '') submission.profile.totalExperience = Number(totalExperience);
     if (relevantExperience !== undefined && relevantExperience !== '') submission.profile.relevantExperience = Number(relevantExperience);
     if (noticePeriod !== undefined) submission.profile.noticePeriod = noticePeriod;
+    if (lastWorkingDay !== undefined) {
+      submission.profile.lastWorkingDay = lastWorkingDay ? new Date(lastWorkingDay) : null;
+    }
     if (currentSalary !== undefined && currentSalary !== '') submission.profile.currentSalary = Number(currentSalary);
     if (expectedSalary !== undefined && expectedSalary !== '') submission.profile.expectedSalary = Number(expectedSalary);
     if (writeup !== undefined) submission.profile.writeup = writeup.trim();

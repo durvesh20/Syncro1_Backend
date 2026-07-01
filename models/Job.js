@@ -160,8 +160,17 @@ const jobSchema = new mongoose.Schema({
     ref: 'User'
   },
   approvedAt: Date,
+  rejectedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
   rejectionReason: String,
   rejectedAt: Date,
+  assignedTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
 
   // ==================== EDIT REQUEST TRACKING ====================
   editRequestCount: {

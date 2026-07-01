@@ -82,7 +82,6 @@ router.get(
     '/admin/hot-jobs',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.VIEW_PENDING_JOBS),
     getHotJobs
 );
 
@@ -90,7 +89,7 @@ router.get(
     '/admin/extension-requests',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+    checkPermission(PERMISSIONS.VIEW_EXTENSION_REQUESTS),
     getAllExtensionRequests
 );
 
@@ -98,7 +97,7 @@ router.get(
     '/admin/extension-requests/:id',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+    checkPermission(PERMISSIONS.VIEW_EXTENSION_REQUESTS),
     getExtensionRequest
 );
 
@@ -106,7 +105,7 @@ router.put(
     '/admin/extension-requests/:id/review',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.APPROVE_PARTNER),
+    checkPermission(PERMISSIONS.APPROVE_EXTENSION_REQUEST),
     reviewExtensionRequest
 );
 
@@ -114,7 +113,6 @@ router.get(
     '/admin/jobs/:jobId/interested-partners',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.VIEW_PENDING_JOBS),
     getInterestedPartners
 );
 
@@ -122,7 +120,7 @@ router.get(
     '/admin/partner-performance/:partnerId',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
+    checkPermission(PERMISSIONS.VIEW_EXTENSION_REQUESTS),
     getPartnerPerformance
 );
 

@@ -102,6 +102,10 @@ const candidateSchema = new mongoose.Schema({
         'More than 90 days'
       ]
     },
+    lastWorkingDay: {
+      type: Date,
+      default: null
+    },
     currentSalary: Number,          // in INR per annum
     expectedSalary: Number,         // in INR per annum
     writeup: String,                // small writeup / summary by partner

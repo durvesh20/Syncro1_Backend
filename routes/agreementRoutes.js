@@ -56,7 +56,6 @@ router.get(
     '/admin/queries',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
     getAllQueries
 );
 
@@ -64,7 +63,6 @@ router.get(
     '/admin/queries/:id',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
     getQuery
 );
 
@@ -72,7 +70,6 @@ router.put(
     '/admin/queries/:id/respond',
     protect,
     authorizeAdminAccess,
-    checkPermission(PERMISSIONS.APPROVE_PARTNER),
     respondToQuery
 );
 

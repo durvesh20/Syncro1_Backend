@@ -119,7 +119,32 @@ const userSchema = new mongoose.Schema({
   updatedAt: {
     type: Date,
     default: Date.now
-  }
+  },
+
+  // Sub-admin activity tracking logs
+  subAdminActivityLogs: [{
+    action: {
+      type: String,
+      enum: ['CREATED', 'UPDATED', 'STATUS_CHANGED'],
+      required: true
+    },
+    actor: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now
+    },
+    details: {
+      previousPermissions: [String],
+      newPermissions: [String],
+      previousStatus: String,
+      newStatus: String,
+      changedFields: mongoose.Schema.Types.Mixed
+    }
+  }]
 }, {
   timestamps: true
 });

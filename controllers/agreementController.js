@@ -317,6 +317,12 @@ exports.getAllQueries = async (req, res) => {
         const query = {};
         if (status) query.status = status;
 
+        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
+            const assignedPartners = await StaffingPartner.find({ assignedTo: req.user._id }).select('_id');
+            const partnerIds = assignedPartners.map(p => p._id);
+            query.partner = { $in: partnerIds };
+        }
+
         const sanitizedPage = Math.max(1, parseInt(page));
         const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
         const skip = (sanitizedPage - 1) * sanitizedLimit;
@@ -356,7 +362,16 @@ exports.getAllQueries = async (req, res) => {
         }));
 
         // ✅ Summary counts
+        const matchStage = {};
+        if (query.partner) {
+            matchStage.partner = query.partner;
+        }
+        if (query.status) {
+            matchStage.status = query.status;
+        }
+
         const summary = await AgreementQuery.aggregate([
+            { $match: matchStage },
             { $group: { _id: '$status', count: { $sum: 1 } } }
         ]);
 
@@ -412,7 +427,7 @@ exports.respondToQuery = async (req, res) => {
         }
 
         const agreementQuery = await AgreementQuery.findById(req.params.id)
-            .populate('partner', 'firstName lastName firmName')
+            .populate('partner', 'firstName lastName firmName assignedTo')
             .populate('user', 'email');
 
         if (!agreementQuery) {
@@ -420,6 +435,15 @@ exports.respondToQuery = async (req, res) => {
                 success: false,
                 message: 'Query not found'
             });
+        }
+
+        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
+            if (!agreementQuery.partner || !agreementQuery.partner.assignedTo || agreementQuery.partner.assignedTo.toString() !== req.user._id.toString()) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You are not authorized to respond to this agreement query as this talent partner is not assigned to you.'
+                });
+            }
         }
 
         // ✅ Handle different actions
@@ -533,7 +557,7 @@ exports.getQuery = async (req, res) => {
         const query = await AgreementQuery.findById(req.params.id)
             .populate({
                 path: 'partner',
-                select: 'firstName lastName firmName city state verificationStatus profileCompletion agreement'
+                select: 'firstName lastName firmName city state verificationStatus profileCompletion agreement assignedTo'
             })
             .populate('user', 'email mobile')
             .populate('respondedBy', 'email role');
@@ -543,6 +567,15 @@ exports.getQuery = async (req, res) => {
                 success: false,
                 message: 'Query not found'
             });
+        }
+
+        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
+            if (!query.partner || !query.partner.assignedTo || query.partner.assignedTo.toString() !== req.user._id.toString()) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You are not authorized to view this agreement query as this talent partner is not assigned to you.'
+                });
+            }
         }
 
         // Get all queries from same partner for context
@@ -566,84 +599,7 @@ exports.getQuery = async (req, res) => {
     }
 };
 
-// @desc    Admin responds to a query
-// @route   PUT /api/agreements/admin/queries/:id/respond
-// @access  Admin / Sub-Admin
-exports.respondToQuery = async (req, res) => {
-    try {
-        const { response } = req.body;
 
-        if (!response || response.trim().length < 5) {
-            return res.status(400).json({
-                success: false,
-                message: 'Response is required (minimum 5 characters)'
-            });
-        }
-
-        const agreementQuery = await AgreementQuery.findById(req.params.id)
-            .populate('partner', 'firstName lastName firmName')
-            .populate('user', 'email');
-
-        if (!agreementQuery) {
-            return res.status(404).json({
-                success: false,
-                message: 'Query not found'
-            });
-        }
-
-        if (agreementQuery.status === 'CLOSED') {
-            return res.status(400).json({
-                success: false,
-                message: 'Cannot respond to a closed query'
-            });
-        }
-
-        agreementQuery.response = response.trim();
-        agreementQuery.respondedBy = req.user._id;
-        agreementQuery.respondedAt = new Date();
-        agreementQuery.status = 'RESPONDED';
-
-        await agreementQuery.save();
-
-        // Notify partner — fire and forget
-        const notifyPartner = async () => {
-            try {
-                const notificationEngine = require('../services/notificationEngine');
-
-                await notificationEngine.send({
-                    recipientId: agreementQuery.user._id || agreementQuery.user,
-                    type: 'SYSTEM_ANNOUNCEMENT',
-                    title: 'Your agreement query has been answered',
-                    message: `Your query on "${agreementQuery.clauseReference}" has been responded to. Please review the response and accept the agreement when ready.`,
-                    data: {
-                        entityType: 'AgreementQuery',
-                        entityId: agreementQuery._id,
-                        actionUrl: '/partner/agreement'
-                    },
-                    channels: { inApp: true, email: true },
-                    priority: 'high'
-                });
-            } catch (err) {
-                console.error('[AGREEMENT QUERY] Partner notification failed:', err.message);
-            }
-        };
-
-        notifyPartner();
-
-        res.json({
-            success: true,
-            message: 'Response submitted successfully. Partner has been notified.',
-            data: agreementQuery
-        });
-    } catch (error) {
-        console.error('[AGREEMENT QUERY] Respond error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to respond to query',
-            error: error.message
-        });
-    }
-};
 
 // @desc    Admin regenerates PDF with updated design
 // @route   POST /api/agreements/regenerate/:partnerId

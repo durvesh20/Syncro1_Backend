@@ -839,6 +839,19 @@ exports.getHotJobs = async (req, res) => {
 // @access  Admin
 exports.getInterestedPartners = async (req, res) => {
     try {
+        // Restrict sub-admins
+        if (req.user.role === 'sub_admin') {
+            const hasViewUnassigned = req.user.permissions?.includes('VIEW_UNASSIGNED_JOBS');
+            if (!hasViewUnassigned) {
+                const job = await Job.findById(req.params.jobId);
+                if (!job || String(job.assignedTo) !== String(req.user._id)) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'Unauthorized. This job is not assigned to you.'
+                    });
+                }
+            }
+        }
         const interests = await JobInterest.find({
             job: req.params.jobId,
             status: 'ACTIVE'
