@@ -108,21 +108,25 @@ router.put(
 
 router.put(
   '/verifications/:type/:id/assign',
+  checkAnyPermission([PERMISSIONS.ASSIGN_USERS]),
   assignVerification
 );
 
 router.put(
   '/verifications/:type/:id/revoke',
+  checkAnyPermission([PERMISSIONS.ASSIGN_USERS]),
   revokeVerificationAssignment
 );
 
 router.post(
   '/verifications/bulk-assign',
+  checkAnyPermission([PERMISSIONS.ASSIGN_USERS]),
   bulkAssignVerification
 );
 
 router.post(
   '/verifications/bulk-revoke',
+  checkAnyPermission([PERMISSIONS.ASSIGN_USERS]),
   bulkRevokeVerificationAssignment
 );
 
@@ -164,25 +168,25 @@ router.put(
 
 router.put(
   '/jobs/:id/assign',
-  authorize('admin'),
+  checkAnyPermission([PERMISSIONS.ASSIGN_JOBS]),
   assignJob
 );
 
 router.put(
   '/jobs/:id/revoke',
-  authorize('admin'),
+  checkAnyPermission([PERMISSIONS.ASSIGN_JOBS]),
   revokeJobAssignment
 );
 
 router.put(
   '/jobs/bulk-assign',
-  authorize('admin'),
+  checkAnyPermission([PERMISSIONS.ASSIGN_JOBS]),
   bulkAssignJobs
 );
 
 router.put(
   '/jobs/bulk-revoke',
-  authorize('admin'),
+  checkAnyPermission([PERMISSIONS.ASSIGN_JOBS]),
   bulkRevokeJobs
 );
 
@@ -268,6 +272,7 @@ router.post(
         return res.status(404).json({ success: false, message: 'Candidate not found' });
       }
 
+      /*
       if (req.user.role === 'sub_admin') {
         const hasViewAll = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
         if (!hasViewAll) {
@@ -280,6 +285,7 @@ router.post(
           }
         }
       }
+      */
 
       candidate.notes.push({
         content,
@@ -480,6 +486,7 @@ router.get(
         scoreMin: req.query.scoreMin
       };
 
+      /*
       if (req.user.role === 'sub_admin') {
         const hasViewAll = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
         if (!hasViewAll) {
@@ -487,6 +494,7 @@ router.get(
           filters.assignedJobIds = assignedJobs.map(j => j._id);
         }
       }
+      */
 
       const candidates = await candidateQueueService.getAdminQueue(filters);
 
@@ -531,7 +539,11 @@ router.get(
       const Job = require('../models/Job');
 
       const candidate = await Candidate.findById(req.params.id)
-        .populate('job', 'title category location experienceLevel salary skills')
+        .populate({
+          path: 'job',
+          select: 'title category location experienceLevel salary skills assignedTo',
+          populate: { path: 'assignedTo', select: 'email role' }
+        })
         .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')
         .populate('company', 'companyName kyc.industry')
         .populate('statusHistory.changedBy', 'email role')
@@ -544,6 +556,7 @@ router.get(
         });
       }
 
+      /*
       if (req.user.role === 'sub_admin') {
         const hasViewAll = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
         if (!hasViewAll) {
@@ -556,6 +569,7 @@ router.get(
           }
         }
       }
+      */
 
       res.json({
         success: true,

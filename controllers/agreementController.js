@@ -317,11 +317,13 @@ exports.getAllQueries = async (req, res) => {
         const query = {};
         if (status) query.status = status;
 
-        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
+        /*
+        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_AGREEMENT_QUERIES') && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
             const assignedPartners = await StaffingPartner.find({ assignedTo: req.user._id }).select('_id');
             const partnerIds = assignedPartners.map(p => p._id);
             query.partner = { $in: partnerIds };
         }
+        */
 
         const sanitizedPage = Math.max(1, parseInt(page));
         const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
@@ -361,17 +363,15 @@ exports.getAllQueries = async (req, res) => {
             }
         }));
 
-        // ✅ Summary counts
-        const matchStage = {};
+        // ✅ Summary counts — always computed WITHOUT status filter so all tab counts are always visible
+        const summaryMatchStage = {};
         if (query.partner) {
-            matchStage.partner = query.partner;
-        }
-        if (query.status) {
-            matchStage.status = query.status;
+            // Keep partner scoping for sub_admin permission filtering
+            summaryMatchStage.partner = query.partner;
         }
 
         const summary = await AgreementQuery.aggregate([
-            { $match: matchStage },
+            { $match: summaryMatchStage },
             { $group: { _id: '$status', count: { $sum: 1 } } }
         ]);
 
@@ -437,7 +437,8 @@ exports.respondToQuery = async (req, res) => {
             });
         }
 
-        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
+        /*
+        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_AGREEMENT_QUERIES') && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
             if (!agreementQuery.partner || !agreementQuery.partner.assignedTo || agreementQuery.partner.assignedTo.toString() !== req.user._id.toString()) {
                 return res.status(403).json({
                     success: false,
@@ -445,6 +446,7 @@ exports.respondToQuery = async (req, res) => {
                 });
             }
         }
+        */
 
         // ✅ Handle different actions
         if (resolvedAction === 'close') {
@@ -569,7 +571,8 @@ exports.getQuery = async (req, res) => {
             });
         }
 
-        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
+        /*
+        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_AGREEMENT_QUERIES') && !req.user.permissions?.includes('VIEW_UNASSIGNED_AGREEMENT_QUERIES')) {
             if (!query.partner || !query.partner.assignedTo || query.partner.assignedTo.toString() !== req.user._id.toString()) {
                 return res.status(403).json({
                     success: false,
@@ -577,6 +580,7 @@ exports.getQuery = async (req, res) => {
                 });
             }
         }
+        */
 
         // Get all queries from same partner for context
         const partnerQueries = await AgreementQuery.find({

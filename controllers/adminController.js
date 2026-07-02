@@ -212,7 +212,7 @@ exports.getDashboard = async (req, res) => {
       // Pending Verifications
       let pendingPartnersQuery = { verificationStatus: 'UNDER_REVIEW' };
       let pendingCompaniesQuery = { verificationStatus: 'UNDER_REVIEW' };
-      
+
       const hasViewUnassigned = req.user.permissions?.includes('VIEW_UNASSIGNED_APPLICATIONS');
       if (!hasViewUnassigned) {
         pendingPartnersQuery.assignedTo = req.user._id;
@@ -316,10 +316,7 @@ exports.getPendingVerifications = async (req, res) => {
       verificationStatus: { $in: ['UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
     };
 
-    if (isSubAdmin && !hasViewUnassigned) {
-      partnerQuery.assignedTo = req.user._id;
-      companyQuery.assignedTo = req.user._id;
-    }
+    // Sub-admins can see all pending verifications
 
     let partners = [];
     let companies = [];
@@ -453,14 +450,7 @@ exports.verifyPartner = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      if (!partner.assignedTo || partner.assignedTo.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not assigned to this application. Only the assigned sub-admin or main admin can process it.'
-        });
-      }
-    }
+    // Sub-admins can process any staffing partner
 
     const user = await User.findById(partner.user);
 
@@ -565,14 +555,7 @@ exports.verifyCompany = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      if (!company.assignedTo || company.assignedTo.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not assigned to this application. Only the assigned sub-admin or main admin can process it.'
-        });
-      }
-    }
+    // Sub-admins can process any company
 
     const user = await User.findById(company.user);
 
@@ -1105,39 +1088,7 @@ exports.getUsers = async (req, res) => {
     }
 
     let allowedUserIds = null;
-    if (req.user.role === 'sub_admin') {
-      let limitToAssigned = false;
-      const hasAllPartners = req.user.permissions?.includes('VIEW_ALL_PARTNERS');
-      const hasAllCompanies = req.user.permissions?.includes('VIEW_ALL_COMPANIES');
-
-      if (role === 'staffing_partner' && !hasAllPartners) {
-        limitToAssigned = true;
-      } else if (role === 'company' && !hasAllCompanies) {
-        limitToAssigned = true;
-      } else if (!role && (!hasAllPartners || !hasAllCompanies)) {
-        limitToAssigned = true;
-      }
-
-      if (limitToAssigned) {
-        const allowedIds = [];
-        if (role === 'staffing_partner' || (!role && !hasAllPartners)) {
-          const assignedPartners = await StaffingPartner.find({ assignedTo: req.user._id }).select('user');
-          allowedIds.push(...assignedPartners.map(p => p.user).filter(Boolean));
-        } else if (!role && hasAllPartners) {
-          const allPartners = await StaffingPartner.find({}).select('user');
-          allowedIds.push(...allPartners.map(p => p.user).filter(Boolean));
-        }
-
-        if (role === 'company' || (!role && !hasAllCompanies)) {
-          const assignedCompanies = await Company.find({ assignedTo: req.user._id }).select('user');
-          allowedIds.push(...assignedCompanies.map(c => c.user).filter(Boolean));
-        } else if (!role && hasAllCompanies) {
-          const allCompanies = await Company.find({}).select('user');
-          allowedIds.push(...allCompanies.map(c => c.user).filter(Boolean));
-        }
-        query._id = { $in: allowedIds };
-      }
-    }
+    // Sub-admins can see all users
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -1183,29 +1134,24 @@ exports.getUsers = async (req, res) => {
     let stats = null;
     if (role) {
       const statsQuery = { role };
-      if (allowedUserIds !== null) {
-        statsQuery._id = { $in: allowedUserIds };
+      // If the main query was scoped to specific user IDs (sub_admin restriction), apply same scope to stats
+      if (query._id) {
+        statsQuery._id = query._id;
       }
       const totalCount = await User.countDocuments(statsQuery);
-      const activeCount = await User.countDocuments({ 
-        ...statsQuery, 
-        status: { $in: ['ACTIVE', 'VERIFIED'] } 
+      const activeCount = await User.countDocuments({
+        ...statsQuery,
+        status: { $in: ['ACTIVE', 'VERIFIED'] }
       });
       const emailPendingCount = await User.countDocuments({ ...statsQuery, emailVerified: false });
       const mobilePendingCount = await User.countDocuments({ ...statsQuery, mobileVerified: false });
-      
+
       let verifiedCount = 0;
       if (role === 'staffing_partner') {
         const spQuery = { verificationStatus: 'APPROVED' };
-        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_PARTNERS')) {
-          spQuery.assignedTo = req.user._id;
-        }
         verifiedCount = await StaffingPartner.countDocuments(spQuery);
       } else if (role === 'company') {
         const coQuery = { verificationStatus: 'APPROVED' };
-        if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_COMPANIES')) {
-          coQuery.assignedTo = req.user._id;
-        }
         verifiedCount = await Company.countDocuments(coQuery);
       }
 
@@ -1251,35 +1197,8 @@ exports.updateUserStatus = async (req, res) => {
         return res.status(404).json({ success: false, message: 'User not found' });
       }
 
-      let limitToAssigned = false;
-      if (targetUser.role === 'staffing_partner' && !req.user.permissions?.includes('VIEW_ALL_PARTNERS')) {
-        limitToAssigned = true;
-      } else if ((targetUser.role === 'company' || targetUser.role === 'employer') && !req.user.permissions?.includes('VIEW_ALL_COMPANIES')) {
-        limitToAssigned = true;
-      } else if (targetUser.role !== 'staffing_partner' && targetUser.role !== 'company' && targetUser.role !== 'employer') {
+      if (targetUser.role !== 'staffing_partner' && targetUser.role !== 'company' && targetUser.role !== 'employer') {
         return res.status(403).json({ success: false, message: 'Unauthorized. Sub-admins cannot modify this user type.' });
-      }
-
-      if (limitToAssigned) {
-        let isAssigned = false;
-        if (targetUser.role === 'staffing_partner') {
-          const partner = await StaffingPartner.findOne({ user: targetUser._id });
-          if (partner && partner.assignedTo && partner.assignedTo.toString() === req.user._id.toString()) {
-            isAssigned = true;
-          }
-        } else if (targetUser.role === 'company' || targetUser.role === 'employer') {
-          const company = await Company.findOne({ user: targetUser._id });
-          if (company && company.assignedTo && company.assignedTo.toString() === req.user._id.toString()) {
-            isAssigned = true;
-          }
-        }
-        
-        if (!isAssigned) {
-          return res.status(403).json({
-            success: false,
-            message: 'You are not authorized to update this user as they are not assigned to you.'
-          });
-        }
       }
     }
 
@@ -1413,13 +1332,7 @@ exports.getPendingJobs = async (req, res) => {
 
     const query = { approvalStatus: { $in: statusFilter } };
 
-    // Restrict sub-admins to their assigned jobs, unless they have the VIEW_UNASSIGNED_JOBS permission
-    if (req.user.role === 'sub_admin') {
-      const hasViewUnassigned = req.user.permissions && req.user.permissions.includes('VIEW_UNASSIGNED_JOBS');
-      if (!hasViewUnassigned) {
-        query.assignedTo = req.user._id;
-      }
-    }
+    // Sub-admins can see all pending jobs
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -1465,12 +1378,7 @@ exports.getPendingJobs = async (req, res) => {
 
     // ✅ Summary by approvalStatus
     const matchStage = {};
-    if (req.user.role === 'sub_admin') {
-      const hasViewUnassigned = req.user.permissions && req.user.permissions.includes('VIEW_UNASSIGNED_JOBS');
-      if (!hasViewUnassigned) {
-        matchStage.assignedTo = req.user._id;
-      }
-    }
+    // Sub-admins stats can see all pending jobs
 
     const statusSummary = await Job.aggregate([
       { $match: matchStage },
@@ -1532,14 +1440,7 @@ exports.approveJob = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not assigned to this job post. Only the assigned sub-admin or main admin can approve it.'
-        });
-      }
-    }
+    // Sub-admins can approve any job
 
     if (job.approvalStatus !== 'PENDING_APPROVAL') {
       return res.status(400).json({
@@ -1647,14 +1548,7 @@ exports.rejectJob = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      if (!job.assignedTo || job.assignedTo.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not assigned to this job post. Only the assigned sub-admin or main admin can reject it.'
-        });
-      }
-    }
+    // Sub-admins can reject any job
 
     if (job.approvalStatus !== 'PENDING_APPROVAL') {
       return res.status(400).json({
@@ -1752,14 +1646,7 @@ exports.getPendingEditRequests = async (req, res) => {
     if (priority) query.priority = priority;
 
     // Restrict sub-admins
-    if (req.user.role === 'sub_admin') {
-      const hasViewUnassignedEdit = req.user.permissions?.includes('VIEW_UNASSIGNED_EDIT_REQUESTS');
-      if (!hasViewUnassignedEdit) {
-        const assignedJobs = await Job.find({ assignedTo: req.user._id }).select('_id');
-        const assignedJobIds = assignedJobs.map(j => j._id);
-        query.job = { $in: assignedJobIds };
-      }
-    }
+    // Sub-admins can see all pending edit requests
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -1851,17 +1738,7 @@ exports.getEditRequest = async (req, res) => {
     }
 
     // Restrict sub-admins
-    if (req.user.role === 'sub_admin') {
-      const hasViewUnassignedEdit = req.user.permissions?.includes('VIEW_UNASSIGNED_EDIT_REQUESTS');
-      if (!hasViewUnassignedEdit) {
-        if (!editRequest.job || String(editRequest.job.assignedTo) !== String(req.user._id)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Unauthorized. This job is not assigned to you.'
-          });
-        }
-      }
-    }
+    // Sub-admins can view details of any edit request
 
     const allEditRequests = await JobEditRequest.find({
       job: editRequest.job._id
@@ -1907,17 +1784,7 @@ exports.approveEditRequest = async (req, res) => {
     }
 
     // Restrict sub-admins
-    if (req.user.role === 'sub_admin') {
-      const hasViewUnassignedEdit = req.user.permissions?.includes('VIEW_UNASSIGNED_EDIT_REQUESTS');
-      if (!hasViewUnassignedEdit) {
-        if (!editRequest.job || String(editRequest.job.assignedTo) !== String(req.user._id)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Unauthorized. This job is not assigned to you.'
-          });
-        }
-      }
-    }
+    // Sub-admins can approve any edit request
 
     if (editRequest.status !== 'PENDING') {
       return res.status(400).json({
@@ -2068,17 +1935,7 @@ exports.rejectEditRequest = async (req, res) => {
     }
 
     // Restrict sub-admins
-    if (req.user.role === 'sub_admin') {
-      const hasViewUnassignedEdit = req.user.permissions?.includes('VIEW_UNASSIGNED_EDIT_REQUESTS');
-      if (!hasViewUnassignedEdit) {
-        if (!editRequest.job || String(editRequest.job.assignedTo) !== String(req.user._id)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Unauthorized. This job is not assigned to you.'
-          });
-        }
-      }
-    }
+    // Sub-admins can reject any edit request
 
     if (editRequest.status !== 'PENDING') {
       return res.status(400).json({
@@ -2210,16 +2067,7 @@ exports.discontinueJob = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      const hasViewAllJobs = req.user.permissions?.includes('VIEW_ALL_JOBS');
-      const isAssigned = job.assignedTo && job.assignedTo.toString() === req.user._id.toString();
-      if (!hasViewAllJobs && !isAssigned) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not assigned to this job post. Only the assigned sub-admin or main admin can discontinue it.'
-        });
-      }
-    }
+    // Sub-admins can discontinue any job
 
     if (job.approvalStatus === 'DISCONTINUED') {
       return res.status(400).json({
@@ -2427,9 +2275,7 @@ exports.getAllJobs = async (req, res) => {
     if (status) query.status = status;
     if (approvalStatus) query.approvalStatus = approvalStatus;
     if (company) query.company = company;
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_JOBS')) {
-      query.assignedTo = req.user._id;
-    }
+    // Sub-admins can see all jobs
     if (search) {
       query.$or = [
         { title: new RegExp(search, 'i') },
@@ -2448,24 +2294,37 @@ exports.getAllJobs = async (req, res) => {
       Job.find(query)
         .populate('company', 'companyName kyc.industry uniqueId')
         .populate('postedBy', 'email')
+        .populate('assignedTo', 'email role')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(sanitizedLimit),
       Job.countDocuments(query)
     ]);
 
-    const statusSummary = await Job.aggregate([
-      { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+    // Build scoped summary match (same filters except status/search for global tab counts)
+    const summaryMatch = {};
+    // Sub-admins stats can see all jobs
+    if (company) summaryMatch.company = new (require('mongoose').Types.ObjectId)(company);
+
+    const [statusSummary, totalJobs] = await Promise.all([
+      Job.aggregate([
+        { $match: summaryMatch },
+        { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+      ]),
+      Job.countDocuments(summaryMatch)
     ]);
 
     res.json({
       success: true,
       data: {
         jobs,
-        summary: statusSummary.reduce((acc, item) => {
-          acc[item._id] = item.count;
-          return acc;
-        }, {}),
+        summary: {
+          ...statusSummary.reduce((acc, item) => {
+            acc[item._id] = item.count;
+            return acc;
+          }, {}),
+          TOTAL: totalJobs
+        },
         pagination: {
           current: sanitizedPage,
           pages: Math.ceil(total / sanitizedLimit),
@@ -2504,22 +2363,7 @@ exports.getJobDetail = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      const hasViewAllJobs = req.user.permissions?.includes('VIEW_ALL_JOBS');
-      const isAssigned = job.assignedTo && job.assignedTo._id.toString() === req.user._id.toString();
-      
-      if (!hasViewAllJobs && !isAssigned) {
-        const isPending = job.approvalStatus === 'PENDING_APPROVAL' || job.approvalStatus === 'EDIT_REQUESTED';
-        const canViewUnassignedJobs = req.user.permissions?.includes('VIEW_UNASSIGNED_JOBS');
-        
-        if (!(isPending && canViewUnassignedJobs)) {
-          return res.status(403).json({
-            success: false,
-            message: 'Unauthorized. This job is not assigned to you.'
-          });
-        }
-      }
-    }
+    // Sub-admins can view details of any job
 
     const candidates = await Candidate.find({ job: job._id })
       .populate('submittedBy', 'firmName firstName lastName')
@@ -2577,11 +2421,7 @@ exports.getAllCandidates = async (req, res) => {
     if (job) query.job = job;
     if (company) query.company = company;
     if (partner) query.submittedBy = partner;
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_CANDIDATES')) {
-      const assignedJobs = await Job.find({ assignedTo: req.user._id }).select('_id');
-      const assignedJobIds = assignedJobs.map(j => j._id);
-      query.job = { $in: assignedJobIds };
-    }
+    // Sub-admins can see all candidates
     if (search) {
       query.$or = [
         { firstName: new RegExp(search, 'i') },
@@ -2657,18 +2497,7 @@ exports.getCandidateDetail = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      const hasViewAll = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
-      if (!hasViewAll) {
-        const jobObj = await Job.findById(candidate.job?._id || candidate.job);
-        if (!jobObj || !jobObj.assignedTo || jobObj.assignedTo.toString() !== req.user._id.toString()) {
-          return res.status(403).json({
-            success: false,
-            message: 'You are not assigned to this candidate\'s job post. Access denied.'
-          });
-        }
-      }
-    }
+    // Sub-admins can view any candidate details
 
     res.json({
       success: true,
@@ -2704,9 +2533,7 @@ exports.getAllPartners = async (req, res) => {
       ];
     }
 
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_PARTNERS')) {
-      query.assignedTo = req.user._id;
-    }
+    // Sub-admins can see all partners
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -2724,9 +2551,7 @@ exports.getAllPartners = async (req, res) => {
     ]);
 
     const matchStage = {};
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_PARTNERS')) {
-      matchStage.assignedTo = req.user._id;
-    }
+    // Sub-admins stats can see all partners
 
     const statusSummary = await StaffingPartner.aggregate([
       { $match: matchStage },
@@ -2763,12 +2588,14 @@ exports.getPartnerDetail = async (req, res) => {
   try {
     let partner = await StaffingPartner.findById(req.params.id)
       .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
-      .populate('verifiedBy', 'email role');
+      .populate('verifiedBy', 'email role')
+      .populate('assignedTo', 'email role');
 
     if (!partner) {
       partner = await StaffingPartner.findOne({ user: req.params.id })
         .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
-        .populate('verifiedBy', 'email role');
+        .populate('verifiedBy', 'email role')
+        .populate('assignedTo', 'email role');
     }
 
     if (!partner) {
@@ -2778,14 +2605,7 @@ exports.getPartnerDetail = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_PARTNERS')) {
-      if (!partner.assignedTo || partner.assignedTo.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not authorized to view this staffing partner as they are not assigned to you.'
-        });
-      }
-    }
+    // Sub-admins can view any partner details
 
     // Get submission and placement stats
     const submissionStats = await Candidate.aggregate([
@@ -2869,9 +2689,7 @@ exports.getAllCompanies = async (req, res) => {
       query._id = { $in: activeCompanyIds };
     }
 
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_COMPANIES')) {
-      query.assignedTo = req.user._id;
-    }
+    // Sub-admins can see all companies
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -2889,9 +2707,7 @@ exports.getAllCompanies = async (req, res) => {
     ]);
 
     const matchStage = {};
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_COMPANIES')) {
-      matchStage.assignedTo = req.user._id;
-    }
+    // Sub-admins stats can see all companies
 
     const statusSummary = await Company.aggregate([
       { $match: matchStage },
@@ -2928,12 +2744,14 @@ exports.getCompanyDetail = async (req, res) => {
   try {
     let company = await Company.findById(req.params.id)
       .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
-      .populate('verifiedBy', 'email role');
+      .populate('verifiedBy', 'email role')
+      .populate('assignedTo', 'email role');
 
     if (!company) {
       company = await Company.findOne({ user: req.params.id })
         .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
-        .populate('verifiedBy', 'email role');
+        .populate('verifiedBy', 'email role')
+        .populate('assignedTo', 'email role');
     }
 
     if (!company) {
@@ -2943,14 +2761,7 @@ exports.getCompanyDetail = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_COMPANIES')) {
-      if (!company.assignedTo || company.assignedTo.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not authorized to view this company as they are not assigned to you.'
-        });
-      }
-    }
+    // Sub-admins can view any company details
 
     // Get job stats
     const jobStats = await Job.aggregate([
@@ -3025,9 +2836,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
     if (status) query.status = status;
     if (approvalStatus) query.approvalStatus = approvalStatus;
     if (company) query.company = company;
-    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_JOBS')) {
-      query.assignedTo = req.user._id;
-    }
+    // Sub-admins can see all jobs with candidates
     if (search) {
       query.$or = [
         { title: new RegExp(search, 'i') },
@@ -3057,6 +2866,20 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         }
       },
       { $unwind: { path: '$companyInfo', preserveNullAndEmptyArrays: true } },
+
+      // ✅ Lookup assignedTo info
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedTo',
+          foreignField: '_id',
+          as: 'assignedToInfo',
+          pipeline: [
+            { $project: { email: 1, role: 1 } }
+          ]
+        }
+      },
+      { $unwind: { path: '$assignedToInfo', preserveNullAndEmptyArrays: true } },
 
       // ✅ Lookup ALL candidates for this job
       {
@@ -3205,7 +3028,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
           isFeatured: 1,
           eligiblePlans: 1,
           createdAt: 1,
-          assignedTo: 1,
+          assignedTo: '$assignedToInfo',
 
           // Company
           company: {
@@ -3291,20 +3114,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         slotsRemaining: job.slotsRemaining
       };
 
-      if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_ALL_CANDIDATES')) {
-        const isAssigned = job.assignedTo && job.assignedTo.toString() === req.user._id.toString();
-        if (!isAssigned) {
-          jobCandidates = [];
-          jobStats.totalCandidates = 0;
-          jobStats.candidateStatusBreakdown = {
-            draft: 0, consentPending: 0, adminReview: 0, submitted: 0, shortlisted: 0,
-            interviewScheduled: 0, interviewed: 0, offered: 0, offerAccepted: 0, joined: 0,
-            rejected: 0, withdrawn: 0
-          };
-          jobStats.slotsUsed = 0;
-          jobStats.slotsRemaining = job.totalSlots;
-        }
-      }
+      // Sub-admins can see all candidates metrics
 
       return {
         ...job,
@@ -3389,27 +3199,7 @@ exports.getJobWithCandidates = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      const hasViewAllJobs = req.user.permissions?.includes('VIEW_ALL_JOBS');
-      const hasViewAllCandidates = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
-      const isAssigned = job.assignedTo && job.assignedTo.toString() === req.user._id.toString();
-
-      // Check job access
-      if (!hasViewAllJobs && !isAssigned) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: You are not assigned to this job post.'
-        });
-      }
-
-      // Check candidate access
-      if (!hasViewAllCandidates && !isAssigned) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied: You must be assigned to this job or have VIEW_ALL_CANDIDATES permission to view its candidates.'
-        });
-      }
-    }
+    // Sub-admins can view candidates for any job
 
     // ✅ Get ALL candidates for this job with full details
     const candidates = await Candidate.find({ job: job._id })
@@ -3583,18 +3373,7 @@ exports.withdrawCandidateByAdmin = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      const hasViewAll = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
-      if (!hasViewAll) {
-        const jobObj = await Job.findById(candidate.job?._id || candidate.job);
-        if (!jobObj || !jobObj.assignedTo || jobObj.assignedTo.toString() !== req.user._id.toString()) {
-          return res.status(403).json({
-            success: false,
-            message: 'You are not assigned to this job post. Only the assigned sub-admin or main admin can withdraw this candidate.'
-          });
-        }
-      }
-    }
+    // Sub-admins can withdraw candidates of any job
 
     // Admin can withdraw from any status except already terminal ones
     const terminalStatuses = ['WITHDRAWN', 'JOINED'];
@@ -3717,20 +3496,11 @@ exports.updateJobStatusByAdmin = async (req, res) => {
       });
     }
 
-    if (req.user.role === 'sub_admin') {
-      const hasViewAllJobs = req.user.permissions?.includes('VIEW_ALL_JOBS');
-      const isAssigned = job.assignedTo && job.assignedTo.toString() === req.user._id.toString();
-      if (!hasViewAllJobs && !isAssigned) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not assigned to this job post. Only the assigned sub-admin or main admin can update its status.'
-        });
-      }
-    }
+    // Sub-admins can update status of any job
 
     const oldStatus = job.status;
     job.status = status;
-    
+
     // Sync approvalStatus based on active/closed status
     if (status === 'CLOSED') {
       job.approvalStatus = 'DISCONTINUED';
@@ -3776,7 +3546,7 @@ exports.updateJobStatusByAdmin = async (req, res) => {
 exports.assignJob = async (req, res) => {
   try {
     const { subAdminId } = req.body;
-    
+
     // Only main admin can assign
     if (req.user.role !== 'admin') {
       return res.status(403).json({
@@ -3792,7 +3562,6 @@ exports.assignJob = async (req, res) => {
         message: 'Job not found'
       });
     }
-
     if (job.assignedTo) {
       return res.status(400).json({
         success: false,
@@ -3958,7 +3727,6 @@ exports.bulkAssignJobs = async (req, res) => {
         message: 'No matching jobs found'
       });
     }
-
     const alreadyAssigned = jobs.filter(job => job.assignedTo);
     if (alreadyAssigned.length > 0) {
       const titles = alreadyAssigned.map(j => `"${j.title}"`).join(', ');
@@ -4115,7 +3883,10 @@ exports.assignVerification = async (req, res) => {
       });
     }
 
-    const application = await model.findById(id);
+    let application = await model.findById(id);
+    if (!application) {
+      application = await model.findOne({ user: id });
+    }
     if (!application) {
       return res.status(404).json({
         success: false,
@@ -4221,7 +3992,10 @@ exports.revokeVerificationAssignment = async (req, res) => {
       });
     }
 
-    const application = await model.findById(id).populate('assignedTo', 'email');
+    let application = await model.findById(id).populate('assignedTo', 'email');
+    if (!application) {
+      application = await model.findOne({ user: id }).populate('assignedTo', 'email');
+    }
     if (!application) {
       return res.status(404).json({
         success: false,

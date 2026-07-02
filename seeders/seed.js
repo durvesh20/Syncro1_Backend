@@ -87,7 +87,7 @@ const seedDatabase = async () => {
           "APPROVE_COMPANY",
           "REJECT_COMPANY",
           "APPROVE_JOB",
-           "REJECT_JOB",
+          "REJECT_JOB",
           "UPDATE_JOB_STATUS",
           "VIEW_JOB_EDIT_HISTORY",
           "VIEW_UNASSIGNED_EDIT_REQUESTS",

@@ -314,6 +314,7 @@ class CandidateQueueService {
         if (!candidate) throw new Error('Candidate not found');
 
         const userObj = await User.findById(adminUserId);
+        /*
         if (userObj && userObj.role === 'sub_admin') {
             const hasViewAll = userObj.permissions?.includes('VIEW_ALL_CANDIDATES');
             if (!hasViewAll) {
@@ -323,6 +324,7 @@ class CandidateQueueService {
                 }
             }
         }
+        */
 
         if (candidate.status !== 'ADMIN_REVIEW') {
             throw new Error(`Cannot approve candidate with status: ${candidate.status}`);
@@ -371,6 +373,7 @@ class CandidateQueueService {
         if (!candidate) throw new Error('Candidate not found');
 
         const userObj = await User.findById(adminUserId);
+        /*
         if (userObj && userObj.role === 'sub_admin') {
             const hasViewAll = userObj.permissions?.includes('VIEW_ALL_CANDIDATES');
             if (!hasViewAll) {
@@ -380,6 +383,7 @@ class CandidateQueueService {
                 }
             }
         }
+        */
 
         if (candidate.status !== 'ADMIN_REVIEW') {
             throw new Error(`Cannot reject candidate with status: ${candidate.status}`);
