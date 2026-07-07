@@ -12,6 +12,7 @@ const JobInterest = require('../models/JobInterest');
 const InterviewSlot = require('../models/InterviewSlot');
 const candidateQueueService = require('../services/candidateQueueService');
 const whatsappService = require('../services/whatsappService');
+const { transition, ACTIONS, PIPELINE_STATES } = require('../services/pipelineStateMachine');
 
 // ============================================================
 // PROFILE ROUTES
@@ -1632,12 +1633,12 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
       return d;
     };
 
-    // Get partner's shortlisted candidates for this job
+    // Get partner's shortlisted / slots published candidates for this job
     const partnerCandidates = await Candidate.find({
       job: req.params.jobId,
       submittedBy: partner._id,
-      status: 'SHORTLISTED', // Only shortlisted ones can be assigned
-    }).select('firstName lastName email mobile status assignedSlot profile.currentDesignation');
+      status: { $in: ['SHORTLISTED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED'] },
+    }).select('firstName lastName email mobile status assignedSlot profile.currentDesignation rounds');
 
     // For each slot show what partner needs to know
     const formattedSlots = slots.map((slot) => {
@@ -1658,6 +1659,7 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
         isFull: slot.availableSpots === 0,
         notes: slot.notes,
         interviewMode: slot.interviewMode || '',
+        roundType: slot.roundType || '',
         // How many of YOUR candidates are in this slot
         yourCandidatesBooked: partnerBookingsInSlot.length,
         isPast: getSlotDateTime(slot.date, slot.startTime) < now
@@ -1681,15 +1683,52 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
         totalSlots: futureSlots.length,
 
         // Partner's candidates eligible for slot assignment
-        yourShortlistedCandidates: partnerCandidates.map((c) => ({
-          candidateId: c._id,
-          name: `${c.firstName} ${c.lastName}`,
-          email: c.email,
-          designation: c.profile?.currentDesignation,
-          status: c.status,
-          alreadyAssigned: !!c.assignedSlot,
-          assignedSlotId: c.assignedSlot,
-        })),
+        yourShortlistedCandidates: partnerCandidates.map((c) => {
+          // Helper to identify the current active round info based on candidate status
+          const getActiveRoundInfo = (cand) => {
+            const status = cand.status;
+            if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+            const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+            if (hrStates.includes(status)) {
+              const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+              if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+            }
+            const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+            if (assessmentStates.includes(status)) {
+              const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+              if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+            }
+            const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+            if (offerStates.includes(status)) return null;
+            for (let i = 0; i < cand.rounds.length; i++) {
+              const r = cand.rounds[i];
+              const L_STATES = [
+                'SLOTS_NOT_PUBLISHED',
+                'SLOTS_PUBLISHED',
+                'SLOT_ASSIGNED',
+                'RESCHEDULE_REQUESTED',
+                'SLOT_DETAILS_SHARED',
+                'INTERVIEW_CONDUCTED',
+                'ROUND_ON_HOLD'
+              ];
+              if (L_STATES.includes(r.status)) return { index: i, round: r };
+            }
+            return null;
+          };
+
+          const activeRoundInfo = getActiveRoundInfo(c);
+
+          return {
+            candidateId: c._id,
+            name: `${c.firstName} ${c.lastName}`,
+            email: c.email,
+            designation: c.profile?.currentDesignation,
+            status: c.status,
+            alreadyAssigned: !!c.assignedSlot,
+            assignedSlotId: c.assignedSlot,
+            activeRoundType: activeRoundInfo ? activeRoundInfo.round.roundType : null
+          };
+        }),
       },
     });
   } catch (error) {
@@ -1742,22 +1781,57 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    // Candidate must be SHORTLISTED
-    if (candidate.status !== 'SHORTLISTED') {
+    // Candidate must be SHORTLISTED (legacy), SLOTS_PUBLISHED (pipeline), or SLOTS_NOT_PUBLISHED
+    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED') {
       return res.status(400).json({
         success: false,
-        message: `Only SHORTLISTED candidates can be assigned to slots. Current status: ${candidate.status}`,
+        message: `Only SHORTLISTED, SLOTS_PUBLISHED, or SLOTS_NOT_PUBLISHED candidates can be assigned to slots. Current status: ${candidate.status}`,
       });
     }
 
-    // Candidate must not already be assigned to a slot
+    // Candidate must not already be assigned to a slot in the current round
     if (candidate.assignedSlot) {
-      return res.status(400).json({
-        success: false,
-        message: 'Candidate is already assigned to a slot',
-        assignedSlotId: candidate.assignedSlot,
-        hint: 'Remove candidate from current slot before reassigning',
-      });
+      const assignedSlotDoc = await InterviewSlot.findById(candidate.assignedSlot);
+      const getActiveRoundInfoForCheck = (cand) => {
+        const status = cand.status;
+        if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+        const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+        if (hrStates.includes(status)) {
+          const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+          if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+        }
+        const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+        if (assessmentStates.includes(status)) {
+          const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+          if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+        }
+        const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+        if (offerStates.includes(status)) return null;
+        for (let i = 0; i < cand.rounds.length; i++) {
+          const r = cand.rounds[i];
+          const L_STATES = [
+            'SLOTS_NOT_PUBLISHED',
+            'SLOTS_PUBLISHED',
+            'SLOT_ASSIGNED',
+            'RESCHEDULE_REQUESTED',
+            'SLOT_DETAILS_SHARED',
+            'INTERVIEW_CONDUCTED',
+            'ROUND_ON_HOLD'
+          ];
+          if (L_STATES.includes(r.status)) return { index: i, round: r };
+        }
+        return null;
+      };
+
+      const activeRoundInfo = getActiveRoundInfoForCheck(candidate);
+      if (assignedSlotDoc && activeRoundInfo && assignedSlotDoc.roundType === activeRoundInfo.round.roundType) {
+        return res.status(400).json({
+          success: false,
+          message: 'Candidate is already assigned to a slot in this round',
+          assignedSlotId: candidate.assignedSlot,
+          hint: 'Remove candidate from current slot before reassigning',
+        });
+      }
     }
 
     // ── Validate slot ─────────────────────────────────────────────────
@@ -1819,6 +1893,46 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
+    // ── Check if candidate active round matches slot roundType ──────────
+    const getActiveRoundInfoForValidation = (cand) => {
+      const status = cand.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+      }
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      if (assessmentStates.includes(status)) {
+        const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+      }
+      const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+      if (offerStates.includes(status)) return null;
+      for (let i = 0; i < cand.rounds.length; i++) {
+        const r = cand.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    const activeInfo = getActiveRoundInfoForValidation(candidate);
+    if (activeInfo && slot.roundType && activeInfo.round.roundType !== slot.roundType) {
+      return res.status(400).json({
+        success: false,
+        message: `This slot is for ${slot.roundType.replace('_', ' ')}, but the candidate's current round is ${activeInfo.round.roundType.replace('_', ' ')}.`,
+      });
+    }
+
     // ── Book the candidate ────────────────────────────────────────────
     slot.bookedCandidates.push({
       candidate: candidateId,
@@ -1837,21 +1951,89 @@ exports.assignCandidateToSlot = async (req, res) => {
 
     await slot.save();
 
+    // Helper to identify the current active round info based on candidate status
+    const getActiveRoundInfo = (c) => {
+      const status = c.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      if (assessmentStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+      if (offerStates.includes(status)) return null;
+      for (let i = 0; i < c.rounds.length; i++) {
+        const r = c.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
     // ── Update candidate ──────────────────────────────────────────────
     candidate.assignedSlot = slot._id;
-    candidate.status = 'SLOT_ASSIGNED';
+    const oldStatus = candidate.status;
+
+    if (oldStatus === 'SLOTS_PUBLISHED') {
+      const fsmResult = transition({
+        currentState: oldStatus,
+        action: ACTIONS.BOOK_SLOT,
+        role: 'staffing_partner',
+      });
+      if (!fsmResult.ok) {
+        return res.status(400).json({ success: false, message: fsmResult.error });
+      }
+      candidate.status = fsmResult.nextState;
+    } else {
+      candidate.status = 'SLOT_ASSIGNED';
+    }
+
+    const activeRoundInfo = getActiveRoundInfo(candidate);
+    if (activeRoundInfo) {
+      const { round } = activeRoundInfo;
+      round.status = candidate.status;
+      round.slots = [{
+        date: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        timezone: slot.timezone || 'Asia/Kolkata',
+        mode: slot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
+        interviewerName: slot.notes || '',
+        capacity: 1,
+        bookedBy: partner._id,
+        bookedAt: new Date(),
+        details: {
+          meetingLink: '',
+          address: '',
+          pointOfContact: { name: '', phone: '', email: '' }
+        }
+      }];
+    }
 
     // Record in interviews array for history
     candidate.interviews.push({
       round: candidate.interviews.length + 1,
       slot: slot._id,
       scheduledAt: slot.date,
-      type: 'Video', // Defaulting to Video for now
+      type: slot.interviewMode === 'Face-to-Face' ? 'Face-to-Face' : 'Video',
       result: 'PENDING'
     });
 
     candidate.statusHistory.push({
-      status: 'SLOT_ASSIGNED',
+      status: candidate.status,
       changedBy: req.user._id,
       changedAt: new Date(),
       changedByRole: 'PARTNER',
@@ -1863,6 +2045,21 @@ exports.assignCandidateToSlot = async (req, res) => {
         endTime: slot.endTime,
       },
     });
+
+    // Write audit trail if candidate has pipeline
+    if (activeRoundInfo) {
+      candidate.auditTrail = candidate.auditTrail || [];
+      candidate.auditTrail.push({
+        actorId: req.user._id,
+        actorRole: 'staffing_partner',
+        action: ACTIONS.BOOK_SLOT,
+        fromState: oldStatus,
+        toState: candidate.status,
+        reason: `Slot booked on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}`,
+        roundIndex: activeRoundInfo.index,
+        timestamp: new Date()
+      });
+    }
 
     await candidate.save();
 
@@ -1943,23 +2140,78 @@ exports.removeCandidateFromSlot = async (req, res) => {
 
     await slot.save();
 
-    // Update candidate status back to SHORTLISTED
-    await Candidate.findByIdAndUpdate(req.params.candidateId, {
-      $set: {
-        assignedSlot: null,
-        status: 'SHORTLISTED',
-      },
-      $push: {
-        statusHistory: {
-          status: 'SHORTLISTED',
-          changedBy: req.user._id,
-          changedAt: new Date(),
-          changedByRole: 'PARTNER',
-          notes: 'Removed from interview slot — back to shortlisted',
-          metadata: { removedFromSlot: slot._id },
-        },
-      },
+    const candidate = await Candidate.findById(req.params.candidateId);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found' });
+    }
+
+    const oldStatus = candidate.status;
+    let nextStatus = 'SHORTLISTED';
+
+    const getActiveRoundInfo = (c) => {
+      const status = c.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      if (assessmentStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+      if (offerStates.includes(status)) return null;
+      for (let i = 0; i < c.rounds.length; i++) {
+        const r = c.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    const activeRoundInfo = getActiveRoundInfo(candidate);
+    if (activeRoundInfo) {
+      nextStatus = 'SLOTS_PUBLISHED';
+      activeRoundInfo.round.status = nextStatus;
+      activeRoundInfo.round.slots = [];
+    }
+
+    candidate.assignedSlot = null;
+    candidate.status = nextStatus;
+    candidate.statusHistory.push({
+      status: nextStatus,
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: 'PARTNER',
+      notes: 'Removed from interview slot by partner — slots available again',
+      metadata: { removedFromSlot: slot._id },
     });
+
+    if (activeRoundInfo) {
+      candidate.auditTrail = candidate.auditTrail || [];
+      candidate.auditTrail.push({
+        actorId: req.user._id,
+        actorRole: 'staffing_partner',
+        action: ACTIONS.REQUEST_RESCHEDULE,
+        fromState: oldStatus,
+        toState: nextStatus,
+        reason: 'Removed from interview slot by partner',
+        roundIndex: activeRoundInfo.index,
+        timestamp: new Date()
+      });
+    }
+
+    await candidate.save();
 
     res.json({
       success: true,
@@ -2083,7 +2335,7 @@ exports.getMySubmissions = async (req, res) => {
 
     const query = { submittedBy: partner._id };
     if (isInterview === 'true') {
-      query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED'] };
+      query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] };
     } else if (status) {
       query.status = status;
     }
@@ -2130,7 +2382,7 @@ exports.getMySubmissions = async (req, res) => {
       query.$and = andConditions;
     }
 
-    const [submissions, total] = await Promise.all([
+    const [rawSubmissions, total] = await Promise.all([
       Candidate.find(query)
         .populate('job', 'title company commission')
         .populate('company', 'companyName')
@@ -2145,9 +2397,19 @@ exports.getMySubmissions = async (req, res) => {
           'resume interviewConfig whatsappConsent.status resumeAnalysis.profileScore ' +
           'resumeAnalysis.matchLevel createdAt job company assignedSlot'
         )
-        .populate('assignedSlot', 'date startTime endTime status interviewMode'),
+        .populate('assignedSlot', 'date startTime endTime status interviewMode')
+        .lean(),
       Candidate.countDocuments(query)
     ]);
+
+    const submissions = rawSubmissions.map(sub => {
+      if (sub.status === 'ROUND_ON_HOLD') {
+        sub.status = 'INTERVIEW_CONDUCTED';
+      } else if (sub.status === 'HR_ON_HOLD') {
+        sub.status = 'HR_ROUND_PENDING';
+      }
+      return sub;
+    });
 
     res.json({
       success: true,
@@ -2171,6 +2433,58 @@ exports.getMySubmissions = async (req, res) => {
   }
 };
 
+async function checkAndElevateCandidateStatus(candidate, userId) {
+  if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    return;
+  }
+  
+  const InterviewSlot = require('../models/InterviewSlot');
+  const getActiveRoundInfoLocal = (c) => {
+    for (let i = 0; i < c.rounds.length; i++) {
+      const r = c.rounds[i];
+      if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED') {
+        return { index: i, round: r };
+      }
+    }
+    return null;
+  };
+
+  const activeRoundInfo = getActiveRoundInfoLocal(candidate);
+  if (!activeRoundInfo) return;
+
+  const jobId = candidate.job?._id || candidate.job;
+  const activeSlots = await InterviewSlot.find({
+    job: jobId,
+    roundType: activeRoundInfo.round.roundType,
+    status: 'ACTIVE'
+  });
+
+  if (activeSlots.length > 0) {
+    candidate.status = 'SLOTS_PUBLISHED';
+    activeRoundInfo.round.status = 'SLOTS_PUBLISHED';
+    candidate.statusHistory.push({
+      status: 'SLOTS_PUBLISHED',
+      changedBy: userId || candidate._id,
+      changedAt: new Date(),
+      notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
+    });
+    
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: userId || candidate._id,
+      actorRole: 'system',
+      action: 'PUBLISH_SLOTS',
+      fromState: 'SLOTS_NOT_PUBLISHED',
+      toState: 'SLOTS_PUBLISHED',
+      reason: 'Active slots exist for the job',
+      roundIndex: activeRoundInfo.index,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+  }
+}
+
 // @desc    Get Single Submission
 // @route   GET /api/staffing-partners/submissions/:id
 exports.getSubmission = async (req, res) => {
@@ -2192,9 +2506,18 @@ exports.getSubmission = async (req, res) => {
       });
     }
 
+    await checkAndElevateCandidateStatus(submission, req.user._id);
+
+    const submissionObj = submission.toObject();
+    if (submissionObj.status === 'ROUND_ON_HOLD') {
+      submissionObj.status = 'INTERVIEW_CONDUCTED';
+    } else if (submissionObj.status === 'HR_ON_HOLD') {
+      submissionObj.status = 'HR_ROUND_PENDING';
+    }
+
     res.json({
       success: true,
-      data: submission
+      data: submissionObj
     });
   } catch (error) {
     res.status(500).json({
@@ -2588,7 +2911,7 @@ exports.getDashboard = async (req, res) => {
     // 2. Shortlisted Jobs Count (unique jobs with shortlisted/interview/joined candidate)
     const shortlistedJobs = await Candidate.distinct('job', {
       submittedBy: partner._id,
-      status: { $in: ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'] }
+      status: { $in: ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'] }
     });
     const totalShortlistedJobs = shortlistedJobs.length;
 
@@ -2607,7 +2930,7 @@ exports.getDashboard = async (req, res) => {
     // 5. Active Interviews count
     const activeInterviewsCount = await Candidate.countDocuments({
       submittedBy: partner._id,
-      status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED'] }
+      status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] }
     });
 
     // 6. Calculate monthly placements for the last 6 months dynamically
@@ -2653,16 +2976,42 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
-    const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
+    const rawRecentSubmissions = await Candidate.find({ submittedBy: partner._id })
       .populate('job', 'title')
       .populate('company', 'companyName')
       .sort({ createdAt: -1 })
-      .limit(5);
+      .limit(5)
+      .lean();
+
+    const recentSubmissions = rawRecentSubmissions.map(sub => {
+      if (sub.status === 'ROUND_ON_HOLD') {
+        sub.status = 'INTERVIEW_CONDUCTED';
+      } else if (sub.status === 'HR_ON_HOLD') {
+        sub.status = 'HR_ROUND_PENDING';
+      }
+      return sub;
+    });
 
     const statusBreakdown = await Candidate.aggregate([
       { $match: { submittedBy: partner._id } },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
+
+    const mappedStatusBreakdown = [];
+    statusBreakdown.forEach(item => {
+      let mappedStatus = item._id;
+      if (mappedStatus === 'ROUND_ON_HOLD') {
+        mappedStatus = 'INTERVIEW_CONDUCTED';
+      } else if (mappedStatus === 'HR_ON_HOLD') {
+        mappedStatus = 'HR_ROUND_PENDING';
+      }
+      const existing = mappedStatusBreakdown.find(x => x._id === mappedStatus);
+      if (existing) {
+        existing.count += item.count;
+      } else {
+        mappedStatusBreakdown.push({ _id: mappedStatus, count: item.count });
+      }
+    });
 
     const availableJobsCount = await jobAccessService.getAccessibleJobsCount(partner.subscription?.plan || 'FREE');
 
@@ -2750,7 +3099,7 @@ exports.getDashboard = async (req, res) => {
           }))
         },
         recentSubmissions,
-        statusBreakdown,
+        statusBreakdown: mappedStatusBreakdown,
         availableJobsCount,
         placementData
       }
@@ -3167,7 +3516,7 @@ exports.getWorkedJobs = async (req, res) => {
       const statuses = item.statusCounts || [];
       const hired = statuses.filter(s => s === 'HIRED').length;
       const rejected = statuses.filter(s => s === 'REJECTED').length;
-      const interviewing = statuses.filter(s => ['SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEWED'].includes(s)).length;
+      const interviewing = statuses.filter(s => ['SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEWED', 'SLOT_DETAILS_SHARED'].includes(s)).length;
       const active = statuses.length - hired - rejected - interviewing;
       return {
         job: {

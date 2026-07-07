@@ -1,5 +1,6 @@
 // backend/routes/companyRoutes.js
 const express = require('express');
+// NOTE: candidateRoutes.js handles public candidate-side offer routes (accept/reject via token).
 const router = express.Router();
 
 const {
@@ -55,6 +56,33 @@ const {
   updateSubAdminStatus,
   getPermissionsMeta
 } = require('../controllers/companyController');
+
+const {
+  pipelineShortlist,
+  pipelineReject,
+  pipelineReShortlist,
+  definePipelineTemplate,
+  defineJobPipelineTemplate,
+  getJobPipelineTemplate,
+  getPipelinePreview,
+  pipelineAssessmentPass,
+  pipelineAssessmentFail,
+  pipelinePublishSlots,
+  pipelineShareDetails,
+  pipelineRequestReschedule,
+  pipelineConfirmReschedule,
+  pipelineRejectReschedule,
+  pipelineMarkConducted,
+  pipelineSelectNextRound,
+  pipelineRejectRound,
+  pipelineSelectDirectHR,
+  pipelineHoldRound,
+  pipelineResolveHold,
+  pipelineHRSelect,
+  pipelineHRReject,
+  pipelineHRHold,
+  pipelineHRResolveHold,
+} = require('../controllers/pipelineController');
 
 const { protect, authorize, checkStatus, checkCompanyPermission } = require('../middleware/auth');
 const {
@@ -334,5 +362,49 @@ router.post('/candidates/:id/confirm-interview', checkStatus('VERIFIED', 'ACTIVE
 router.get('/interview-schedule', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), getInterviewSchedule);
 
 router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), addNote);
+
+// ==================== PIPELINE ROUTES (Phase 1–4) ====================
+// These sit alongside the existing candidate routes — no existing routes modified.
+const PIPELINE_MW = [checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES')];
+
+// Phase 1–2
+router.put('/candidates/:id/pipeline/shortlist',    ...PIPELINE_MW, pipelineShortlist);
+router.put('/candidates/:id/pipeline/reject',       ...PIPELINE_MW, pipelineReject);
+router.put('/candidates/:id/pipeline/re-shortlist', ...PIPELINE_MW, pipelineReShortlist);
+router.post('/candidates/:id/pipeline/template',    ...PIPELINE_MW, definePipelineTemplate);
+router.get('/candidates/:id/pipeline',              checkCompanyPermission('VIEW_CANDIDATES'), getPipelinePreview);
+
+// Job-level Pipeline Template Routes
+router.post('/jobs/:jobId/pipeline/template',        ...PIPELINE_MW, defineJobPipelineTemplate);
+router.get('/jobs/:jobId/pipeline/template',         checkCompanyPermission('VIEW_CANDIDATES'), getJobPipelineTemplate);
+
+// Phase 3
+router.post('/candidates/:id/pipeline/assessment/pass',   ...PIPELINE_MW, pipelineAssessmentPass);
+router.post('/candidates/:id/pipeline/assessment/fail',   ...PIPELINE_MW, pipelineAssessmentFail);
+router.post('/candidates/:id/pipeline/publish-slots',     ...PIPELINE_MW, pipelinePublishSlots);
+router.post('/candidates/:id/pipeline/share-details',     ...PIPELINE_MW, pipelineShareDetails);
+router.post('/candidates/:id/pipeline/reschedule',        ...PIPELINE_MW, pipelineRequestReschedule);
+router.post('/candidates/:id/pipeline/reschedule/confirm', ...PIPELINE_MW, pipelineConfirmReschedule);
+router.post('/candidates/:id/pipeline/reschedule/reject',  ...PIPELINE_MW, pipelineRejectReschedule);
+router.post('/candidates/:id/pipeline/mark-conducted',    ...PIPELINE_MW, pipelineMarkConducted);
+router.post('/candidates/:id/pipeline/select-next-round', ...PIPELINE_MW, pipelineSelectNextRound);
+router.post('/candidates/:id/pipeline/reject-round',       ...PIPELINE_MW, pipelineRejectRound);
+router.post('/candidates/:id/pipeline/select-direct-hr',  ...PIPELINE_MW, pipelineSelectDirectHR);
+router.post('/candidates/:id/pipeline/hold-round',        ...PIPELINE_MW, pipelineHoldRound);
+router.post('/candidates/:id/pipeline/resolve-hold',      ...PIPELINE_MW, pipelineResolveHold);
+router.post('/candidates/:id/pipeline/hr/select',         ...PIPELINE_MW, pipelineHRSelect);
+router.post('/candidates/:id/pipeline/hr/reject',         ...PIPELINE_MW, pipelineHRReject);
+router.post('/candidates/:id/pipeline/hr/hold',           ...PIPELINE_MW, pipelineHRHold);
+router.post('/candidates/:id/pipeline/hr/resolve-hold',   ...PIPELINE_MW, pipelineHRResolveHold);
+
+// Phase 4 — Offer & Onboarding
+const {
+  pipelineSendOffer,
+  pipelineConfirmOnboarding,
+  pipelineMarkJoined,
+} = require('../controllers/pipelineController');
+router.post('/candidates/:id/pipeline/offer/send',           ...PIPELINE_MW, pipelineSendOffer);
+router.post('/candidates/:id/pipeline/onboarding/confirm',   ...PIPELINE_MW, pipelineConfirmOnboarding);
+router.post('/candidates/:id/pipeline/mark-joined',          ...PIPELINE_MW, pipelineMarkJoined);
 
 module.exports = router;

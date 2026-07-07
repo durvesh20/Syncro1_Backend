@@ -721,6 +721,16 @@ router.delete(
 );
 
 
+// ==================== PIPELINE (Admin read-only + Audit Log) ====================
+const { adminGetPipeline, adminGetPipelineAuditLog, getJobPipelineTemplate } = require('../controllers/pipelineController');
+const { getJobInterviewSlots } = require('../controllers/companyController');
 
+router.get('/candidates/:id/pipeline', adminGetPipeline);
+router.get('/jobs/:jobId/pipeline/template', getJobPipelineTemplate);
+router.get('/jobs/:jobId/interview-slots', getJobInterviewSlots);
+
+// Phase 4: cross-candidate pipeline audit trail
+// GET /api/admin/pipeline/audit-log?page=1&limit=30&search=&action=&status=
+router.get('/pipeline/audit-log', adminGetPipelineAuditLog);
 
 module.exports = router;

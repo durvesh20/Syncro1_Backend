@@ -132,7 +132,7 @@ const candidateSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: [
-      // ✅ NEW STATUSES for new flow
+      // ── Pre-pipeline states (existing flow) ─────────────────────────────
       'DRAFT',                    // Partner filled details, awaiting consent
       'CONSENT_PENDING',          // WhatsApp consent sent to candidate
       'CONSENT_CONFIRMED',        // Candidate confirmed on WhatsApp
@@ -152,9 +152,28 @@ const candidateSchema = new mongoose.Schema({
       'WITHDRAWN',
       'ON_HOLD',
       'SLOT_ASSIGNED',
-      'INTERVIEW_SCHEDULED',
       'INTERVIEW_CONFIRMED',
-      'INTERVIEWED',
+
+      // ── Pipeline FSM states (§1.7) ──────────────────────────────────────
+      'ASSESSMENT_PENDING',
+      'ASSESSMENT_PASSED',
+      'ASSESSMENT_FAILED',
+      'SLOTS_NOT_PUBLISHED',
+      'SLOTS_PUBLISHED',
+      'SLOT_DETAILS_SHARED',
+      'RESCHEDULE_REQUESTED',
+      'INTERVIEW_CONDUCTED',
+      'ROUND_SELECTED_NEXT',
+      'ROUND_REJECTED',
+      'ROUND_SELECTED_DIRECT_HR',
+      'ROUND_ON_HOLD',
+      'HR_ROUND_PENDING',
+      'HR_SELECTED',
+      'HR_REJECTED',
+      'HR_ON_HOLD',
+      'OFFER_SENT',
+      'OFFER_REJECTED',
+      'ONBOARDING',
     ],
     default: 'DRAFT'
   },
@@ -215,7 +234,11 @@ const candidateSchema = new mongoose.Schema({
       type: String,
       enum: ['PENDING', 'ACCEPTED', 'DECLINED', 'NEGOTIATING']
     },
-    negotiationNotes: String
+    negotiationNotes: String,
+    // WhatsApp offer consent token
+    offerToken: { type: String, index: true },
+    offerWhatsappSentAt: Date,
+    offerExpiresAt: Date   // 7 days from send
   },
 
   // Joining Details
@@ -546,7 +569,135 @@ const candidateSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'PartnerCandidate',
     default: null
-  }
+  },
+
+
+  // ── Pipeline FSM sub-documents (additive — do not touch existing fields) ──
+
+  // Ordered list of rounds the Client defines for this candidate (per-candidate template)
+  pipelineTemplate: [
+    {
+      roundType: {
+        type: String,
+        required: true
+      },
+      order: { type: Number, required: true } // 1-based
+    }
+  ],
+
+  // Execution state for each round in the pipeline
+  rounds: [
+    {
+      roundType: {
+        type: String
+      },
+      order: Number,
+      status: { type: String, default: 'SLOTS_NOT_PUBLISHED' },
+
+      // Slots defined for this round (L-rounds only)
+      slots: [
+        {
+          date: Date,
+          startTime: String,
+          endTime: String,
+          timezone: { type: String, default: 'Asia/Kolkata' },
+          mode: { type: String, enum: ['FACE_TO_FACE', 'VIRTUAL'] },
+          interviewerName: String,
+          capacity: { type: Number, default: 1 },
+          publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+          bookedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'StaffingPartner' },
+          bookedAt: Date,
+          // Mode-specific details — filled at Step C (SHARE_DETAILS action)
+          details: {
+            address: String,
+            meetingLink: String,
+            pointOfContact: {
+              name: String,
+              phone: String,
+              email: String
+            }
+          }
+        }
+      ],
+
+      // Reschedule counters (candidate cap enforced server-side)
+      rescheduleCount: {
+        candidateInitiated: { type: Number, default: 0 },
+        clientInitiated: { type: Number, default: 0 },
+        partnerInitiated: { type: Number, default: 0 }
+      },
+
+      rescheduleRequest: {
+        status: { type: String, enum: ['PENDING', 'ACCEPTED', 'REJECTED'], default: 'PENDING' },
+        requestedBy: { type: String, enum: ['PARTNER', 'CANDIDATE', 'COMPANY'] },
+        reason: String,
+        requestedAt: Date,
+        suggestedSlots: [
+          {
+            slotId: mongoose.Schema.Types.ObjectId,
+            date: Date,
+            startTime: String,
+            endTime: String,
+            timezone: { type: String, default: 'Asia/Kolkata' },
+            mode: { type: String, enum: ['FACE_TO_FACE', 'VIRTUAL'] },
+            interviewerName: String
+          }
+        ],
+        selectedSlotId: mongoose.Schema.Types.ObjectId,
+        actionedAt: Date,
+        actionedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        rejectionReason: String
+      },
+
+      // Round outcome (set after INTERVIEW_CONDUCTED)
+      outcome: {
+        decision: {
+          type: String,
+          enum: ['SELECTED_NEXT_ROUND', 'REJECTED', 'SELECTED_DIRECT_HR', 'ON_HOLD']
+        },
+        reason: String,
+        decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        decidedAt: Date
+      },
+
+      // Hold resolution (set when resolving ROUND_ON_HOLD)
+      holdResolution: {
+        resolvedTo: String,
+        resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        resolvedAt: Date
+      }
+    }
+  ],
+
+  // HR round decision
+  hrRound: {
+    status: {
+      type: String,
+      enum: ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD']
+    },
+    reason: String,
+    decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    decidedAt: Date,
+    holdResolution: {
+      resolvedTo: String,
+      resolvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      resolvedAt: Date
+    }
+  },
+
+  // Immutable audit trail — one entry per FSM transition
+  auditTrail: [
+    {
+      actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      actorRole: String,
+      action: String,
+      fromState: String,
+      toState: String,
+      reason: String,
+      roundIndex: Number, // which round this pertains to (null for top-level actions)
+      timestamp: { type: Date, default: Date.now }
+    }
+  ],
 
 }, {
   timestamps: true

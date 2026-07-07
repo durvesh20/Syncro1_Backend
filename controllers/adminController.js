@@ -2479,6 +2479,58 @@ exports.getAllCandidates = async (req, res) => {
   }
 };
 
+async function checkAndElevateCandidateStatus(candidate, userId) {
+  if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    return;
+  }
+  
+  const InterviewSlot = require('../models/InterviewSlot');
+  const getActiveRoundInfoLocal = (c) => {
+    for (let i = 0; i < c.rounds.length; i++) {
+      const r = c.rounds[i];
+      if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED') {
+        return { index: i, round: r };
+      }
+    }
+    return null;
+  };
+
+  const activeRoundInfo = getActiveRoundInfoLocal(candidate);
+  if (!activeRoundInfo) return;
+
+  const jobId = candidate.job?._id || candidate.job;
+  const activeSlots = await InterviewSlot.find({
+    job: jobId,
+    roundType: activeRoundInfo.round.roundType,
+    status: 'ACTIVE'
+  });
+
+  if (activeSlots.length > 0) {
+    candidate.status = 'SLOTS_PUBLISHED';
+    activeRoundInfo.round.status = 'SLOTS_PUBLISHED';
+    candidate.statusHistory.push({
+      status: 'SLOTS_PUBLISHED',
+      changedBy: userId || candidate._id,
+      changedAt: new Date(),
+      notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
+    });
+    
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: userId || candidate._id,
+      actorRole: 'system',
+      action: 'PUBLISH_SLOTS',
+      fromState: 'SLOTS_NOT_PUBLISHED',
+      toState: 'SLOTS_PUBLISHED',
+      reason: 'Active slots exist for the job',
+      roundIndex: activeRoundInfo.index,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+  }
+}
+
 // @desc    Get single candidate full detail (admin)
 // @route   GET /api/admin/candidates/:id
 exports.getCandidateDetail = async (req, res) => {
@@ -2498,6 +2550,7 @@ exports.getCandidateDetail = async (req, res) => {
     }
 
     // Sub-admins can view any candidate details
+    await checkAndElevateCandidateStatus(candidate, req.user._id);
 
     res.json({
       success: true,
@@ -2958,7 +3011,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
             adminReview: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'ADMIN_REVIEW'] } } } },
             submitted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SUBMITTED'] } } } },
             shortlisted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SHORTLISTED'] } } } },
-            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'INTERVIEW_SCHEDULED'] } } } },
+            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', ['INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED']] } } } },
             interviewed: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'INTERVIEWED'] } } } },
             offered: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFERED'] } } } },
             offerAccepted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFER_ACCEPTED'] } } } },
@@ -3211,7 +3264,7 @@ exports.getJobWithCandidates = async (req, res) => {
         'resumeAnalysis.recommendation resumeAnalysis.scoreBreakdown ' +
         'resumeAnalysis.parsed resumeAnalysis.flags resumeAnalysis.advice ' +
         'whatsappConsent.status consent.consentStatus ' +
-        'offer interviews statusHistory adminQueue ' +
+        'offer interviews statusHistory adminQueue pipelineTemplate rounds ' +
         'submittedBy createdAt updatedAt'
       );
 

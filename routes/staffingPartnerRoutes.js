@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const StaffingPartner = require('../models/StaffingPartner');
+const { partnerGetPipeline, partnerRequestReschedule } = require('../controllers/pipelineController');
 
 const {
   getProfile,
@@ -294,6 +295,8 @@ router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', remove
 // ==================== SUBMISSIONS ROUTES ====================
 router.get('/submissions', getMySubmissions);
 router.get('/submissions/:id', getSubmission);
+router.get('/submissions/:id/pipeline', partnerGetPipeline);
+router.post('/submissions/:id/pipeline/reschedule', partnerRequestReschedule);
 router.get('/worked-jobs', getWorkedJobs);
 
 // @desc    Withdraw a submitted candidate

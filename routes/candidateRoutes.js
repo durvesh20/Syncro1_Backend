@@ -533,4 +533,25 @@ router.get("/interview/disagree/:token", async (req, res) => {
   }
 });
 
+// ================================================================
+// CANDIDATE OFFER LIFE-CYCLE ROUTES
+// ================================================================
+const {
+  pipelineGetOfferDetails,
+  pipelineCandidateAcceptOffer,
+  pipelineCandidateRejectOffer,
+} = require('../controllers/pipelineController');
+
+// @desc    Fetch offer review details
+// @route   GET /api/candidates/offer/review/:token
+router.get('/offer/review/:token', pipelineGetOfferDetails);
+
+// @desc    Candidate accepts offer via token
+// @route   POST /api/candidates/offer/accept/:token
+router.post('/offer/accept/:token', pipelineCandidateAcceptOffer);
+
+// @desc    Candidate rejects offer via token
+// @route   POST /api/candidates/offer/reject/:token
+router.post('/offer/reject/:token', pipelineCandidateRejectOffer);
+
 module.exports = router;

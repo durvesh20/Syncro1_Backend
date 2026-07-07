@@ -190,6 +190,13 @@ class CandidateLifecycleService {
           priority: 'high',
           sendEmail: true
         },
+        'SLOT_DETAILS_SHARED': {
+          type: 'CANDIDATE_INTERVIEW_SCHEDULED',
+          title: '📅 Interview scheduled',
+          message: `An interview has been scheduled for ${candidateName} for "${jobTitle}" at ${companyName}.`,
+          priority: 'high',
+          sendEmail: true
+        },
         'INTERVIEWED': {
           type: 'CANDIDATE_INTERVIEWED',
           title: '✅ Interview completed',

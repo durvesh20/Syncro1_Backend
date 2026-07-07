@@ -402,6 +402,122 @@ class WhatsAppService {
   }
 
   /**
+   * Send candidate offer using approved template: candidate_offer
+   *
+   * Template body:
+   * "Hi {{1}}, Congratulations! We are pleased to extend an offer for the role of {{2}} at {{3}} with an Annual CTC of {{4}}..."
+   *
+   * Buttons (Dynamic URL):
+   *   "Accept" → https://syncro1.com/offer/candidate/agree/{{token}}
+   *   "Reject" → https://syncro1.com/offer/candidate/disagree/{{token}}
+   */
+  async sendCandidateOffer(
+    phoneNumber,
+    candidateName,
+    jobTitle,
+    companyName,
+    salary,
+    offerToken
+  ) {
+    const formattedPhone = this._formatPhone(phoneNumber);
+
+    console.log('═══════════════════════════════════════');
+    console.log('📋 WhatsApp Candidate Offer');
+    console.log(`   Phone:   +${formattedPhone}`);
+    console.log(`   Name:    ${candidateName}`);
+    console.log(`   Job:     ${jobTitle}`);
+    console.log(`   Company: ${companyName}`);
+    console.log(`   Salary:  ${salary}`);
+    console.log(`   Token:   ${offerToken}`);
+    console.log('═══════════════════════════════════════');
+
+    if (!this.enabled) {
+      console.log('   [Mock - WhatsApp disabled]');
+      return { success: true, mock: true };
+    }
+
+    try {
+      const payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: formattedPhone,
+        type: 'template',
+        template: {
+          name: 'candidate_offer',
+          language: { code: 'en_GB' },
+          components: [
+            // Body parameters
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: candidateName },
+                { type: 'text', text: jobTitle },
+                { type: 'text', text: companyName },
+                { type: 'text', text: String(salary) }
+              ]
+            },
+            // Button 0: Accept Offer
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '0',
+              parameters: [
+                { type: 'text', text: offerToken }
+              ]
+            },
+            // Button 1: Reject Offer
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: '1',
+              parameters: [
+                { type: 'text', text: offerToken }
+              ]
+            }
+          ]
+        }
+      };
+
+      const response = await axios.post(
+        `${this.baseUrl}/${this.phoneNumberId}/messages`,
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 15000
+        }
+      );
+
+      const messageId = response.data?.messages?.[0]?.id;
+      console.log(
+        `[WHATSAPP] ✅ Offer sent to +${formattedPhone} | MsgID: ${messageId}`
+      );
+
+      return {
+        success: true,
+        messageId,
+        waId: response.data?.contacts?.[0]?.wa_id,
+        data: response.data
+      };
+
+    } catch (error) {
+      const errMsg = error.response?.data?.error?.message || error.message;
+      const errCode = error.response?.data?.error?.code;
+
+      console.error(
+        `[WHATSAPP] ❌ Offer failed → +${formattedPhone}`
+      );
+      console.error(
+        `[WHATSAPP] Error Code: ${errCode} | Message: ${errMsg}`
+      );
+
+      return { success: false, error: errMsg, errorCode: errCode };
+    }
+  }
+
+  /**
    * Send interview invitation using approved template: interview_invitation
    *
    * Template body:
