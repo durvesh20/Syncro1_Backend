@@ -255,6 +255,12 @@ class JobAccessService {
       query.isUrgent = false;
     }
 
+    if (filters.isFeatured === 'true' || filters.isFeatured === true) {
+      query.isFeatured = true;
+    } else if (filters.isFeatured === 'false' || filters.isFeatured === false) {
+      query.isFeatured = false;
+    }
+
     if (filters.workMode) {
       const modes = filters.workMode.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
       if (modes.length > 0) {
@@ -328,19 +334,19 @@ class JobAccessService {
       query.$and = conditions;
     }
 
-    let sort = { 'metrics.interestedPartners': -1, isFeatured: -1, isUrgent: -1, createdAt: -1 };
+    let sort = { createdAt: -1 };
 
     switch (filters.sortBy) {
       case 'newest': sort = { createdAt: -1 }; break;
       case 'oldest': sort = { createdAt: 1 }; break;
-      case 'salary_high': sort = { 'salary.max': -1 }; break;
-      case 'salary_low': sort = { 'salary.min': 1 }; break;
-      case 'commission': sort = { 'commission.value': -1 }; break;
+      case 'salary_high': sort = { 'salary.max': -1, createdAt: -1 }; break;
+      case 'salary_low': sort = { 'salary.min': 1, createdAt: -1 }; break;
+      case 'commission': sort = { 'commission.value': -1, createdAt: -1 }; break;
       case 'urgent': sort = { isUrgent: -1, createdAt: -1 }; break;
     }
 
     const page = Math.max(1, Math.min(1000, parseInt(filters.page) || 1));
-    const limit = Math.max(1, Math.min(100, parseInt(filters.limit) || 10));
+    const limit = Math.max(1, Math.min(1000, parseInt(filters.limit) || 10));
     const skip = (page - 1) * limit;
 
     let partnerObjectId;
@@ -353,8 +359,6 @@ class JobAccessService {
     const jobs = await Job.aggregate([
       { $match: query },
       { $sort: sort },
-      { $skip: skip },
-      { $limit: limit },
       // Join company data
       {
         $lookup: {
@@ -512,11 +516,11 @@ class JobAccessService {
     return {
       jobs: enrichedJobs,
       pagination: {
-        current: page,
-        pages: Math.ceil(total / limit),
+        current: 1,
+        pages: 1,
         total,
-        hasNext: page < Math.ceil(total / limit),
-        hasPrev: page > 1
+        hasNext: false,
+        hasPrev: false
       },
       partnerAccess: {
         plan,

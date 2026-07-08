@@ -953,6 +953,7 @@ exports.getAvailableJobs = async (req, res) => {
         search: req.query.search,
         sortBy: req.query.sortBy,
         isUrgent: req.query.isUrgent || req.query.urgentOnly,
+        isFeatured: req.query.isFeatured,
         companyName: req.query.companyName,
         workMode: req.query.workMode
       }
@@ -1005,26 +1006,28 @@ exports.getAvailableJobs = async (req, res) => {
 // @route   GET /api/staffing-partners/jobs/:id
 exports.getJobDetails = async (req, res) => {
   try {
-    const job = await Job.findById(req.params.id).populate(
-      'company',
-      [
-        'companyName',
-        'kyc.logo',
-        'kyc.industry',
-        'kyc.companyType',
-        'kyc.yearEstablished',
-        'kyc.employeeCount',
-        'kyc.description',
-        'kyc.website',
-        'city',
-        'state',
-        'hiringPreferences.workModePreference',
-        'hiringPreferences.typicalCtcBand',
-        'hiringPreferences.avgMonthlyHiringVolume',
-        'metrics.totalHires',
-        'metrics.totalJobsPosted'
-      ].join(' ')
-    );
+    const job = await Job.findById(req.params.id)
+      .populate(
+        'company',
+        [
+          'companyName',
+          'kyc.logo',
+          'kyc.industry',
+          'kyc.companyType',
+          'kyc.yearEstablished',
+          'kyc.employeeCount',
+          'kyc.description',
+          'kyc.website',
+          'city',
+          'state',
+          'hiringPreferences.workModePreference',
+          'hiringPreferences.typicalCtcBand',
+          'hiringPreferences.avgMonthlyHiringVolume',
+          'metrics.totalHires',
+          'metrics.totalJobsPosted'
+        ].join(' ')
+      )
+      .populate('assignedTo', 'firstName lastName email mobile');
 
     if (!job) {
       return res.status(404).json({
