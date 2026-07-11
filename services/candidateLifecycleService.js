@@ -21,7 +21,7 @@ class CandidateLifecycleService {
     const candidate = await Candidate.findById(candidateId)
       .populate({
         path: 'job',
-        select: 'title commission vacancies filledPositions'
+        select: 'title commission vacancies filledPositions pipelineTemplate'
       })
       .populate({
         path: 'submittedBy',
@@ -63,10 +63,42 @@ class CandidateLifecycleService {
       throw error;
     }
 
-    // ✅ Step 2: Update candidate status
-    candidate.status = newStatus;
+    // ✅ Step 2: Update candidate status and clone pipeline template if applicable
+    let finalStatus = newStatus;
+    if (newStatus === 'SHORTLISTED' && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
+      const { getInitialRoundState } = require('./pipelineStateMachine');
+      const normalized = candidate.job.pipelineTemplate.map((r, i) => ({
+        roundType: r.roundType,
+        order: r.order ?? i + 1
+      }));
+      candidate.pipelineTemplate = normalized;
+      candidate.rounds = normalized.map(r => ({
+        roundType: r.roundType,
+        order: r.order,
+        status: getInitialRoundState(r.roundType),
+        slots: [],
+        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+      }));
+      if (candidate.rounds.length > 0) {
+        finalStatus = candidate.rounds[0].status;
+      }
+
+      // Populate audit trail for pipeline transition
+      candidate.auditTrail = candidate.auditTrail || [];
+      candidate.auditTrail.push({
+        actorId: updatedByUserId,
+        actorRole: userRole,
+        action: 'SHORTLIST',
+        fromState: previousStatus,
+        toState: finalStatus,
+        reason: notes || 'Shortlisted for interview rounds',
+        timestamp: new Date()
+      });
+    }
+
+    candidate.status = finalStatus;
     candidate.statusHistory.push({
-      status: newStatus,
+      status: finalStatus,
       changedBy: updatedByUserId,
       changedAt: new Date(),
       notes

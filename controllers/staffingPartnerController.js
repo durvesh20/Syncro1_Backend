@@ -713,7 +713,7 @@ exports.getProfileCompletion = async (req, res) => {
     }
 
     const completion = partner.profileCompletion ? (partner.profileCompletion.toObject ? partner.profileCompletion.toObject() : partner.profileCompletion) : {};
-    
+
     // Force basicInfo to false if email or mobile is not verified
     if (!partner.user?.emailVerified || !partner.user?.mobileVerified) {
       completion.basicInfo = false;
@@ -1566,6 +1566,35 @@ exports.submitCandidate = async (req, res) => {
 
     notifyPartner();
 
+    // ✅ STEP 21: Notify company via email (fire and forget)
+    const notifyCompany = async () => {
+      try {
+        const companyDoc = await Company.findById(job.company).populate('user', 'email');
+        if (companyDoc && companyDoc.user && companyDoc.user.email) {
+          const emailService = require('../services/emailService');
+          await emailService.sendEmail({
+            to: companyDoc.user.email,
+            subject: `🚀 New Candidate Submitted - ${job.title}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+                <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+                  <h2 style="margin: 0; font-size: 20px;">🚀 New Candidate Submitted</h2>
+                </div>
+                <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+                  <p>Hello Team,</p>
+                  <p>A new candidate, <strong>${firstName.trim()} ${lastName.trim()}</strong>, has been submitted for the <strong>${job.title}</strong> position.</p>
+                  <p>Please log in to your dashboard to review the profile once the candidate gives consent.</p>
+                </div>
+              </div>
+            `
+          });
+        }
+      } catch (err) {
+        console.error('[NOTIFY] Company email notification failed:', err.message);
+      }
+    };
+    notifyCompany();
+
     // NOTE: AI parse + scoring + admin queue is triggered ONLY after candidate
     // confirms WhatsApp consent via GET /api/candidates/consent/agree/:token
     // DO NOT call processAfterConsent() here — candidate has not consented yet.
@@ -1640,7 +1669,7 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
     const partnerCandidates = await Candidate.find({
       job: req.params.jobId,
       submittedBy: partner._id,
-      status: { $in: ['SHORTLISTED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED'] },
+      status: { $in: ['SHORTLISTED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED', 'RESCHEDULE_REQUESTED'] },
     }).select('firstName lastName email mobile status assignedSlot profile.currentDesignation rounds');
 
     // For each slot show what partner needs to know
@@ -1663,6 +1692,8 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
         notes: slot.notes,
         interviewMode: slot.interviewMode || '',
         roundType: slot.roundType || '',
+        interviewDetails: slot.interviewDetails || '',
+        interviewerName: slot.interviewerName || '',
         // How many of YOUR candidates are in this slot
         yourCandidatesBooked: partnerBookingsInSlot.length,
         isPast: getSlotDateTime(slot.date, slot.startTime) < now
@@ -1729,7 +1760,8 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
             status: c.status,
             alreadyAssigned: !!c.assignedSlot,
             assignedSlotId: c.assignedSlot,
-            activeRoundType: activeRoundInfo ? activeRoundInfo.round.roundType : null
+            activeRoundType: activeRoundInfo ? activeRoundInfo.round.roundType : null,
+            rescheduleRequest: activeRoundInfo && activeRoundInfo.round.rescheduleRequest ? activeRoundInfo.round.rescheduleRequest : null
           };
         }),
       },
@@ -1784,11 +1816,11 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    // Candidate must be SHORTLISTED (legacy), SLOTS_PUBLISHED (pipeline), or SLOTS_NOT_PUBLISHED
-    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    // Candidate must be SHORTLISTED (legacy), SLOTS_PUBLISHED (pipeline), SLOTS_NOT_PUBLISHED, or RESCHEDULE_REQUESTED
+    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED' && candidate.status !== 'RESCHEDULE_REQUESTED') {
       return res.status(400).json({
         success: false,
-        message: `Only SHORTLISTED, SLOTS_PUBLISHED, or SLOTS_NOT_PUBLISHED candidates can be assigned to slots. Current status: ${candidate.status}`,
+        message: `Only SHORTLISTED, SLOTS_PUBLISHED, SLOTS_NOT_PUBLISHED, or RESCHEDULE_REQUESTED candidates can be assigned to slots. Current status: ${candidate.status}`,
       });
     }
 
@@ -1929,11 +1961,20 @@ exports.assignCandidateToSlot = async (req, res) => {
     };
 
     const activeInfo = getActiveRoundInfoForValidation(candidate);
-    if (activeInfo && slot.roundType && activeInfo.round.roundType !== slot.roundType) {
-      return res.status(400).json({
-        success: false,
-        message: `This slot is for ${slot.roundType.replace('_', ' ')}, but the candidate's current round is ${activeInfo.round.roundType.replace('_', ' ')}.`,
-      });
+    if (activeInfo && slot.roundType) {
+      const sType = slot.roundType.trim().toUpperCase();
+      const cType = (activeInfo.round.roundType || '').trim().toUpperCase();
+      
+      const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+      const isSlotHr = hrNames.includes(sType);
+      const isCandHr = hrNames.includes(cType);
+      
+      if (!(isSlotHr && isCandHr) && sType !== cType) {
+        return res.status(400).json({
+          success: false,
+          message: `This slot is for ${slot.roundType.replace('_', ' ')}, but the candidate's current round is ${activeInfo.round.roundType.replace('_', ' ')}.`,
+        });
+      }
     }
 
     // ── Book the candidate ────────────────────────────────────────────
@@ -2000,31 +2041,66 @@ exports.assignCandidateToSlot = async (req, res) => {
         return res.status(400).json({ success: false, message: fsmResult.error });
       }
       candidate.status = fsmResult.nextState;
+    } else if (oldStatus === 'RESCHEDULE_REQUESTED') {
+      const fsmResult = transition({
+        currentState: oldStatus,
+        action: ACTIONS.CONFIRM_RESCHEDULE,
+        role: 'staffing_partner',
+      });
+      if (!fsmResult.ok) {
+        return res.status(400).json({ success: false, message: fsmResult.error });
+      }
+      candidate.status = fsmResult.nextState;
     } else {
-      candidate.status = 'SLOT_ASSIGNED';
+      candidate.status = 'SLOT_DETAILS_SHARED';
     }
 
     const activeRoundInfo = getActiveRoundInfo(candidate);
+    const crypto = require('crypto');
+    const confirmationToken = crypto.randomBytes(32).toString('hex');
+    const detailsVal = slot.interviewDetails || '';
+
     if (activeRoundInfo) {
       const { round } = activeRoundInfo;
       round.status = candidate.status;
+      if (oldStatus === 'RESCHEDULE_REQUESTED' && round.rescheduleRequest) {
+        round.rescheduleRequest.status = 'ACCEPTED';
+        round.rescheduleRequest.selectedSlotId = slot._id;
+        round.rescheduleRequest.actionedAt = new Date();
+        round.rescheduleRequest.actionedBy = req.user._id;
+      }
       round.slots = [{
         date: slot.date,
         startTime: slot.startTime,
         endTime: slot.endTime,
         timezone: slot.timezone || 'Asia/Kolkata',
         mode: slot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
-        interviewerName: slot.notes || '',
+        interviewerName: slot.interviewerName || '',
         capacity: 1,
         bookedBy: partner._id,
         bookedAt: new Date(),
         details: {
-          meetingLink: '',
-          address: '',
-          pointOfContact: { name: '', phone: '', email: '' }
+          meetingLink: slot.interviewMode === 'Virtual' ? detailsVal : '',
+          address: slot.interviewMode === 'Face-to-Face' ? detailsVal : '',
+          pointOfContact: {
+            name: slot.interviewerName || '',
+            phone: '',
+            email: ''
+          }
         }
       }];
     }
+
+    // Set interviewConfig for dashboard and candidate compatibility
+    candidate.interviewConfig = {
+      mode: slot.interviewMode === 'Face-to-Face' ? 'Face-to-Face' : 'Virtual',
+      details: detailsVal,
+      interviewer: slot.interviewerName || '',
+      isConfirmedByCompany: true,
+      confirmedAt: new Date(),
+      confirmationToken,
+      candidateResponse: 'PENDING'
+    };
 
     // Record in interviews array for history
     candidate.interviews.push({
@@ -2040,7 +2116,7 @@ exports.assignCandidateToSlot = async (req, res) => {
       changedBy: req.user._id,
       changedAt: new Date(),
       changedByRole: 'PARTNER',
-      notes: `Assigned to interview slot on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}`,
+      notes: `Assigned to interview slot on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime} (Details auto-shared)`,
       metadata: {
         slotId: slot._id,
         slotDate: slot.date,
@@ -2058,13 +2134,51 @@ exports.assignCandidateToSlot = async (req, res) => {
         action: ACTIONS.BOOK_SLOT,
         fromState: oldStatus,
         toState: candidate.status,
-        reason: `Slot booked on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}`,
+        reason: `Slot booked and details auto-shared on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}`,
         roundIndex: activeRoundInfo.index,
         timestamp: new Date()
       });
     }
 
     await candidate.save();
+
+    // Trigger WhatsApp notification to candidate asynchronously
+    const notifyCandidate = async () => {
+      try {
+        const Company = require('../models/Company');
+        const companyDoc = await Company.findById(candidate.company);
+        const companyName = companyDoc ? companyDoc.companyName : 'Syncro1 Employer';
+
+        const interviewDate = new Date(slot.date).toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        });
+
+        const mode = slot.interviewMode === 'Virtual' ? 'Online' : 'Offline';
+        const detailsStr = slot.interviewDetails || '';
+        const interviewer = slot.interviewerName || 'Hiring Team';
+
+        const whatsappService = require('../services/whatsappService');
+        const token = confirmationToken;
+        await whatsappService.sendInterviewInvitation(
+          candidate.mobile,
+          candidate.firstName,
+          companyName,
+          interviewDate,
+          slot.startTime,
+          candidate.job?.title || 'Job Interview',
+          mode,
+          detailsStr,
+          interviewer,
+          token
+        );
+      } catch (waError) {
+        console.error('[PARTNER ASSIGN] WhatsApp notification failed:', waError.message);
+      }
+    };
+
+    notifyCandidate();
 
     res.status(201).json({
       success: true,
@@ -2360,15 +2474,15 @@ exports.getMySubmissions = async (req, res) => {
 
     if (search && search.trim()) {
       const rx = new RegExp(search.trim(), 'i');
-      
+
       // Find matching jobs
       const matchingJobs = await Job.find({ title: rx }).select('_id');
       const jobIds = matchingJobs.map(j => j._id);
-      
+
       // Find matching companies
       const matchingCompanies = await Company.find({ companyName: rx }).select('_id');
       const companyIds = matchingCompanies.map(c => c._id);
-      
+
       andConditions.push({
         $or: [
           { firstName: rx },
@@ -2400,7 +2514,7 @@ exports.getMySubmissions = async (req, res) => {
           'resume interviewConfig whatsappConsent.status resumeAnalysis.profileScore ' +
           'resumeAnalysis.matchLevel createdAt job company assignedSlot'
         )
-        .populate('assignedSlot', 'date startTime endTime status interviewMode')
+        .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName')
         .lean(),
       Candidate.countDocuments(query)
     ]);
@@ -2440,7 +2554,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
   if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
     return;
   }
-  
+
   const InterviewSlot = require('../models/InterviewSlot');
   const getActiveRoundInfoLocal = (c) => {
     for (let i = 0; i < c.rounds.length; i++) {
@@ -2471,7 +2585,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
       changedAt: new Date(),
       notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
     });
-    
+
     candidate.auditTrail = candidate.auditTrail || [];
     candidate.auditTrail.push({
       actorId: userId || candidate._id,
@@ -2500,7 +2614,7 @@ exports.getSubmission = async (req, res) => {
     })
       .populate('job', 'title company commission')
       .populate('company', 'companyName')
-      .populate('assignedSlot', 'date startTime endTime status interviewMode');
+      .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName');
 
     if (!submission) {
       return res.status(404).json({
@@ -2579,11 +2693,11 @@ exports.updateSubmission = async (req, res) => {
     if (firstName) submission.firstName = firstName.trim();
     if (middleName !== undefined) submission.middleName = middleName.trim();
     if (lastName) submission.lastName = lastName.trim();
-    
+
     if (email) {
       submission.email = email.trim().toLowerCase();
     }
-    
+
     if (mobile) {
       submission.mobile = mobile.trim();
       // Update whatsappConsent sentTo if it was pending
@@ -2643,7 +2757,7 @@ exports.updateSubmission = async (req, res) => {
         if (currentSalary !== undefined && currentSalary !== '') poolCandidate.currentSalary = Number(currentSalary);
         if (expectedSalary !== undefined && expectedSalary !== '') poolCandidate.expectedSalary = Number(expectedSalary);
         if (writeup !== undefined) poolCandidate.writeup = writeup.trim();
-        
+
         if (req.file && req.file.path) {
           poolCandidate.resume = {
             url: req.file.path,
@@ -2964,14 +3078,14 @@ exports.getDashboard = async (req, res) => {
 
     const placementData = [];
     const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    
+
     for (let i = 5; i >= 0; i--) {
       const d = new Date();
       d.setMonth(d.getMonth() - i);
       const year = d.getFullYear();
       const monthIndex = d.getMonth(); // 0-11
       const label = `${monthNames[monthIndex]} ${year}`;
-      
+
       const match = monthlyPlacements.find(item => item._id.year === year && item._id.month === (monthIndex + 1));
       placementData.push({
         month: label,
@@ -3019,7 +3133,7 @@ exports.getDashboard = async (req, res) => {
     const availableJobsCount = await jobAccessService.getAccessibleJobsCount(partner.subscription?.plan || 'FREE');
 
     const profileCompletion = partner.profileCompletion ? (partner.profileCompletion.toObject ? partner.profileCompletion.toObject() : partner.profileCompletion) : {};
-    
+
     // Force basicInfo to false if email or mobile is not verified
     if (!partner.user?.emailVerified || !partner.user?.mobileVerified) {
       profileCompletion.basicInfo = false;
@@ -3396,12 +3510,12 @@ exports.getWorkedJobs = async (req, res) => {
       });
     }
 
-    const { 
-      limit = 10, page = 1, search, 
-      category, location, experienceLevel, companyName, 
-      salaryMin, salaryMax, workMode, isUrgent 
+    const {
+      limit = 10, page = 1, search,
+      category, location, experienceLevel, companyName,
+      salaryMin, salaryMax, workMode, isUrgent
     } = req.query;
-    
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Construct match object
@@ -3415,18 +3529,18 @@ exports.getWorkedJobs = async (req, res) => {
         { 'companyDetails.companyName': { $regex: search, $options: 'i' } }
       ];
     }
-    
+
     if (category) filterMatch['jobDetails.category'] = category;
-    
+
     if (experienceLevel) filterMatch['jobDetails.experienceLevel'] = experienceLevel;
-    
+
     if (isUrgent !== undefined && isUrgent !== '') {
       filterMatch['jobDetails.isUrgent'] = isUrgent === 'true';
     }
-    
+
     if (salaryMin) filterMatch['jobDetails.salary.max'] = { $gte: Number(salaryMin) };
     if (salaryMax) filterMatch['jobDetails.salary.min'] = { $lte: Number(salaryMax) };
-    
+
     if (location) {
       const cities = location.split(',').map(s => s.trim()).filter(Boolean);
       if (cities.length > 0) {
@@ -3437,7 +3551,7 @@ exports.getWorkedJobs = async (req, res) => {
         andConditions.push({ $or: cityConditions });
       }
     }
-    
+
     if (companyName) {
       const companies = companyName.split(',').map(s => s.trim()).filter(Boolean);
       if (companies.length > 0) {
@@ -3448,7 +3562,7 @@ exports.getWorkedJobs = async (req, res) => {
         andConditions.push({ $or: companyConditions });
       }
     }
-    
+
     if (workMode) {
       const modes = workMode.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
       if (modes.length > 0) {
@@ -3461,7 +3575,7 @@ exports.getWorkedJobs = async (req, res) => {
         }
       }
     }
-    
+
     if (andConditions.length > 0) {
       filterMatch['$and'] = andConditions;
     }
@@ -3469,49 +3583,57 @@ exports.getWorkedJobs = async (req, res) => {
     // Aggregate unique jobs this partner has submitted candidates to
     const pipeline = [
       { $match: { submittedBy: partner._id } },
-      { $group: {
+      {
+        $group: {
           _id: "$job",
           submissionCount: { $sum: 1 },
           lastSubmittedAt: { $max: "$createdAt" },
           statusCounts: {
             $push: "$status"
           }
-      }},
-      { $lookup: {
+        }
+      },
+      {
+        $lookup: {
           from: "jobs",
           localField: "_id",
           foreignField: "_id",
           as: "jobDetails"
-      }},
+        }
+      },
       { $unwind: "$jobDetails" },
-      { $lookup: {
+      {
+        $lookup: {
           from: "companies",
           localField: "jobDetails.company",
           foreignField: "_id",
           as: "companyDetails"
-      }},
+        }
+      },
       { $unwind: { path: "$companyDetails", preserveNullAndEmptyArrays: true } }
     ];
-    
+
     if (Object.keys(filterMatch).length > 0) {
       pipeline.push({ $match: filterMatch });
     }
-    
+
     pipeline.push(
       { $sort: { lastSubmittedAt: -1 } },
-      { $facet: {
-          metadata: [ { $count: "total" } ],
-          data: [ { $skip: skip }, { $limit: parseInt(limit) } ],
-          locations: [ { $unwind: "$jobDetails.location.city" }, { $group: { _id: "$jobDetails.location.city" } } ],
-          companies: [ { $match: { "companyDetails.companyName": { $ne: null } } }, { $group: { _id: "$companyDetails.companyName" } } ]
-      }}
+      {
+        $facet: {
+          metadata: [{ $count: "total" }],
+          data: [{ $skip: skip }, { $limit: parseInt(limit) }],
+          locations: [{ $unwind: "$jobDetails.location.city" }, { $group: { _id: "$jobDetails.location.city" } }],
+          companies: [{ $match: { "companyDetails.companyName": { $ne: null } } }, { $group: { _id: "$companyDetails.companyName" } }]
+        }
+      }
     );
 
     const Candidate = require('../models/Candidate');
     const aggregationResult = await Candidate.aggregate(pipeline);
 
     const total = aggregationResult[0].metadata[0]?.total || 0;
-    
+
     // Process filter options
     const uniqueLocations = aggregationResult[0].locations.map(l => l._id).filter(Boolean).sort();
     const uniqueCompanies = aggregationResult[0].companies.map(c => c._id).filter(Boolean).sort();

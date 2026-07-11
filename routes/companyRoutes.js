@@ -87,6 +87,7 @@ const {
 const { protect, authorize, checkStatus, checkCompanyPermission } = require('../middleware/auth');
 const {
   uploadCompanyDocuments,
+  uploadDocument,
   uploadLogo,
   uploadLogoToCloudinary,
   handleUploadError
@@ -400,11 +401,27 @@ router.post('/candidates/:id/pipeline/hr/resolve-hold',   ...PIPELINE_MW, pipeli
 // Phase 4 — Offer & Onboarding
 const {
   pipelineSendOffer,
+  pipelineStartOfferNegotiation,
   pipelineConfirmOnboarding,
   pipelineMarkJoined,
+  pipelineCompanyAcceptOffer,
+  pipelineCompanyRejectOffer,
+  pipelineCompanyMarkNotJoined,
+  pipelineMarkOfferSent
 } = require('../controllers/pipelineController');
-router.post('/candidates/:id/pipeline/offer/send',           ...PIPELINE_MW, pipelineSendOffer);
+
+router.post('/candidates/:id/pipeline/offer/mark-sent', ...PIPELINE_MW, pipelineMarkOfferSent);
+
+router.post('/candidates/:id/pipeline/offer/start',          ...PIPELINE_MW, pipelineStartOfferNegotiation);
+router.post('/candidates/:id/pipeline/offer/send',           ...PIPELINE_MW, uploadDocument, pipelineSendOffer);
+router.post('/candidates/:id/pipeline/offer/accept',         ...PIPELINE_MW, pipelineCompanyAcceptOffer);
+router.post('/candidates/:id/pipeline/offer/reject',         ...PIPELINE_MW, pipelineCompanyRejectOffer);
 router.post('/candidates/:id/pipeline/onboarding/confirm',   ...PIPELINE_MW, pipelineConfirmOnboarding);
 router.post('/candidates/:id/pipeline/mark-joined',          ...PIPELINE_MW, pipelineMarkJoined);
+router.post('/candidates/:id/pipeline/mark-not-joined',      ...PIPELINE_MW, pipelineCompanyMarkNotJoined);
+
+// Resend interview consent (WhatsApp + Email) – for SLOT_DETAILS_SHARED round
+const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
+router.post('/candidates/:id/pipeline/resend-interview-consent', ...PIPELINE_MW, pipelineResendInterviewConsent);
 
 module.exports = router;

@@ -226,8 +226,19 @@ const candidateSchema = new mongoose.Schema({
   // Offer Details
   offer: {
     salary: Number, // Annual CTC
+    inhandCtc: Number,
+    variableCtc: Number,
     joiningDate: Date,
+    expectedJoiningDate: Date,
+    workMode: {
+      type: String,
+      enum: ['Remote', 'On-site', 'Hybrid']
+    },
+    workLocation: String,
     offerLetterUrl: String,
+    negotiationStartedAt: Date,
+    isOfferSent: { type: Boolean, default: false },
+    offerSentAt: Date,
     offeredAt: Date,
     respondedAt: Date,
     response: {
@@ -653,7 +664,7 @@ const candidateSchema = new mongoose.Schema({
       outcome: {
         decision: {
           type: String,
-          enum: ['SELECTED_NEXT_ROUND', 'REJECTED', 'SELECTED_DIRECT_HR', 'ON_HOLD']
+          enum: ['SELECTED_NEXT_ROUND', 'REJECTED', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'ON_HOLD']
         },
         reason: String,
         decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

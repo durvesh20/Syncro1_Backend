@@ -721,16 +721,42 @@ router.delete(
 );
 
 
-// ==================== PIPELINE (Admin read-only + Audit Log) ====================
-const { adminGetPipeline, adminGetPipelineAuditLog, getJobPipelineTemplate } = require('../controllers/pipelineController');
+// ==================== PIPELINE (Admin read-only + Audit Log + Write Access) ====================
+const { 
+  adminGetPipeline, 
+  adminGetPipelineAuditLog, 
+  getJobPipelineTemplate,
+  definePipelineTemplate,
+  defineJobPipelineTemplate,
+  pipelinePublishSlots,
+  pipelineShareDetails
+} = require('../controllers/pipelineController');
 const { getJobInterviewSlots } = require('../controllers/companyController');
+const { adminAssignCandidateToSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot } = require('../controllers/adminController');
 
 router.get('/candidates/:id/pipeline', adminGetPipeline);
 router.get('/jobs/:jobId/pipeline/template', getJobPipelineTemplate);
 router.get('/jobs/:jobId/interview-slots', getJobInterviewSlots);
+router.post('/jobs/:jobId/interview-slots', adminCreateJobInterviewSlots);
+router.delete('/jobs/:jobId/interview-slots/:slotId', adminCancelJobInterviewSlot);
+
+// Admin write access to pipeline templates
+router.post('/candidates/:id/pipeline/template', definePipelineTemplate);
+router.post('/jobs/:jobId/pipeline/template', defineJobPipelineTemplate);
+
+// Admin slot creation access (same as company)
+router.post('/candidates/:id/pipeline/publish-slots', pipelinePublishSlots);
+
+// Admin candidate assignment access (same as company/partner)
+router.post('/candidates/:id/pipeline/share-details', pipelineShareDetails);
+router.post('/jobs/:jobId/interview-slots/:slotId/assign', adminAssignCandidateToSlot);
 
 // Phase 4: cross-candidate pipeline audit trail
 // GET /api/admin/pipeline/audit-log?page=1&limit=30&search=&action=&status=
 router.get('/pipeline/audit-log', adminGetPipelineAuditLog);
+
+// Resend interview consent (WhatsApp + Email) – Admin/Sub-admin
+const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
+router.post('/candidates/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
 
 module.exports = router;

@@ -49,6 +49,7 @@ const PIPELINE_STATES = {
 
   // General (kept from existing flow for re-shortlist support)
   REJECTED: 'REJECTED',
+  JOINED: 'JOINED',
 };
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -90,6 +91,8 @@ const ACTIONS = {
   SEND_OFFER: 'SEND_OFFER',
   ACCEPT_OFFER: 'ACCEPT_OFFER',
   REJECT_OFFER: 'REJECT_OFFER',
+  MARK_JOINED: 'MARK_JOINED',
+  MARK_NOT_JOINED: 'MARK_NOT_JOINED',
 };
 
 // ─── Role constants ───────────────────────────────────────────────────────────
@@ -143,12 +146,20 @@ const TRANSITIONS = {
       allowedRoles: [ROLES.COMPANY],
       nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
     },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
   },
 
   [PIPELINE_STATES.SLOTS_PUBLISHED]: {
     [ACTIONS.BOOK_SLOT]: {
       allowedRoles: [ROLES.STAFFING_PARTNER],
-      nextState: PIPELINE_STATES.SLOT_ASSIGNED,
+      nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
+    },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
     },
   },
 
@@ -162,6 +173,10 @@ const TRANSITIONS = {
       nextState: PIPELINE_STATES.RESCHEDULE_REQUESTED,
       requiresReason: true,
     },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
   },
 
   [PIPELINE_STATES.SLOT_DETAILS_SHARED]: {
@@ -174,16 +189,24 @@ const TRANSITIONS = {
       allowedRoles: [ROLES.COMPANY],
       nextState: PIPELINE_STATES.INTERVIEW_CONDUCTED,
     },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
   },
 
   [PIPELINE_STATES.RESCHEDULE_REQUESTED]: {
     [ACTIONS.CONFIRM_RESCHEDULE]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.STAFFING_PARTNER],
       nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
     },
     [ACTIONS.REJECT_RESCHEDULE]: {
       allowedRoles: [ROLES.COMPANY],
       nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
+    },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
     },
   },
 
@@ -253,22 +276,29 @@ const TRANSITIONS = {
   // ── Offer ─────────────────────────────────────────────────────────────────
   [PIPELINE_STATES.OFFER_SENT]: {
     [ACTIONS.ACCEPT_OFFER]: {
-      allowedRoles: [ROLES.CANDIDATE],
+      allowedRoles: [ROLES.CANDIDATE, ROLES.COMPANY],
       nextState: PIPELINE_STATES.OFFER_ACCEPTED,
-      requiresPayload: ['joiningDate'],
     },
     [ACTIONS.REJECT_OFFER]: {
-      allowedRoles: [ROLES.CANDIDATE],
+      allowedRoles: [ROLES.CANDIDATE, ROLES.COMPANY],
       nextState: PIPELINE_STATES.OFFER_REJECTED,
       requiresReason: true,
     },
   },
 
   [PIPELINE_STATES.OFFER_ACCEPTED]: {
-    // Transitions to ONBOARDING — triggered automatically or by company confirm
-    [ACTIONS.SELECT_NEXT_ROUND]: {   // reusing action as "confirm onboarding"
+    [ACTIONS.SELECT_NEXT_ROUND]: {
       allowedRoles: [ROLES.COMPANY],
       nextState: PIPELINE_STATES.ONBOARDING,
+    },
+    [ACTIONS.MARK_JOINED]: {
+      allowedRoles: [ROLES.COMPANY],
+      nextState: 'JOINED',
+    },
+    [ACTIONS.MARK_NOT_JOINED]: {
+      allowedRoles: [ROLES.COMPANY],
+      nextState: PIPELINE_STATES.REJECTED,
+      requiresReason: true,
     },
   },
 };
@@ -377,7 +407,7 @@ function transition({ currentState, action, role, payload = {}, context = {} }) 
   }
 
   // ── joiningDate validation (offer accept) ────────────────────────────────
-  if (action === ACTIONS.ACCEPT_OFFER) {
+  if (action === ACTIONS.ACCEPT_OFFER && payload && payload.joiningDate) {
     const d = new Date(payload.joiningDate);
     if (isNaN(d.getTime())) {
       return _err('joiningDate must be a valid date.', 'INVALID_DATE');
@@ -459,16 +489,28 @@ function validatePipelineTemplate(rounds) {
 
   // Ensure roundType names are unique (case-insensitive) to prevent state mapping collisions
   const seen = new Set();
+  let hasHrRound = false;
+
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
     if (!r.roundType || typeof r.roundType !== 'string' || r.roundType.trim().length === 0) {
       return { ok: false, error: `Round name at position ${i + 1} cannot be empty.` };
     }
     const normalized = r.roundType.trim().toLowerCase();
+    
+    const validHrNames = ['hr', 'hr round', 'hr_round', 'human resource', 'human resource round'];
+    if (validHrNames.includes(normalized)) {
+      hasHrRound = true;
+    }
+
     if (seen.has(normalized)) {
       return { ok: false, error: `Duplicate round name "${r.roundType}" is not allowed.` };
     }
     seen.add(normalized);
+  }
+
+  if (!hasHrRound) {
+    return { ok: false, error: 'Pipeline must contain an HR round (named "HR", "HR Round", or "Human Resource").' };
   }
 
   return { ok: true };

@@ -1043,10 +1043,110 @@ exports.forfeitPayout = async (req, res) => {
       data: result
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to forfeit payout'
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ADMIN: Create interview slots
+// POST /api/admin/jobs/:jobId/interview-slots
+exports.adminCreateJobInterviewSlots = async (req, res) => {
+  try {
+    const { slots, roundType } = req.body;
+    const Job = require('../models/Job');
+    const InterviewSlot = require('../models/InterviewSlot');
+
+    if (!slots || !Array.isArray(slots) || slots.length === 0) {
+      return res.status(400).json({ success: false, message: 'Please provide at least one interview slot' });
+    }
+
+    const job = await Job.findById(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+    
+    if (job.pipelineTemplate && job.pipelineTemplate.length > 0) {
+      if (!roundType) {
+        return res.status(400).json({ success: false, message: 'Please specify the roundType for these interview slots.' });
+      }
+      const validRoundTypes = job.pipelineTemplate.map(r => r.roundType);
+      if (!validRoundTypes.includes(roundType)) {
+        return res.status(400).json({ success: false, message: `Invalid roundType: ${roundType}. Allowed: ${validRoundTypes.join(', ')}` });
+      }
+    }
+
+    const invalidSlots = [];
+    const validSlots = [];
+
+    slots.forEach((slot, index) => {
+      const errors = [];
+      if (!slot.date) errors.push('Date is required');
+      if (!slot.startTime) errors.push('Start time is required');
+      if (!slot.endTime) errors.push('End time is required');
+      if (!slot.maxCandidates || slot.maxCandidates < 1) errors.push('Max candidates must be at least 1');
+      if (!slot.interviewMode) errors.push('Interview mode is required');
+      
+      if (errors.length > 0) {
+        invalidSlots.push({ index, errors });
+      } else {
+        validSlots.push(slot);
+      }
     });
+
+    if (invalidSlots.length > 0) {
+      return res.status(400).json({ success: false, message: 'Some slots are invalid', invalidSlots });
+    }
+
+    const createdSlots = await Promise.all(
+      validSlots.map(slot => 
+        InterviewSlot.create({
+          job: job._id,
+          company: job.company,
+          date: slot.date,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          maxCandidates: slot.maxCandidates,
+          availableSpots: slot.maxCandidates,
+          interviewMode: slot.interviewMode,
+          notes: slot.notes || '',
+          interviewDetails: slot.interviewDetails || '',
+          interviewerName: slot.interviewerName || '',
+          roundType: roundType || 'INTERVIEW',
+          createdBy: req.user._id,
+          status: 'ACTIVE'
+        })
+      )
+    );
+
+    res.status(201).json({ success: true, message: `Successfully created ${createdSlots.length} interview slots`, data: createdSlots });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to create interview slots' });
+  }
+};
+
+// ADMIN: Cancel interview slot
+// DELETE /api/admin/jobs/:jobId/interview-slots/:slotId
+exports.adminCancelJobInterviewSlot = async (req, res) => {
+  try {
+    const InterviewSlot = require('../models/InterviewSlot');
+    const slot = await InterviewSlot.findById(req.params.slotId);
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Interview slot not found' });
+    }
+    
+    if (slot.job.toString() !== req.params.jobId) {
+      return res.status(400).json({ success: false, message: 'Slot does not belong to this job' });
+    }
+    
+    if (slot.assignedCandidates && slot.assignedCandidates.length > 0) {
+      return res.status(400).json({ success: false, message: 'Cannot cancel slot with assigned candidates. Remove candidates first.' });
+    }
+    
+    slot.status = 'CANCELLED';
+    await slot.save();
+    
+    res.status(200).json({ success: true, message: 'Interview slot cancelled successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to cancel interview slot' });
   }
 };
 
@@ -4284,5 +4384,112 @@ exports.bulkRevokeVerificationAssignment = async (req, res) => {
       success: false,
       message: error.message || 'Failed bulk application revocation'
     });
+  }
+};
+
+// ADMIN: Assign a shortlisted candidate to a slot
+// POST /api/admin/jobs/:jobId/interview-slots/:slotId/assign
+exports.adminAssignCandidateToSlot = async (req, res) => {
+  try {
+    const { candidateId } = req.body;
+    const Candidate = require('../models/Candidate');
+    const InterviewSlot = require('../models/InterviewSlot');
+
+    if (!candidateId) {
+      return res.status(400).json({ success: false, message: 'Please provide candidateId' });
+    }
+
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found' });
+    }
+
+    if (candidate.job.toString() !== req.params.jobId) {
+      return res.status(400).json({ success: false, message: 'Candidate is not applied for this job' });
+    }
+
+    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED' && candidate.status !== 'RESCHEDULE_REQUESTED') {
+      return res.status(400).json({ success: false, message: `Candidate current status: ${candidate.status} does not allow assignment.` });
+    }
+
+    if (candidate.assignedSlot) {
+      return res.status(400).json({ success: false, message: 'Candidate is already assigned to a slot for the current round.' });
+    }
+
+    const slot = await InterviewSlot.findById(req.params.slotId);
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Interview slot not found' });
+    }
+    if (slot.status !== 'ACTIVE') {
+      return res.status(400).json({ success: false, message: 'Selected slot is not active' });
+    }
+    if (slot.availableSpots <= 0) {
+      return res.status(400).json({ success: false, message: 'Selected slot is fully booked' });
+    }
+
+    const getActiveRoundInfoLocal = (cand) => {
+      const status = cand.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      for (let i = 0; i < cand.rounds.length; i++) {
+        const r = cand.rounds[i];
+        const L_STATES = [ 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED', 'RESCHEDULE_REQUESTED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONDUCTED', 'ROUND_ON_HOLD' ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    let activeRoundInfo = getActiveRoundInfoLocal(candidate);
+    if (!activeRoundInfo) {
+      if (candidate.status === 'SHORTLISTED') {
+        const firstRound = candidate.rounds[0];
+        if (firstRound) {
+          firstRound.status = 'SLOT_ASSIGNED';
+          activeRoundInfo = { index: 0, round: firstRound };
+        }
+      }
+    }
+
+    if (!activeRoundInfo) {
+      return res.status(400).json({ success: false, message: 'Could not determine active pipeline round for assignment' });
+    }
+
+    if (slot.roundType !== activeRoundInfo.round.roundType) {
+      return res.status(400).json({ success: false, message: `Slot is for ${slot.roundType}, but candidate is at ${activeRoundInfo.round.roundType}` });
+    }
+
+    slot.bookedCandidates.push({ candidate: candidate._id, bookedAt: new Date() });
+    slot.availableSpots -= 1;
+    if (slot.availableSpots === 0) slot.status = 'FULL';
+    await slot.save();
+
+    candidate.assignedSlot = slot._id;
+    activeRoundInfo.round.slots = [{ slotId: slot._id, isSuggested: true }];
+    candidate.status = 'SLOT_ASSIGNED';
+    activeRoundInfo.round.status = 'SLOT_ASSIGNED';
+
+    candidate.statusHistory.push({
+      status: 'SLOT_ASSIGNED',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: `Admin assigned candidate to slot ${slot._id} for round ${activeRoundInfo.round.roundType}`
+    });
+
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: req.user._id,
+      actorRole: req.user.role,
+      action: 'ASSIGN_SLOT',
+      fromState: 'SLOTS_PUBLISHED',
+      toState: 'SLOT_ASSIGNED',
+      reason: 'Admin assigned candidate to slot',
+      roundIndex: activeRoundInfo.index,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+    res.json({ success: true, message: 'Candidate assigned to slot successfully', data: candidate });
+  } catch (error) {
+    console.error('Admin assign candidate to slot error:', error);
+    res.status(500).json({ success: false, message: 'Failed to assign candidate to slot', error: error.message });
   }
 };

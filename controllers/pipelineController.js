@@ -32,12 +32,21 @@ function roleFromReq(req) {
 }
 
 async function verifyCompanyCandidateOwnership(candidateId, userId) {
+  const User = require('../models/User');
+  const user = await User.findById(userId);
+  const isAdmin = user && (user.role === 'admin' || user.role === 'sub_admin');
+
+  const candidate = await Candidate.findById(candidateId).populate('job');
+  if (!candidate) throw Object.assign(new Error('Candidate not found'), { statusCode: 404 });
+
+  if (isAdmin) {
+    return { candidate, company: null };
+  }
+
   const Company = require('../models/Company');
   const company = await Company.findOne({ user: userId });
   if (!company) throw Object.assign(new Error('Company profile not found'), { statusCode: 403 });
 
-  const candidate = await Candidate.findById(candidateId).populate('job');
-  if (!candidate) throw Object.assign(new Error('Candidate not found'), { statusCode: 404 });
   if (candidate.company.toString() !== company._id.toString()) {
     throw Object.assign(new Error('Access denied: candidate does not belong to your company'), { statusCode: 403 });
   }
@@ -46,6 +55,34 @@ async function verifyCompanyCandidateOwnership(candidateId, userId) {
 
 function writeAudit(candidate, { actorId, actorRole, action, fromState, toState, reason, roundIndex }) {
   candidate.auditTrail.push({ actorId, actorRole, action, fromState, toState, reason, roundIndex, timestamp: new Date() });
+}
+
+async function sendPipelineEmail(role, candidateId, subject, htmlContent) {
+  try {
+    const candidate = await Candidate.findById(candidateId)
+      .populate({ path: 'company', populate: { path: 'user', select: 'email' } })
+      .populate({ path: 'submittedBy', populate: { path: 'user', select: 'email' } });
+      
+    if (!candidate) return;
+    
+    let targetEmail = null;
+    if (role === 'company' && candidate.company?.user?.email) {
+      targetEmail = candidate.company.user.email;
+    } else if (role === 'partner' && candidate.submittedBy?.user?.email) {
+      targetEmail = candidate.submittedBy.user.email;
+    }
+    
+    if (targetEmail) {
+      const emailService = require('../services/emailService');
+      await emailService.sendEmail({
+        to: targetEmail,
+        subject,
+        html: htmlContent
+      });
+    }
+  } catch (err) {
+    console.error(`[PIPELINE] Failed to send email to ${role}:`, err.message);
+  }
 }
 
 function handleFsmError(fsmResult, res) {
@@ -103,6 +140,19 @@ exports.pipelineShortlist = async (req, res) => {
 
     await auditService.log({ actor: req.user._id, actorRole: req.user.role, action: 'PIPELINE_SHORTLIST', entityType: 'Candidate', entityId: candidate._id, description: `Candidate shortlisted`, ipAddress: req.ip });
 
+    await sendPipelineEmail('partner', candidate._id, `🎉 Candidate Shortlisted - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">🎉 Candidate Shortlisted</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Great news! Your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has been shortlisted for the <strong>${candidate.job?.title}</strong> role.</p>
+          <p>You can check the candidate's progress in your dashboard.</p>
+        </div>
+      </div>`
+    );
+
     res.json({ success: true, message: 'Candidate shortlisted', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
@@ -140,6 +190,19 @@ exports.pipelineReject = async (req, res) => {
     await candidate.save();
 
     await auditService.log({ actor: req.user._id, actorRole: req.user.role, action: 'PIPELINE_REJECT', entityType: 'Candidate', entityId: candidate._id, description: `Candidate rejected. Reason: ${reason}`, ipAddress: req.ip });
+
+    await sendPipelineEmail('partner', candidate._id, `❌ Candidate Status Update - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Status Update</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Unfortunately, your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has been rejected for the <strong>${candidate.job?.title}</strong> role.</p>
+          <p><strong>Reason:</strong> ${reason}</p>
+        </div>
+      </div>`
+    );
 
     res.json({ success: true, message: 'Candidate rejected', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
@@ -181,8 +244,13 @@ exports.definePipelineTemplate = async (req, res) => {
     const { rounds } = req.body; // [{ roundType, order }]
     const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
 
-    if (candidate.status !== PIPELINE_STATES.SHORTLISTED) {
-      return res.status(400).json({ success: false, message: `Pipeline can only be defined when candidate is SHORTLISTED. Current status: ${candidate.status}` });
+    const ALLOWED_INITIAL_STATES = [
+      PIPELINE_STATES.SHORTLISTED,
+      PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
+      PIPELINE_STATES.ASSESSMENT_PENDING
+    ];
+    if (!ALLOWED_INITIAL_STATES.includes(candidate.status)) {
+      return res.status(400).json({ success: false, message: `Pipeline can only be defined when candidate is in initial stages (SHORTLISTED, SLOTS_NOT_PUBLISHED, ASSESSMENT_PENDING). Current status: ${candidate.status}` });
     }
 
     const validation = validatePipelineTemplate(rounds);
@@ -249,19 +317,23 @@ exports.defineJobPipelineTemplate = async (req, res) => {
     const { rounds } = req.body; // [{ roundType, order }]
     const { jobId } = req.params;
 
-    const Company = require('../models/Company');
-    const company = await Company.findOne({ user: req.user._id });
-    if (!company) {
-      return res.status(403).json({ success: false, message: 'Company profile not found' });
-    }
-
     const job = await Job.findById(jobId);
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
-    if (job.company.toString() !== company._id.toString()) {
-      return res.status(403).json({ success: false, message: 'Access denied: Job does not belong to your company' });
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'sub_admin';
+
+    if (!isAdmin) {
+      const Company = require('../models/Company');
+      const company = await Company.findOne({ user: req.user._id });
+      if (!company) {
+        return res.status(403).json({ success: false, message: 'Company profile not found' });
+      }
+
+      if (job.company.toString() !== company._id.toString()) {
+        return res.status(403).json({ success: false, message: 'Access denied: Job does not belong to your company' });
+      }
     }
 
     const validation = validatePipelineTemplate(rounds);
@@ -277,17 +349,13 @@ exports.defineJobPipelineTemplate = async (req, res) => {
     job.pipelineTemplate = normalized;
     await job.save();
 
-    // Auto-initialize currently shortlisted candidates who do not have a template defined yet
-    const shortlistedCandidates = await Candidate.find({
+    // Auto-initialize currently shortlisted candidates or update candidates in initial pipeline states who haven't progressed
+    const candidatesToUpdate = await Candidate.find({
       job: job._id,
-      status: 'SHORTLISTED',
-      $or: [
-        { pipelineTemplate: { $exists: false } },
-        { pipelineTemplate: { $size: 0 } }
-      ]
+      status: { $in: ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING'] }
     });
 
-    for (const cand of shortlistedCandidates) {
+    for (const cand of candidatesToUpdate) {
       cand.pipelineTemplate = normalized;
       cand.rounds = normalized.map(r => ({
         roundType: r.roundType,
@@ -302,7 +370,7 @@ exports.defineJobPipelineTemplate = async (req, res) => {
           status: cand.status,
           changedBy: req.user._id,
           changedAt: new Date(),
-          notes: `Job pipeline template applied: started first round (${cand.rounds[0].roundType})`
+          notes: `Job pipeline template applied/updated: started first round (${cand.rounds[0].roundType})`
         });
       }
       await cand.save();
@@ -416,7 +484,7 @@ async function populateRoundsWithJobSlots(candidate) {
     try {
       bookedSlot = await InterviewSlot.findById(candidate.assignedSlot)
         .populate('createdBy', 'email role')
-        .populate('bookedCandidates.candidate', 'firstName lastName email uniqueId')
+        .populate('bookedCandidates.candidate', 'firstName lastName email uniqueId interviewConfig')
         .populate('bookedCandidates.partner', 'firmName firstName lastName uniqueId');
     } catch (err) {
       console.error('[PIPELINE] Error fetching candidate booked slot:', err);
@@ -424,57 +492,100 @@ async function populateRoundsWithJobSlots(candidate) {
   }
 
   const populatedRounds = [];
-  
+
   for (let i = 0; i < candidate.rounds.length; i++) {
     const r = candidate.rounds[i];
     const roundObj = r.toObject ? r.toObject() : JSON.parse(JSON.stringify(r));
-    
-    // If this round matches the booked slot's round type, populate it
-    if (bookedSlot && roundObj.roundType === bookedSlot.roundType) {
-      const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
-      const mapped = mapSlotDetails(bookedSlot);
-      if (mapped) {
-        mapped.details = {
-          address: candidate.interviewConfig?.details || bookedSlot.notes || '',
-          meetingLink: candidate.interviewConfig?.details || bookedSlot.notes || '',
-          pointOfContact: {
-            name: candidate.interviewConfig?.interviewer || '',
-            email: '',
-            phone: ''
-          }
-        };
-        roundObj.slots = [mapped];
-      } else {
-        roundObj.slots = [];
-      }
-    } 
-    // Otherwise, if the round status is SLOTS_PUBLISHED or SLOTS_NOT_PUBLISHED, check for active slots
-    else if (roundObj.status === 'SLOTS_PUBLISHED' || roundObj.status === 'SLOTS_NOT_PUBLISHED') {
-      try {
-        const jobId = candidate.job?._id || candidate.job;
-        const activeSlots = await InterviewSlot.find({
-          job: jobId,
-          roundType: roundObj.roundType,
-          status: 'ACTIVE'
-        })
-          .populate('createdBy', 'email role')
-          .populate('bookedCandidates.candidate', 'firstName lastName email uniqueId')
-          .populate('bookedCandidates.partner', 'firmName firstName lastName uniqueId')
-          .sort({ date: 1, startTime: 1 });
 
-        if (activeSlots.length > 0) {
-          roundObj.slots = activeSlots.map(slot => mapSlotDetails(slot));
-          
-          // Dynamically elevate status to SLOTS_PUBLISHED so the frontend renders the booking UI
+    // If candidate already has slot(s) assigned in this round, preserve them directly!
+    if (r.slots && r.slots.length > 0) {
+      roundObj.slots = r.slots.map(s => s.toObject ? s.toObject() : JSON.parse(JSON.stringify(s)));
+      populatedRounds.push(roundObj);
+      continue;
+    }
+
+    // Otherwise, fetch active slots for booking from database
+    try {
+      const jobId = candidate.job?._id || candidate.job;
+      
+      const rt = (roundObj.roundType || '').trim().toUpperCase();
+      const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+      const isHr = hrNames.includes(rt);
+      
+      const roundTypeQuery = isHr 
+        ? { $in: [roundObj.roundType, ...hrNames.map(n => new RegExp(`^${n}$`, 'i')), /HR_ROUND/i, /HR Round/i] }
+        : roundObj.roundType;
+
+      const allSlots = await InterviewSlot.find({
+        job: jobId,
+        roundType: roundTypeQuery
+      })
+        .populate('createdBy', 'email role')
+        .populate('bookedCandidates.candidate', 'firstName lastName email uniqueId interviewConfig')
+        .populate('bookedCandidates.partner', 'firmName firstName lastName uniqueId')
+        .sort({ date: -1, startTime: -1 });
+
+      if (allSlots.length > 0) {
+        // We only want to map slots if we didn't already set one from bookedSlot
+        // But wait, bookedSlot is just ONE slot the candidate is currently assigned to.
+        // If we want history, we should show ALL slots for this round.
+        // Let's merge or just use allSlots!
+        
+        // Let's use allSlots, but highlight the bookedSlot if it exists
+        // The mapping logic is the same:
+        roundObj.slots = allSlots.map(slot => {
+           const mapped = mapSlotDetails(slot);
+           
+           // If this specific slot is the booked slot, we inject the specific candidate coordinates
+           if (bookedSlot && slot._id.toString() === bookedSlot._id.toString()) {
+              const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
+              const isVirtual = displayMode.toLowerCase() === 'virtual';
+              const detailsVal = candidate.interviewConfig?.details || bookedSlot.interviewDetails || bookedSlot.notes || '';
+              mapped.details = {
+                address: !isVirtual ? detailsVal : '',
+                meetingLink: isVirtual ? detailsVal : '',
+                pointOfContact: {
+                  name: candidate.interviewConfig?.interviewer || bookedSlot.interviewerName || '',
+                  email: '',
+                  phone: ''
+                }
+              };
+           }
+           return mapped;
+        }).filter(Boolean);
+
+        // Dynamically elevate status to SLOTS_PUBLISHED so the frontend renders the booking UI
+        // ONLY if the round is currently SLOTS_NOT_PUBLISHED and there are ACTIVE slots
+        if (roundObj.status === 'SLOTS_NOT_PUBLISHED' && allSlots.some(s => s.status === 'ACTIVE')) {
           roundObj.status = 'SLOTS_PUBLISHED';
+        }
+      } else {
+        // If we have a bookedSlot but no slots were found (edge case), keep the bookedSlot logic
+        if (bookedSlot && roundObj.roundType === bookedSlot.roundType) {
+          const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
+          const isVirtual = displayMode.toLowerCase() === 'virtual';
+          const mapped = mapSlotDetails(bookedSlot);
+          if (mapped) {
+            const detailsVal = candidate.interviewConfig?.details || bookedSlot.interviewDetails || bookedSlot.notes || '';
+            mapped.details = {
+              address: !isVirtual ? detailsVal : '',
+              meetingLink: isVirtual ? detailsVal : '',
+              pointOfContact: {
+                name: candidate.interviewConfig?.interviewer || bookedSlot.interviewerName || '',
+                email: '',
+                phone: ''
+              }
+            };
+            roundObj.slots = [mapped];
+          } else {
+            roundObj.slots = [];
+          }
         } else {
           roundObj.slots = [];
         }
-      } catch (err) {
-        console.error('[PIPELINE] Error fetching active slots:', err);
-        roundObj.slots = [];
       }
-    } else {
+    } catch (err) {
+      console.error('[PIPELINE] Error fetching all slots:', err);
       roundObj.slots = [];
     }
 
@@ -490,7 +601,18 @@ exports.getPipelinePreview = async (req, res) => {
   try {
     const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
 
-    const populatedRounds = await populateRoundsWithJobSlots(candidate);
+    let populatedRounds = await populateRoundsWithJobSlots(candidate);
+    let pipelineTemplate = candidate.pipelineTemplate;
+
+    if ((!pipelineTemplate || pipelineTemplate.length === 0) && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
+      pipelineTemplate = candidate.job.pipelineTemplate;
+      populatedRounds = candidate.job.pipelineTemplate.map((r, idx) => ({
+        roundType: r.roundType,
+        order: r.order || idx + 1,
+        status: 'NOT_STARTED',
+        slots: []
+      }));
+    }
 
     res.json({
       success: true,
@@ -498,11 +620,12 @@ exports.getPipelinePreview = async (req, res) => {
         candidateId: candidate._id,
         candidateName: `${candidate.firstName} ${candidate.lastName}`,
         currentStatus: candidate.status,
-        pipelineTemplate: candidate.pipelineTemplate,
+        pipelineTemplate: pipelineTemplate,
         rounds: populatedRounds,
         hrRound: candidate.hrRound,
         auditTrail: [],
         job: candidate.job,
+        offer: candidate.offer,
       }
     });
   } catch (err) {
@@ -522,7 +645,18 @@ exports.adminGetPipeline = async (req, res) => {
 
     if (!candidate) return res.status(404).json({ success: false, message: 'Candidate not found' });
 
-    const populatedRounds = await populateRoundsWithJobSlots(candidate);
+    let populatedRounds = await populateRoundsWithJobSlots(candidate);
+    let pipelineTemplate = candidate.pipelineTemplate;
+
+    if ((!pipelineTemplate || pipelineTemplate.length === 0) && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
+      pipelineTemplate = candidate.job.pipelineTemplate;
+      populatedRounds = candidate.job.pipelineTemplate.map((r, idx) => ({
+        roundType: r.roundType,
+        order: r.order || idx + 1,
+        status: 'NOT_STARTED',
+        slots: []
+      }));
+    }
 
     res.json({
       success: true,
@@ -530,11 +664,12 @@ exports.adminGetPipeline = async (req, res) => {
         candidateId: candidate._id,
         candidateName: `${candidate.firstName} ${candidate.lastName}`,
         currentStatus: candidate.status,
-        pipelineTemplate: candidate.pipelineTemplate,
+        pipelineTemplate: pipelineTemplate,
         rounds: populatedRounds,
         hrRound: candidate.hrRound,
         auditTrail: candidate.auditTrail,
         job: candidate.job,
+        offer: candidate.offer,
       }
     });
   } catch (err) {
@@ -562,7 +697,18 @@ exports.partnerGetPipeline = async (req, res) => {
 
     if (!candidate) return res.status(404).json({ success: false, message: 'Candidate/submission not found' });
 
-    const populatedRounds = await populateRoundsWithJobSlots(candidate);
+    let populatedRounds = await populateRoundsWithJobSlots(candidate);
+    let pipelineTemplate = candidate.pipelineTemplate;
+
+    if ((!pipelineTemplate || pipelineTemplate.length === 0) && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
+      pipelineTemplate = candidate.job.pipelineTemplate;
+      populatedRounds = candidate.job.pipelineTemplate.map((r, idx) => ({
+        roundType: r.roundType,
+        order: r.order || idx + 1,
+        status: 'NOT_STARTED',
+        slots: []
+      }));
+    }
 
     let currentStatus = candidate.status;
     if (currentStatus === 'ROUND_ON_HOLD') {
@@ -587,11 +733,12 @@ exports.partnerGetPipeline = async (req, res) => {
         candidateId: candidate._id,
         candidateName: `${candidate.firstName} ${candidate.lastName}`,
         currentStatus,
-        pipelineTemplate: candidate.pipelineTemplate,
+        pipelineTemplate: pipelineTemplate,
         rounds: mappedRounds,
         hrRound: candidate.hrRound,
         auditTrail: [],
         job: candidate.job,
+        offer: candidate.offer,
       }
     });
   } catch (err) {
@@ -603,7 +750,7 @@ exports.partnerGetPipeline = async (req, res) => {
 // Helper to identify the current active round info based on candidate status
 function getActiveRoundInfo(candidate) {
   const status = candidate.status;
-  
+
   if (status === PIPELINE_STATES.SHORTLISTED || status === PIPELINE_STATES.REJECTED) {
     return null;
   }
@@ -617,8 +764,9 @@ function getActiveRoundInfo(candidate) {
   ];
   if (hrStates.includes(status)) {
     const idx = candidate.rounds.findIndex(r => {
-      const rt = (r.roundType || '').toUpperCase();
-      return rt === 'HR_ROUND' || rt.includes('HR');
+      const rt = (r.roundType || '').trim().toUpperCase();
+      const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+      return hrNames.includes(rt);
     });
     if (idx !== -1) return { index: idx, round: candidate.rounds[idx] };
   }
@@ -914,7 +1062,7 @@ exports.pipelineShareDetails = async (req, res) => {
 
     await candidate.save();
 
-    // Trigger WhatsApp & Email notifications to candidate asynchronously
+    // Trigger WhatsApp notification to candidate asynchronously
     const notifyCandidate = async () => {
       try {
         const Company = require('../models/Company');
@@ -955,78 +1103,7 @@ exports.pipelineShareDetails = async (req, res) => {
           console.error('[PIPELINE] WhatsApp notification failed:', waError.message);
         }
 
-        // 2. Email notification
-        try {
-          const emailService = require('../services/emailService');
-          const formattedDate = new Date(slot.date).toDateString();
-          const emailHtml = `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-              <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
-                <h2 style="margin: 0; font-size: 20px;">📅 Interview Confirmed</h2>
-              </div>
-              <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
-                <p>Dear ${candidate.firstName},</p>
-                <p>Your interview with <strong>${companyName}</strong> for the <strong>${candidate.job?.title || 'Job Interview'}</strong> role has been confirmed and scheduled.</p>
-                <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
-                <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666; width: 120px;">Date:</td>
-                    <td style="padding: 6px 0;">${formattedDate}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">Time:</td>
-                    <td style="padding: 6px 0;">${slot.startTime} - ${slot.endTime}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">Mode:</td>
-                    <td style="padding: 6px 0;">${slot.mode === 'VIRTUAL' ? 'Virtual (Online)' : 'Face-to-Face (Offline)'}</td>
-                  </tr>
-                  ${meetingLink ? `
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">Meeting Link:</td>
-                    <td style="padding: 6px 0;"><a href="${meetingLink}" style="color: #059669; font-weight: bold;">${meetingLink}</a></td>
-                  </tr>
-                  ` : ''}
-                  ${address ? `
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">Location:</td>
-                    <td style="padding: 6px 0;">${address}</td>
-                  </tr>
-                  ` : ''}
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">POC Name:</td>
-                    <td style="padding: 6px 0;">${pocName}</td>
-                  </tr>
-                  ${pocEmail ? `
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">POC Email:</td>
-                    <td style="padding: 6px 0;"><a href="mailto:${pocEmail}" style="color: #059669;">${pocEmail}</a></td>
-                  </tr>
-                  ` : ''}
-                  ${pocPhone ? `
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">POC Phone:</td>
-                    <td style="padding: 6px 0;">${pocPhone}</td>
-                  </tr>
-                  ` : ''}
-                </table>
-                <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
-                <p style="font-size: 13px; color: #666;">Please make sure to join on time. If you have any issues or need to reschedule, please contact your staffing partner recruiter.</p>
-              </div>
-              <div style="text-align: center; padding: 16px; color: #9ca3af; font-size: 12px; background: #f3f4f6; border-radius: 0 0 10px 10px;">
-                © ${new Date().getFullYear()} Syncro1. All rights reserved.
-              </div>
-            </div>
-          `;
 
-          await emailService.sendEmail({
-            to: candidate.email,
-            subject: `📅 Interview Confirmed - ${companyName}`,
-            html: emailHtml
-          });
-        } catch (emailError) {
-          console.error('[PIPELINE] Email notification failed:', emailError.message);
-        }
 
       } catch (err) {
         console.error('[PIPELINE] Notification wrapper error:', err.message);
@@ -1034,6 +1111,18 @@ exports.pipelineShareDetails = async (req, res) => {
     };
 
     notifyCandidate();
+
+    await sendPipelineEmail('company', candidate._id, `📅 Interview Slot Assigned - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Interview Slot Assigned</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>The candidate <strong>${candidate.firstName} ${candidate.lastName}</strong> has been assigned to an interview slot for the <strong>${candidate.job?.title}</strong> role.</p>
+        </div>
+      </div>`
+    );
 
     res.json({ success: true, message: 'Details shared successfully', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
@@ -1048,7 +1137,7 @@ exports.pipelineRequestReschedule = async (req, res) => {
   try {
     const role = roleFromReq(req);
     const { reason, suggestedSlots } = req.body;
-    
+
     let candidateObj;
     if (role === ROLES.COMPANY) {
       const result = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
@@ -1139,6 +1228,19 @@ exports.pipelineRequestReschedule = async (req, res) => {
     });
 
     await candidateObj.save();
+    await sendPipelineEmail('partner', candidateObj._id, `🔄 Reschedule Requested - ${candidateObj.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Reschedule Requested</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>The company has requested a reschedule for the interview with <strong>${candidateObj.firstName} ${candidateObj.lastName}</strong> for the <strong>${candidateObj.job?.title}</strong> role.</p>
+          <p><strong>Reason:</strong> ${reason}</p>
+        </div>
+      </div>`
+    );
+
     res.json({ success: true, message: 'Reschedule request processed', data: { candidateId: candidateObj._id, status: candidateObj.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
@@ -1151,7 +1253,7 @@ exports.pipelineRequestReschedule = async (req, res) => {
 exports.partnerRequestReschedule = async (req, res) => {
   try {
     const { reason, suggestedSlots } = req.body;
-    
+
     if (!suggestedSlots || !Array.isArray(suggestedSlots) || suggestedSlots.length === 0 || suggestedSlots.length > 2) {
       return res.status(400).json({ success: false, message: 'Please select up to 2 slots for rescheduling.' });
     }
@@ -1245,6 +1347,19 @@ exports.partnerRequestReschedule = async (req, res) => {
     });
 
     await candidateObj.save();
+    await sendPipelineEmail('company', candidateObj._id, `🔄 Reschedule Requested - ${candidateObj.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Reschedule Requested</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>The talent partner has requested a reschedule for the interview with <strong>${candidateObj.firstName} ${candidateObj.lastName}</strong> for the <strong>${candidateObj.job?.title}</strong> role.</p>
+          <p><strong>Reason:</strong> ${reason}</p>
+        </div>
+      </div>`
+    );
+
     res.json({ success: true, message: 'Reschedule request processed', data: { candidateId: candidateObj._id, status: candidateObj.status } });
   } catch (err) {
     console.error('[PIPELINE] partner reschedule error:', err);
@@ -1310,6 +1425,9 @@ exports.pipelineConfirmReschedule = async (req, res) => {
     }
     await slotDoc.save();
 
+    const existingPocPhone = activeInfo.round.slots?.[0]?.details?.pointOfContact?.phone || '';
+    const existingPocEmail = activeInfo.round.slots?.[0]?.details?.pointOfContact?.email || '';
+
     // Update candidate slot and details representation
     candidate.assignedSlot = slotDoc._id;
     activeInfo.round.slots = [{
@@ -1318,17 +1436,17 @@ exports.pipelineConfirmReschedule = async (req, res) => {
       endTime: slotDoc.endTime,
       timezone: slotDoc.timezone || 'Asia/Kolkata',
       mode: slotDoc.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
-      interviewerName: slotDoc.notes || '',
+      interviewerName: slotDoc.interviewerName || '',
       capacity: 1,
       bookedBy: candidate.submittedBy,
       bookedAt: new Date(),
       details: {
-        meetingLink: meetingLink || '',
-        address: address || '',
+        meetingLink: slotDoc.interviewMode === 'Virtual' ? (slotDoc.interviewDetails || '') : '',
+        address: slotDoc.interviewMode === 'Face-to-Face' ? (slotDoc.interviewDetails || '') : '',
         pointOfContact: {
-          name: finalPocName,
-          phone: finalPocPhone,
-          email: finalPocEmail
+          name: slotDoc.interviewerName || finalPocName || '',
+          phone: finalPocPhone || existingPocPhone || '',
+          email: finalPocEmail || existingPocEmail || ''
         }
       }
     }];
@@ -1348,14 +1466,18 @@ exports.pipelineConfirmReschedule = async (req, res) => {
     reqInfo.actionedAt = new Date();
     reqInfo.actionedBy = req.user._id;
 
+    const crypto = require('crypto');
+    const confirmationToken = crypto.randomBytes(32).toString('hex');
+
     // Synchronize with candidate.interviewConfig for compatibility across dashboards
     candidate.interviewConfig = {
       mode: slotDoc.interviewMode === 'Face-to-Face' ? 'Face-to-Face' : 'Virtual',
-      details: slotDoc.interviewMode === 'Face-to-Face' ? (address || '') : (meetingLink || ''),
-      interviewer: finalPocName,
+      details: slotDoc.interviewDetails || '',
+      interviewer: slotDoc.interviewerName || '',
       isConfirmedByCompany: true,
       confirmedAt: new Date(),
-      candidateResponse: "PENDING"
+      candidateResponse: "PENDING",
+      confirmationToken: confirmationToken
     };
 
     activeInfo.round.status = fsm.nextState;
@@ -1379,7 +1501,7 @@ exports.pipelineConfirmReschedule = async (req, res) => {
 
     await candidate.save();
 
-    // Trigger WhatsApp & Email notifications to candidate asynchronously
+    // Trigger WhatsApp notification to candidate asynchronously
     const notifyCandidate = async () => {
       try {
         const companyName = company ? company.companyName : 'Syncro1 Employer';
@@ -1391,16 +1513,13 @@ exports.pipelineConfirmReschedule = async (req, res) => {
         });
 
         const mode = slot.mode === "VIRTUAL" ? "Online" : "Offline";
-        const detailsStr = slot.mode === "VIRTUAL"
-          ? `Meeting Link: ${meetingLink || ''}`
-          : `Address: ${address || ''}`;
-
-        const interviewer = pocName || 'Hiring Team';
+        const detailsStr = slotDoc.interviewDetails || '';
+        const interviewer = slotDoc.interviewerName || 'Hiring Team';
 
         // 1. WhatsApp notification
         try {
           const whatsappService = require('../services/whatsappService');
-          const token = candidate.interviewConfig?.confirmationToken || candidate._id.toString();
+          const token = confirmationToken;
           await whatsappService.sendInterviewInvitation(
             candidate.mobile,
             candidate.firstName,
@@ -1417,65 +1536,24 @@ exports.pipelineConfirmReschedule = async (req, res) => {
           console.error('[PIPELINE] WhatsApp notification failed:', waError.message);
         }
 
-        // 2. Email notification
-        try {
-          const emailService = require('../services/emailService');
-          const formattedDate = new Date(slot.date).toDateString();
-          const emailHtml = `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
-              <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
-                <h2 style="margin: 0; font-size: 20px;">📅 Interview Rescheduled & Confirmed</h2>
-              </div>
-              <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
-                <p>Dear ${candidate.firstName},</p>
-                <p>Your interview with <strong>${companyName}</strong> has been successfully rescheduled and confirmed.</p>
-                <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
-                <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666; width: 120px;">Date:</td>
-                    <td style="padding: 6px 0;">${formattedDate}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">Time:</td>
-                    <td style="padding: 6px 0;">${slot.startTime} - ${slot.endTime}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">Mode:</td>
-                    <td style="padding: 6px 0;">${slot.mode === 'VIRTUAL' ? 'Virtual (Online)' : 'Face-to-Face (Offline)'}</td>
-                  </tr>
-                  ${meetingLink ? `
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">Meeting Link:</td>
-                    <td style="padding: 6px 0;"><a href="${meetingLink}" style="color: #059669; font-weight: bold;">${meetingLink}</a></td>
-                  </tr>
-                  ` : ''}
-                  ${address ? `
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">Location:</td>
-                    <td style="padding: 6px 0;">${address}</td>
-                  </tr>
-                  ` : ''}
-                  <tr>
-                    <td style="padding: 6px 0; font-weight: bold; color: #666;">POC Name:</td>
-                    <td style="padding: 6px 0;">${pocName}</td>
-                  </tr>
-                </table>
-              </div>
-            </div>
-          `;
-          await emailService.sendEmail({
-            to: candidate.email,
-            subject: `📅 Interview Rescheduled - ${companyName}`,
-            html: emailHtml
-          });
-        } catch (err) {
-          console.error('[PIPELINE] Email reschedule failed:', err.message);
-        }
+
       } catch (err) {
         console.error('[PIPELINE] Reschedule notification failed:', err.message);
       }
     };
     notifyCandidate();
+
+    await sendPipelineEmail('partner', candidate._id, `✅ Reschedule Confirmed - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Reschedule Confirmed</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>The rescheduled interview slot for <strong>${candidate.firstName} ${candidate.lastName}</strong> has been confirmed by the company for the <strong>${candidate.job?.title}</strong> role.</p>
+        </div>
+      </div>`
+    );
 
     res.json({ success: true, message: 'Reschedule confirmed successfully', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
@@ -1633,6 +1711,18 @@ exports.pipelineSelectNextRound = async (req, res) => {
     }
 
     await candidate.save();
+    await sendPipelineEmail('partner', candidate._id, `🎉 Candidate Advanced - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Status Update</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Great news! Your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has been selected for the next round of interviews for the <strong>${candidate.job?.title}</strong> role.</p>
+        </div>
+      </div>`
+    );
+
     res.json({ success: true, message: 'Candidate selected for next round', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
@@ -1676,6 +1766,19 @@ exports.pipelineRejectRound = async (req, res) => {
     });
 
     await candidate.save();
+    await sendPipelineEmail('partner', candidate._id, `❌ Candidate Status Update - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Status Update</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Unfortunately, your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has been rejected at this interview round for the <strong>${candidate.job?.title}</strong> role.</p>
+          <p><strong>Reason:</strong> ${reason}</p>
+        </div>
+      </div>`
+    );
+
     res.json({ success: true, message: 'Candidate rejected at this round', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
@@ -1694,9 +1797,45 @@ exports.pipelineSelectDirectHR = async (req, res) => {
     const fsm = transition({ currentState: fromState, action: ACTIONS.SELECT_DIRECT_HR, role });
     if (!fsm.ok) return handleFsmError(fsm, res);
 
+    // ── Find the current active round ─────────────────────────────────────
     const activeInfo = getActiveRoundInfo(candidate);
+
+    // ── Find existing HR round from the pipeline template (never auto-create) ─
+    let hrRoundIndex = candidate.rounds.findIndex(r => {
+      const rt = (r.roundType || '').trim().toUpperCase();
+      const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+      return hrNames.includes(rt);
+    });
+
+    let hrRound;
+
+    if (hrRoundIndex === -1) {
+      // Auto-create HR round if it doesn't exist (fallback for legacy candidates)
+      const hrOrder = candidate.rounds.length > 0 ? Math.max(...candidate.rounds.map(r => r.order || 0)) + 1 : 1;
+      
+      hrRound = {
+        roundType: 'HR_ROUND',
+        order: hrOrder,
+        status: getInitialRoundState('HR_ROUND'),
+        slots: [],
+        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+      };
+      candidate.rounds.push(hrRound);
+      
+      if (!candidate.pipelineTemplate) candidate.pipelineTemplate = [];
+      candidate.pipelineTemplate.push({
+        roundType: 'HR_ROUND',
+        order: hrOrder
+      });
+      
+      hrRoundIndex = candidate.rounds.length - 1;
+    } else {
+      hrRound = candidate.rounds[hrRoundIndex];
+    }
+
+    // ── Mark the current active round as skipped ──────────────────────────
     if (activeInfo) {
-      activeInfo.round.status = fsm.nextState;
+      activeInfo.round.status = PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR;
       activeInfo.round.outcome = {
         decision: 'SELECTED_DIRECT_HR',
         decidedBy: req.user._id,
@@ -1704,52 +1843,64 @@ exports.pipelineSelectDirectHR = async (req, res) => {
       };
     }
 
-    candidate.status = fsm.nextState;
-    candidate.statusHistory.push({ status: fsm.nextState, changedBy: req.user._id, changedAt: new Date(), notes: 'Selected directly for HR Round' });
+    // ── Mark ALL intermediate rounds between current and HR as skipped ────
+    // Any round that is between the active round's order and the HR round's order
+    // and still in an initial/unstarted state should be marked as skipped.
+    const currentOrder = activeInfo ? (activeInfo.round.order || activeInfo.index + 1) : 0;
+    const hrOrder = hrRound.order || hrRoundIndex + 1;
+
+    const INACTIVE_ROUND_STATES = [
+      PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
+      PIPELINE_STATES.ASSESSMENT_PENDING,
+    ];
+
+    candidate.rounds.forEach((r, idx) => {
+      const rOrder = r.order || idx + 1;
+      // Skip rounds that are between current and HR round (exclusive)
+      if (rOrder > currentOrder && rOrder < hrOrder && INACTIVE_ROUND_STATES.includes(r.status)) {
+        r.status = PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR;
+        r.outcome = {
+          decision: 'SKIPPED_TO_HR',
+          decidedBy: req.user._id,
+          decidedAt: new Date()
+        };
+      }
+    });
+
+    // ── Activate the HR round ─────────────────────────────────────────────
+    hrRound.status = getInitialRoundState(hrRound.roundType);
+    candidate.status = hrRound.status;
+    candidate.assignedSlot = null;
+    candidate.interviewConfig = null;
+
+    candidate.statusHistory.push({ status: candidate.status, changedBy: req.user._id, changedAt: new Date(), notes: 'Skipped directly to HR Round' });
     writeAudit(candidate, {
       actorId: req.user._id,
       actorRole: role,
       action: ACTIONS.SELECT_DIRECT_HR,
       fromState,
-      toState: fsm.nextState,
+      toState: candidate.status,
       roundIndex: activeInfo ? activeInfo.index : null
     });
 
-    const hrRound = candidate.rounds.find(r => {
-      const rt = (r.roundType || '').toUpperCase();
-      return rt === 'HR_ROUND' || rt.includes('HR');
-    });
-    if (hrRound) {
-      hrRound.status = getInitialRoundState(hrRound.roundType);
-      candidate.status = getInitialRoundState(hrRound.roundType);
-      candidate.assignedSlot = null;
-      candidate.interviewConfig = null;
-    } else {
-      const maxOrder = candidate.rounds.length > 0 ? Math.max(...candidate.rounds.map(r => r.order || 0)) : 0;
-      const newRound = {
-        roundType: 'HR_ROUND',
-        order: maxOrder + 1,
-        status: getInitialRoundState('HR_ROUND'),
-        slots: [],
-        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
-      };
-      candidate.rounds.push(newRound);
-      if (!candidate.pipelineTemplate) {
-        candidate.pipelineTemplate = [];
-      }
-      candidate.pipelineTemplate.push({ roundType: 'HR_ROUND', order: maxOrder + 1 });
-      
-      candidate.status = getInitialRoundState('HR_ROUND');
-      candidate.assignedSlot = null;
-      candidate.interviewConfig = null;
-    }
-
     await candidate.save();
-    res.json({ success: true, message: 'Candidate selected for direct HR round', data: { candidateId: candidate._id, status: candidate.status } });
+    await sendPipelineEmail('partner', candidate._id, `🎉 Candidate Advanced - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Status Update</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Great news! Your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has been advanced to the HR round for the <strong>${candidate.job?.title}</strong> role.</p>
+        </div>
+      </div>`
+    );
+
+    res.json({ success: true, message: 'Candidate skipped to HR round', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
     console.error('[PIPELINE] select direct hr error:', err);
-    res.status(500).json({ success: false, message: 'Failed to select direct HR round' });
+    res.status(500).json({ success: false, message: err.message || 'Failed to skip to HR round' });
   }
 };
 
@@ -1847,8 +1998,9 @@ exports.pipelineResolveHold = async (req, res) => {
         }
       } else if (resolution === 'SELECTED_DIRECT_HR') {
         const hrRound = candidate.rounds.find(r => {
-          const rt = (r.roundType || '').toUpperCase();
-          return rt === 'HR_ROUND' || rt.includes('HR');
+          const rt = (r.roundType || '').trim().toUpperCase();
+          const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+          return hrNames.includes(rt);
         });
         if (hrRound) {
           hrRound.status = getInitialRoundState(hrRound.roundType);
@@ -1898,6 +2050,18 @@ exports.pipelineHRSelect = async (req, res) => {
     });
 
     await candidate.save();
+    await sendPipelineEmail('partner', candidate._id, `🎉 Candidate Passed HR Round - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Status Update</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Great news! Your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has passed the HR round for the <strong>${candidate.job?.title}</strong> role.</p>
+        </div>
+      </div>`
+    );
+
     res.json({ success: true, message: 'HR round passed', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
@@ -1935,6 +2099,19 @@ exports.pipelineHRReject = async (req, res) => {
     });
 
     await candidate.save();
+    await sendPipelineEmail('partner', candidate._id, `❌ Candidate Status Update - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Status Update</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Unfortunately, your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has been rejected at the HR round for the <strong>${candidate.job?.title}</strong> role.</p>
+          <p><strong>Reason:</strong> ${reason}</p>
+        </div>
+      </div>`
+    );
+
     res.json({ success: true, message: 'HR round rejected', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
@@ -2023,16 +2200,52 @@ exports.pipelineHRResolveHold = async (req, res) => {
 // PHASE 4 — Offer Management & Onboarding
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ─── POST /api/companies/candidates/:id/pipeline/offer/start ─────────────────
+exports.pipelineStartOfferNegotiation = async (req, res) => {
+  try {
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+
+    if (candidate.status !== 'HR_SELECTED') {
+      return res.status(400).json({ success: false, message: 'Candidate must be in HR_SELECTED state.' });
+    }
+
+    if (!candidate.offer) candidate.offer = {};
+    candidate.offer.negotiationStartedAt = new Date();
+
+    await candidate.save();
+
+    res.json({ success: true, data: { candidate } });
+  } catch (error) {
+    console.error('[PIPELINE] start offer negotiation error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Server error' });
+  }
+};
+
 // ─── POST /api/companies/candidates/:id/pipeline/offer/send ─────────────────
 // Company sends offer letter to HR-Selected candidate.
 // Body: { salary, offerLetterUrl, notes }
 exports.pipelineSendOffer = async (req, res) => {
   try {
     const role = roleFromReq(req);
-    const { salary, offerLetterUrl, notes } = req.body;
+    const { 
+      salary, 
+      inhandCtc,
+      variableCtc,
+      expectedJoiningDate,
+      joiningDate,
+      workMode,
+      workLocation,
+      notes 
+    } = req.body;
+    
+    const offerLetterUrl = req.file ? req.file.path : req.body.offerLetterUrl;
 
     if (!salary || isNaN(Number(salary)) || Number(salary) <= 0) {
-      return res.status(400).json({ success: false, message: 'A valid annual CTC (salary) is required to send an offer.' });
+      return res.status(400).json({ success: false, message: 'A valid annual CTC (salary) is required to log an offer.' });
+    }
+
+    if (!offerLetterUrl) {
+      return res.status(400).json({ success: false, message: 'Either an Offer Letter URL or a file upload is required.' });
     }
 
     const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
@@ -2046,43 +2259,66 @@ exports.pipelineSendOffer = async (req, res) => {
     const offerExpiresAt = new Date();
     offerExpiresAt.setDate(offerExpiresAt.getDate() + 7); // Valid for 7 days
 
+    const isOfferSentBool = req.body.isOfferSent === 'true' || req.body.isOfferSent === true;
+
     // Populate offer sub-document
     candidate.offer = {
       ...(candidate.offer || {}),
       salary: Number(salary),
+      inhandCtc: inhandCtc && inhandCtc !== 'undefined' ? Number(inhandCtc) : undefined,
+      variableCtc: variableCtc && variableCtc !== 'undefined' ? Number(variableCtc) : undefined,
+      expectedJoiningDate: expectedJoiningDate && expectedJoiningDate !== 'undefined' ? new Date(expectedJoiningDate) : undefined,
+      joiningDate: joiningDate && joiningDate !== 'undefined' ? new Date(joiningDate) : undefined,
+      workMode: workMode && workMode !== 'undefined' ? workMode : undefined,
+      workLocation: workLocation && workLocation !== 'undefined' ? workLocation : undefined,
       offerLetterUrl: offerLetterUrl || '',
       offeredAt: new Date(),
       response: 'PENDING',
       offerToken,
-      offerWhatsappSentAt: new Date(),
+      offerWhatsappSentAt: isOfferSentBool ? new Date() : undefined,
+      isOfferSent: isOfferSentBool,
+      offerSentAt: isOfferSentBool ? new Date() : undefined,
       offerExpiresAt
     };
 
-    candidate.status = fsm.nextState;
-    candidate.statusHistory.push({
-      status: fsm.nextState,
-      changedBy: req.user._id,
-      changedAt: new Date(),
-      notes: notes || `Offer sent. CTC: ₹${Number(salary).toLocaleString('en-IN')}`
-    });
-    writeAudit(candidate, {
-      actorId: req.user._id,
-      actorRole: role,
-      action: ACTIONS.SEND_OFFER,
-      fromState,
-      toState: fsm.nextState,
-      reason: notes || `Offer sent. CTC: ₹${Number(salary).toLocaleString('en-IN')}`
-    });
+    if (isOfferSentBool) {
+      candidate.status = fsm.nextState;
+      candidate.statusHistory.push({
+        status: fsm.nextState,
+        changedBy: req.user._id,
+        changedAt: new Date(),
+        notes: notes || `Offer sent. CTC: ₹${Number(salary).toLocaleString('en-IN')}`
+      });
+      writeAudit(candidate, {
+        actorId: req.user._id,
+        actorRole: role,
+        action: ACTIONS.SEND_OFFER,
+        fromState,
+        toState: fsm.nextState,
+        reason: notes || `Offer sent. CTC: ₹${Number(salary).toLocaleString('en-IN')}`
+      });
+    } else {
+      // Just save the offer, don't transition state
+      writeAudit(candidate, {
+        actorId: req.user._id,
+        actorRole: role,
+        action: ACTIONS.SEND_OFFER,
+        fromState,
+        toState: fromState,
+        reason: notes || `Offer drafted and saved. CTC: ₹${Number(salary).toLocaleString('en-IN')}`
+      });
+    }
 
     await candidate.save();
 
-    // Trigger WhatsApp notification to candidate (fire-and-forget)
-    const sendWhatsAppOffer = async () => {
-      try {
-        const whatsappService = require('../services/whatsappService');
-        await candidate.populate('job company');
+    if (isOfferSentBool) {
+      // Trigger WhatsApp notification to candidate (fire-and-forget)
+      const sendWhatsAppOffer = async () => {
+        try {
+          const whatsappService = require('../services/whatsappService');
+          await candidate.populate('job company');
         const companyName = candidate.company?.companyName || 'the Employer';
-        
+
         await whatsappService.sendCandidateOffer(
           candidate.mobile,
           candidate.firstName,
@@ -2119,12 +2355,101 @@ exports.pipelineSendOffer = async (req, res) => {
       }
     };
     notifyPartner();
+    } // End if (isOfferSentBool)
 
-    res.json({ success: true, message: 'Offer sent successfully.', data: { candidateId: candidate._id, status: candidate.status, offer: candidate.offer } });
+    res.json({ 
+      success: true, 
+      message: isOfferSentBool ? 'Offer sent successfully.' : 'Offer details saved successfully.', 
+      data: { candidateId: candidate._id, status: candidate.status, offer: candidate.offer } 
+    });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
     console.error('[PIPELINE] send offer error:', err);
     res.status(500).json({ success: false, message: 'Failed to send offer' });
+  }
+};
+
+// ─── POST /api/companies/candidates/:id/pipeline/offer/mark-sent ─────────────
+exports.pipelineMarkOfferSent = async (req, res) => {
+  try {
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+
+    // If candidate status is HR_SELECTED, transition it to OFFER_SENT
+    if (candidate.status === 'HR_SELECTED') {
+       candidate.status = 'OFFER_SENT';
+       candidate.statusHistory.push({
+         status: 'OFFER_SENT',
+         changedBy: req.user._id,
+         changedAt: new Date(),
+         notes: 'Offer marked as sent.'
+       });
+       writeAudit(candidate, {
+         actorId: req.user._id,
+         actorRole: roleFromReq(req),
+         action: ACTIONS.SEND_OFFER,
+         fromState: 'HR_SELECTED',
+         toState: 'OFFER_SENT',
+         reason: 'Offer marked as sent.'
+       });
+    }
+
+    if (!candidate.offer) {
+       candidate.offer = {};
+    }
+
+    candidate.offer.isOfferSent = true;
+    candidate.offer.offerSentAt = new Date();
+    await candidate.save();
+
+    // Trigger WhatsApp notification to candidate (fire-and-forget)
+    const sendWhatsAppOffer = async () => {
+      try {
+        const whatsappService = require('../services/whatsappService');
+        await candidate.populate('job company');
+        const companyName = candidate.company?.companyName || 'the Employer';
+        if (candidate.offer.salary && candidate.offer.offerToken) {
+          await whatsappService.sendCandidateOffer(
+            candidate.mobile,
+            candidate.firstName,
+            candidate.job?.title || 'Job Role',
+            companyName,
+            `₹${Number(candidate.offer.salary).toLocaleString('en-IN')}`,
+            candidate.offer.offerToken
+          );
+        }
+      } catch (err) {
+        console.error('[WHATSAPP] Offer notification failed:', err.message);
+      }
+    };
+    sendWhatsAppOffer();
+
+    // Notify staffing partner (fire-and-forget)
+    const notifyPartner = async () => {
+      try {
+        const notificationEngine = require('../services/notificationEngine');
+        const StaffingPartner = require('../models/StaffingPartner');
+        const partner = await StaffingPartner.findById(candidate.submittedBy).select('user');
+        if (partner?.user) {
+          await notificationEngine.send({
+            recipientId: partner.user,
+            type: 'OFFER_SENT',
+            title: '🎉 Offer Letter Sent!',
+            message: `An offer has been sent to ${candidate.firstName} ${candidate.lastName}. Awaiting candidate response.`,
+            data: { entityType: 'Candidate', entityId: candidate._id },
+            channels: { inApp: true, email: true },
+            priority: 'high'
+          });
+        }
+      } catch (e) {
+        console.error('[PIPELINE] Offer notify partner error:', e.message);
+      }
+    };
+    notifyPartner();
+
+    res.json({ success: true, data: { candidateId: candidate._id, status: candidate.status, offer: candidate.offer } });
+  } catch (error) {
+    console.error('[PIPELINE] mark offer sent error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Server error' });
   }
 };
 
@@ -2458,10 +2783,10 @@ exports.pipelineMarkJoined = async (req, res) => {
 
     const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
 
-    if (candidate.status !== PIPELINE_STATES.ONBOARDING) {
+    if (candidate.status !== PIPELINE_STATES.ONBOARDING && candidate.status !== PIPELINE_STATES.OFFER_ACCEPTED) {
       return res.status(400).json({
         success: false,
-        message: `Cannot mark as Joined from status "${candidate.status}". Candidate must be in ONBOARDING status.`
+        message: `Cannot mark as Joined from status "${candidate.status}". Candidate must be in OFFER_ACCEPTED or ONBOARDING status.`
       });
     }
 
@@ -2517,6 +2842,122 @@ exports.pipelineMarkJoined = async (req, res) => {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
     console.error('[PIPELINE] mark joined error:', err);
     res.status(500).json({ success: false, message: 'Failed to mark candidate as joined' });
+  }
+};
+
+// ─── POST /api/companies/pipeline/:id/offer/accept (Company-initiated) ─────
+exports.pipelineCompanyAcceptOffer = async (req, res) => {
+  try {
+    const role = 'company';
+    const { joiningDate, notes, respondedAt } = req.body;
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+
+    const fsm = transition({ currentState: fromState, action: ACTIONS.ACCEPT_OFFER, role, payload: {} });
+    if (!fsm.ok) return handleFsmError(fsm, res);
+
+    if (joiningDate) candidate.offer.joiningDate = new Date(joiningDate);
+    candidate.offer.response = 'ACCEPTED';
+    candidate.offer.respondedAt = respondedAt ? new Date(respondedAt) : new Date();
+    candidate.status = fsm.nextState;
+    candidate.statusHistory.push({
+      status: fsm.nextState,
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: notes || `Company marked offer as ACCEPTED.`
+    });
+    writeAudit(candidate, {
+      actorId: req.user._id,
+      actorRole: role,
+      action: ACTIONS.ACCEPT_OFFER,
+      fromState,
+      toState: fsm.nextState,
+      reason: notes || `Company marked offer as ACCEPTED.`
+    });
+
+    await candidate.save();
+    res.json({ success: true, message: 'Offer marked as accepted successfully.', data: { candidateId: candidate._id, status: candidate.status } });
+  } catch (err) {
+    console.error('[PIPELINE] Company accept offer error:', err);
+    res.status(500).json({ success: false, message: 'Failed to accept offer.' });
+  }
+};
+
+// ─── POST /api/companies/pipeline/:id/offer/reject (Company-initiated) ─────
+exports.pipelineCompanyRejectOffer = async (req, res) => {
+  try {
+    const role = 'company';
+    const { reason, respondedAt } = req.body;
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+
+    const fsm = transition({ currentState: fromState, action: ACTIONS.REJECT_OFFER, role, payload: {} });
+    if (!fsm.ok) return handleFsmError(fsm, res);
+
+    candidate.offer.response = 'DECLINED';
+    candidate.offer.respondedAt = respondedAt ? new Date(respondedAt) : new Date();
+    candidate.status = fsm.nextState;
+    candidate.statusHistory.push({
+      status: fsm.nextState,
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: reason || `Company marked offer as REJECTED.`
+    });
+    writeAudit(candidate, {
+      actorId: req.user._id,
+      actorRole: role,
+      action: ACTIONS.REJECT_OFFER,
+      fromState,
+      toState: fsm.nextState,
+      reason: reason || `Company marked offer as REJECTED.`
+    });
+
+    await candidate.save();
+    res.json({ success: true, message: 'Offer marked as rejected successfully.', data: { candidateId: candidate._id, status: candidate.status } });
+  } catch (err) {
+    console.error('[PIPELINE] Company reject offer error:', err);
+    res.status(500).json({ success: false, message: 'Failed to reject offer.' });
+  }
+};
+
+// ─── POST /api/companies/pipeline/:id/mark-not-joined (Company-initiated) ──
+exports.pipelineCompanyMarkNotJoined = async (req, res) => {
+  try {
+    const role = 'company';
+    const { reason } = req.body;
+    if (!reason) return res.status(400).json({ success: false, message: 'Reason is required for marking as not joined.' });
+
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+
+    const fsm = transition({ currentState: fromState, action: ACTIONS.MARK_NOT_JOINED, role, payload: {} });
+    if (!fsm.ok) return handleFsmError(fsm, res);
+
+    candidate.status = fsm.nextState;
+    candidate.joining = {
+      ...(candidate.joining || {}),
+      confirmed: false
+    };
+    candidate.statusHistory.push({
+      status: fsm.nextState,
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: reason
+    });
+    writeAudit(candidate, {
+      actorId: req.user._id,
+      actorRole: role,
+      action: ACTIONS.MARK_NOT_JOINED,
+      fromState,
+      toState: fsm.nextState,
+      reason: reason
+    });
+
+    await candidate.save();
+    res.json({ success: true, message: 'Candidate marked as not joined.', data: { candidateId: candidate._id, status: candidate.status } });
+  } catch (err) {
+    console.error('[PIPELINE] Company mark not joined error:', err);
+    res.status(500).json({ success: false, message: 'Failed to mark as not joined.' });
   }
 };
 

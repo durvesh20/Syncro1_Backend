@@ -1551,9 +1551,18 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
   if (!activeRoundInfo) return;
 
   const jobId = candidate.job?._id || candidate.job;
+  
+  const rt = (activeRoundInfo.round.roundType || '').trim().toUpperCase();
+  const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+  const isHr = hrNames.includes(rt);
+  
+  const roundTypeQuery = isHr 
+    ? { $in: [activeRoundInfo.round.roundType, ...hrNames.map(n => new RegExp(`^${n}$`, 'i')), /HR_ROUND/i, /HR Round/i] }
+    : activeRoundInfo.round.roundType;
+
   const activeSlots = await InterviewSlot.find({
     job: jobId,
-    roundType: activeRoundInfo.round.roundType,
+    roundType: roundTypeQuery,
     status: 'ACTIVE'
   });
 
@@ -1943,6 +1952,8 @@ exports.createInterviewSlots = async (req, res) => {
           maxCandidates: 1,
           averageTime: avg,
           interviewMode: slot.interviewMode || 'Virtual',
+          interviewDetails: slot.interviewDetails || "",
+          interviewerName: slot.interviewerName || "",
           availableSpots: 1,
           notes: slot.notes || null,
           status: 'ACTIVE',
