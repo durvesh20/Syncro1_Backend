@@ -119,6 +119,27 @@ const interviewSlotSchema = new mongoose.Schema(
       default: 'Virtual',
     },
     
+    interviewDetails: {
+      type: String,
+      default: "",
+    },
+    interviewerName: {
+      type: String,
+      default: "",
+    },
+    
+    // Round scoping for Candidate Interview Pipeline
+    roundType: {
+      type: String,
+      default: null,
+    },
+
+    candidateId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Candidate',
+      default: null,
+    },
+
     // Who created this slot (can be main company owner or sub-admin)
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

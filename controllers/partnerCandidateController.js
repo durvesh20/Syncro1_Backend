@@ -50,9 +50,22 @@ exports.listPoolCandidates = async (req, res) => {
       PartnerCandidate.countDocuments(filter)
     ]);
 
+    const candidateIds = candidates.map(c => c._id);
+    const activeSubmissions = await Candidate.find({
+      poolCandidateRef: { $in: candidateIds },
+      status: { $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_DENIED'] }
+    }).select('poolCandidateRef').lean();
+
+    const activeSet = new Set(activeSubmissions.map(s => s.poolCandidateRef.toString()));
+
+    const candidatesWithLock = candidates.map(c => ({
+      ...c,
+      isLocked: activeSet.has(c._id.toString())
+    }));
+
     res.json({
       success: true,
-      data: candidates,
+      data: candidatesWithLock,
       pagination: {
         total,
         page: Number(page),
@@ -100,15 +113,23 @@ exports.createPoolCandidate = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Missing required fields', missingFields: missing });
     }
 
+    const cleanMobile = (mobile || '').replace(/\D/g, '');
+    if (cleanMobile.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'WhatsApp number must be exactly 10 digits and contain only numbers'
+      });
+    }
+
     const normalizedEmail = email.toLowerCase().trim();
-    const normalizedMobile = normalizeMobile(mobile);
+    const normalizedMobile = cleanMobile;
 
     // ── Uniqueness per partner ──
     const existing = await PartnerCandidate.findOne({
       partner: partner._id,
       $or: [
         { email: normalizedEmail },
-        { mobile: new RegExp(normalizedMobile + '$') }
+        { mobile: normalizedMobile }
       ]
     });
 
@@ -134,7 +155,7 @@ exports.createPoolCandidate = async (req, res) => {
       middleName: middleName?.trim() || '',
       lastName: lastName.trim(),
       email: normalizedEmail,
-      mobile: mobile.trim(),
+      mobile: normalizedMobile,
       location: location?.trim(),
       willingToRelocate: willingToRelocate !== '' && willingToRelocate !== undefined ? (willingToRelocate === 'true' || willingToRelocate === true) : undefined,
       totalExperience: totalExperience !== '' && totalExperience !== undefined ? Number(totalExperience) : undefined,
@@ -192,13 +213,21 @@ exports.getPoolCandidate = async (req, res) => {
       success: true,
       data: {
         ...candidate,
-        submissions: submissions.map(sub => ({
-          submissionId: sub._id,
-          status: sub.status,
-          appliedAt: sub.createdAt,
-          job: sub.job,
-          company: sub.company
-        }))
+        submissions: submissions.map(sub => {
+          let status = sub.status;
+          if (status === 'ROUND_ON_HOLD') {
+            status = 'INTERVIEW_CONDUCTED';
+          } else if (status === 'HR_ON_HOLD') {
+            status = 'HR_ROUND_PENDING';
+          }
+          return {
+            submissionId: sub._id,
+            status,
+            appliedAt: sub.createdAt,
+            job: sub.job,
+            company: sub.company
+          };
+        })
       }
     });
   } catch (err) {
@@ -234,12 +263,21 @@ exports.updatePoolCandidate = async (req, res) => {
 
     // ── Check uniqueness if email/mobile is being changed ──
     if (email || mobile) {
+      if (mobile) {
+        const cleanMobile = mobile.replace(/\D/g, '');
+        if (cleanMobile.length !== 10) {
+          return res.status(400).json({
+            success: false,
+            message: 'WhatsApp number must be exactly 10 digits and contain only numbers'
+          });
+        }
+      }
       const normalizedEmail = email ? email.toLowerCase().trim() : null;
-      const normalizedMobile = mobile ? normalizeMobile(mobile) : null;
+      const normalizedMobile = mobile ? mobile.replace(/\D/g, '') : null;
 
       const orConditions = [];
       if (normalizedEmail) orConditions.push({ email: normalizedEmail });
-      if (normalizedMobile) orConditions.push({ mobile: new RegExp(normalizedMobile + '$') });
+      if (normalizedMobile) orConditions.push({ mobile: normalizedMobile });
 
       if (orConditions.length) {
         const conflict = await PartnerCandidate.findOne({
@@ -263,7 +301,7 @@ exports.updatePoolCandidate = async (req, res) => {
     if (middleName !== undefined) candidate.middleName = middleName.trim();
     if (lastName) candidate.lastName = lastName.trim();
     if (email) candidate.email = email.toLowerCase().trim();
-    if (mobile) candidate.mobile = mobile.trim();
+    if (mobile) candidate.mobile = mobile.replace(/\D/g, '');
     if (location !== undefined) candidate.location = location.trim();
     if (willingToRelocate !== undefined && willingToRelocate !== '') candidate.willingToRelocate = (willingToRelocate === 'true' || willingToRelocate === true);
     if (totalExperience !== undefined && totalExperience !== '')

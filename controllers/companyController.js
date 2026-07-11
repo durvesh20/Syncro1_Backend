@@ -1531,6 +1531,67 @@ exports.getAllCandidates = async (req, res) => {
   }
 };
 
+async function checkAndElevateCandidateStatus(candidate, userId) {
+  if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    return;
+  }
+  
+  const InterviewSlot = require('../models/InterviewSlot');
+  const getActiveRoundInfoLocal = (c) => {
+    for (let i = 0; i < c.rounds.length; i++) {
+      const r = c.rounds[i];
+      if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED') {
+        return { index: i, round: r };
+      }
+    }
+    return null;
+  };
+
+  const activeRoundInfo = getActiveRoundInfoLocal(candidate);
+  if (!activeRoundInfo) return;
+
+  const jobId = candidate.job?._id || candidate.job;
+  
+  const rt = (activeRoundInfo.round.roundType || '').trim().toUpperCase();
+  const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+  const isHr = hrNames.includes(rt);
+  
+  const roundTypeQuery = isHr 
+    ? { $in: [activeRoundInfo.round.roundType, ...hrNames.map(n => new RegExp(`^${n}$`, 'i')), /HR_ROUND/i, /HR Round/i] }
+    : activeRoundInfo.round.roundType;
+
+  const activeSlots = await InterviewSlot.find({
+    job: jobId,
+    roundType: roundTypeQuery,
+    status: 'ACTIVE'
+  });
+
+  if (activeSlots.length > 0) {
+    candidate.status = 'SLOTS_PUBLISHED';
+    activeRoundInfo.round.status = 'SLOTS_PUBLISHED';
+    candidate.statusHistory.push({
+      status: 'SLOTS_PUBLISHED',
+      changedBy: userId || candidate._id,
+      changedAt: new Date(),
+      notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
+    });
+    
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: userId || candidate._id,
+      actorRole: 'system',
+      action: 'PUBLISH_SLOTS',
+      fromState: 'SLOTS_NOT_PUBLISHED',
+      toState: 'SLOTS_PUBLISHED',
+      reason: 'Active slots exist for the job',
+      roundIndex: activeRoundInfo.index,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+  }
+}
+
 // @desc    Get Single Candidate
 // @route   GET /api/companies/candidates/:id
 exports.getCandidate = async (req, res) => {
@@ -1569,6 +1630,8 @@ exports.getCandidate = async (req, res) => {
         message: "Not authorized to view this candidate",
       });
     }
+
+    await checkAndElevateCandidateStatus(candidate, req.user._id);
 
     const responseData = candidate.toObject();
     if (responseData.company?.user) {
@@ -1692,7 +1755,7 @@ exports.rejectCandidate = async (req, res) => {
 // POST /api/companies/jobs/:jobId/interview-slots
 exports.createInterviewSlots = async (req, res) => {
   try {
-    const { slots } = req.body;
+    const { slots, roundType } = req.body;
 
     // ── Validate payload ──────────────────────────────────────────────
     if (!slots || !Array.isArray(slots) || slots.length === 0) {
@@ -1728,7 +1791,21 @@ exports.createInterviewSlots = async (req, res) => {
     if (job.company.toString() !== company._id.toString()) {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
-
+    if (job.pipelineTemplate && job.pipelineTemplate.length > 0) {
+      if (!roundType) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please specify the roundType for these interview slots.'
+        });
+      }
+      const hasRound = job.pipelineTemplate.some(r => r.roundType === roundType) || roundType === 'HR_ROUND';
+      if (!hasRound) {
+        return res.status(400).json({
+          success: false,
+          message: `The round type "${roundType}" is not configured in this job's interview pipeline.`
+        });
+      }
+    }
     if (!job.applicationDeadline) {
       return res.status(400).json({
         success: false,
@@ -1875,9 +1952,12 @@ exports.createInterviewSlots = async (req, res) => {
           maxCandidates: 1,
           averageTime: avg,
           interviewMode: slot.interviewMode || 'Virtual',
+          interviewDetails: slot.interviewDetails || "",
+          interviewerName: slot.interviewerName || "",
           availableSpots: 1,
           notes: slot.notes || null,
           status: 'ACTIVE',
+          roundType: roundType || null,
           createdBy: req.subAdminUser ? req.subAdminUser._id : req.user._id,
         });
 
@@ -1918,18 +1998,23 @@ exports.createInterviewSlots = async (req, res) => {
 // GET /api/companies/jobs/:jobId/interview-slots
 exports.getJobInterviewSlots = async (req, res) => {
   try {
-    const company = await Company.findOne({ user: req.user._id });
-    if (!company) {
-      return res.status(404).json({ success: false, message: 'Company not found' });
-    }
-
     const job = await Job.findById(req.params.jobId);
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
-    if (job.company.toString() !== company._id.toString()) {
-      return res.status(403).json({ success: false, message: 'Not authorized' });
+    let companyId;
+    if (req.user.role === 'admin' || req.user.role === 'sub_admin') {
+      companyId = job.company;
+    } else {
+      const company = await Company.findOne({ user: req.user._id });
+      if (!company) {
+        return res.status(404).json({ success: false, message: 'Company not found' });
+      }
+      if (job.company.toString() !== company._id.toString()) {
+        return res.status(403).json({ success: false, message: 'Not authorized' });
+      }
+      companyId = company._id;
     }
 
     const callingUserId = req.subAdminUser ? req.subAdminUser._id : req.user._id;
@@ -1938,7 +2023,7 @@ exports.getJobInterviewSlots = async (req, res) => {
 
     const query = {
       job: req.params.jobId,
-      company: company._id,
+      company: companyId,
     };
 
     if (isSubAdmin && !permissions.includes('MANAGE_INTERVIEWS_ALL') && permissions.includes('MANAGE_INTERVIEWS_SELF')) {
@@ -1957,6 +2042,7 @@ exports.getJobInterviewSlots = async (req, res) => {
         path: 'bookedCandidates.partner',
         select: 'firmName contactPerson',
       })
+      .populate('createdBy', 'email role')
       .sort({ date: 1, startTime: 1 });
 
     // Group by date for easy viewing
@@ -2104,6 +2190,54 @@ exports.confirmInterviewDetails = async (req, res) => {
     // Generate unique token for confirmation
     const confirmationToken = crypto.randomBytes(32).toString("hex");
 
+    // Helper to get active round info
+    const getActiveRoundInfo = (c) => {
+      const status = c.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      if (assessmentStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+      if (offerStates.includes(status)) return null;
+      for (let i = 0; i < c.rounds.length; i++) {
+        const r = c.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    const activeInfo = getActiveRoundInfo(candidate);
+    if (activeInfo) {
+      if (activeInfo.round.slots && activeInfo.round.slots.length > 0) {
+        activeInfo.round.slots[0].details = {
+          meetingLink: mode === "Virtual" ? details : "",
+          address: mode !== "Virtual" ? details : "",
+          pointOfContact: {
+            name: interviewer || "",
+            phone: "",
+            email: ""
+          }
+        };
+      }
+      activeInfo.round.status = "SLOT_DETAILS_SHARED";
+    }
+
     // Update candidate
     candidate.interviewConfig = {
       mode,
@@ -2115,9 +2249,9 @@ exports.confirmInterviewDetails = async (req, res) => {
       candidateResponse: "PENDING",
     };
 
-    candidate.status = "INTERVIEW_SCHEDULED";
+    candidate.status = "SLOT_DETAILS_SHARED";
     candidate.statusHistory.push({
-      status: "INTERVIEW_SCHEDULED",
+      status: "SLOT_DETAILS_SHARED",
       changedBy: req.user._id,
       changedAt: new Date(),
       changedByRole: "COMPANY",

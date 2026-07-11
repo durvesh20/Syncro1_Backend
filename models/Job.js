@@ -259,7 +259,18 @@ const jobSchema = new mongoose.Schema({
   isUrgent: {
     type: Boolean,
     default: false
-  }
+  },
+  
+  // Ordered list of rounds defined for this job position
+  pipelineTemplate: [
+    {
+      roundType: {
+        type: String,
+        required: true
+      },
+      order: { type: Number, required: true } // 1-based
+    }
+  ]
 }, {
   timestamps: true,
   validateModifiedOnly: true
