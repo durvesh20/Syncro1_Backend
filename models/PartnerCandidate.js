@@ -47,22 +47,26 @@ const partnerCandidateSchema = new mongoose.Schema({
   // ==================== PROFESSIONAL ====================
   location: {
     type: String,
+    required: [true, 'Location is required'],
     trim: true
   },
   willingToRelocate: {
     type: Boolean,
-    default: null
+    required: [true, 'Willing to relocate is required']
   },
   totalExperience: {
     type: Number,
+    required: [true, 'Total experience is required'],
     min: 0
   },
   relevantExperience: {
     type: Number,
+    required: [true, 'Relevant experience is required'],
     min: 0
   },
   noticePeriod: {
     type: String,
+    required: [true, 'Notice period is required'],
     enum: [
       'Immediate',
       '15 days',
@@ -73,12 +77,18 @@ const partnerCandidateSchema = new mongoose.Schema({
       'More than 90 days'
     ]
   },
+  lastWorkingDay: {
+    type: Date,
+    default: null
+  },
   currentSalary: {
     type: Number,
+    required: [true, 'Current salary is required'],
     min: 0
   },
   expectedSalary: {
     type: Number,
+    required: [true, 'Expected salary is required'],
     min: 0
   },
   writeup: {

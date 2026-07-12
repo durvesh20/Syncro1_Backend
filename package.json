@@ -9,7 +9,7 @@
     "seed": "node seeders/seed.js",
     "create-dirs": "node scripts/createDirs.js",
     "setup": "npm run create-dirs && npm run seed",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
   },
   "dependencies": {
     "@getbrevo/brevo": "^5.0.4",
@@ -40,6 +40,7 @@
     "uuid": "^9.0.0"
   },
   "devDependencies": {
+    "jest": "^30.4.2",
     "nodemon": "^3.0.2"
   },
   "engines": {

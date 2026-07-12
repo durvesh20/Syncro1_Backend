@@ -37,6 +37,12 @@ const adminActionLogSchema = new mongoose.Schema({
             'JOB_REJECTED',
             'JOB_DISCONTINUED',
 
+            // Assignment actions
+            'APPLICATION_ASSIGNED',
+            'APPLICATION_ASSIGNMENT_REVOKED',
+            'JOB_ASSIGNED',
+            'JOB_ASSIGNMENT_REVOKED',
+
             // Edit request actions
             'EDIT_REQUEST_APPROVED',
             'EDIT_REQUEST_REJECTED',

@@ -318,6 +318,19 @@ class CandidateQueueService {
 
         if (!candidate) throw new Error('Candidate not found');
 
+        const userObj = await User.findById(adminUserId);
+        /*
+        if (userObj && userObj.role === 'sub_admin') {
+            const hasViewAll = userObj.permissions?.includes('VIEW_ALL_CANDIDATES');
+            if (!hasViewAll) {
+                const jobObj = await Job.findById(candidate.job?._id || candidate.job);
+                if (!jobObj || !jobObj.assignedTo || jobObj.assignedTo.toString() !== adminUserId.toString()) {
+                    throw new Error('You are not assigned to this job post. Only the assigned sub-admin or main admin can approve this candidate.');
+                }
+            }
+        }
+        */
+
         if (candidate.status !== 'ADMIN_REVIEW') {
             throw new Error(`Cannot approve candidate with status: ${candidate.status}`);
         }
@@ -364,6 +377,19 @@ class CandidateQueueService {
 
         if (!candidate) throw new Error('Candidate not found');
 
+        const userObj = await User.findById(adminUserId);
+        /*
+        if (userObj && userObj.role === 'sub_admin') {
+            const hasViewAll = userObj.permissions?.includes('VIEW_ALL_CANDIDATES');
+            if (!hasViewAll) {
+                const jobObj = await Job.findById(candidate.job?._id || candidate.job);
+                if (!jobObj || !jobObj.assignedTo || jobObj.assignedTo.toString() !== adminUserId.toString()) {
+                    throw new Error('You are not assigned to this job post. Only the assigned sub-admin or main admin can reject this candidate.');
+                }
+            }
+        }
+        */
+
         if (candidate.status !== 'ADMIN_REVIEW') {
             throw new Error(`Cannot reject candidate with status: ${candidate.status}`);
         }
@@ -396,10 +422,24 @@ class CandidateQueueService {
     async _notifyAdmins(candidate, score, matchLevel) {
         try {
             const notificationEngine = require('./notificationEngine');
-            const adminUsers = await User.find({
-                role: { $in: ['admin', 'sub_admin'] },
-                status: 'ACTIVE'
-            }).select('_id');
+            const jobObj = await Job.findById(candidate.job?._id || candidate.job);
+            let query = {};
+            if (jobObj && jobObj.assignedTo) {
+                query = {
+                    $or: [
+                        { role: 'admin' },
+                        { _id: jobObj.assignedTo }
+                    ],
+                    status: 'ACTIVE'
+                };
+            } else {
+                query = {
+                    role: 'admin',
+                    status: 'ACTIVE'
+                };
+            }
+
+            const adminUsers = await User.find(query).select('_id');
 
             const scoreIcon = score >= 80 ? '🟢' : score >= 60 ? '🔵'
                 : score >= 40 ? '🟡' : '🔴';
@@ -562,6 +602,7 @@ class CandidateQueueService {
         const query = { status: 'ADMIN_REVIEW' };
 
         if (filters.jobId) query.job = filters.jobId;
+        if (filters.assignedJobIds) query.job = { $in: filters.assignedJobIds };
         if (filters.partnerId) query.submittedBy = filters.partnerId;
         if (filters.scoreMin) {
             query['resumeAnalysis.profileScore'] = {

@@ -357,17 +357,30 @@ exports.getInvoices = async (req, res) => {
     const sanitizedLimit = Math.min(100, Math.max(1, parseInt(limit)));
     const skip = (sanitizedPage - 1) * sanitizedLimit;
 
-    const [invoices, total] = await Promise.all([
-      Invoice.find(query)
-        .populate('company', 'companyName')
-        .populate('candidate', 'firstName lastName')
-        .populate('job', 'title')
-        .populate('staffingPartner', 'firstName lastName firmName')
+    const invoicesQuery = Invoice.find(query)
+      .populate('company', 'companyName')
+      .populate('candidate', 'firstName lastName')
+      .populate('job', 'title');
+
+    if (req.user.role !== 'company') {
+      invoicesQuery.populate('staffingPartner', 'firstName lastName firmName');
+    }
+
+    const [rawInvoices, total] = await Promise.all([
+      invoicesQuery
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(sanitizedLimit),
       Invoice.countDocuments(query)
     ]);
+
+    const invoices = rawInvoices.map(inv => {
+      const obj = inv.toObject();
+      if (req.user.role === 'company') {
+        delete obj.staffingPartner;
+      }
+      return obj;
+    });
 
     // Summary by status
     const summary = await Invoice.aggregate([
@@ -410,13 +423,18 @@ exports.getInvoices = async (req, res) => {
  */
 exports.getInvoice = async (req, res) => {
   try {
-    const invoice = await Invoice.findById(req.params.id)
+    const invoiceQuery = Invoice.findById(req.params.id)
       .populate('company', 'companyName kyc billing user')
       .populate('candidate', 'firstName lastName email offer joining commission')
       .populate('job', 'title')
-      .populate('staffingPartner', 'firstName lastName firmName commercialDetails firmDetails')
       .populate('linkedPayout')
       .populate('generatedBy', 'email');
+
+    if (req.user.role !== 'company') {
+      invoiceQuery.populate('staffingPartner', 'firstName lastName firmName commercialDetails firmDetails');
+    }
+
+    const invoice = await invoiceQuery;
 
     if (!invoice) {
       return res.status(404).json({
@@ -444,9 +462,14 @@ exports.getInvoice = async (req, res) => {
       await invoice.save();
     }
 
+    let responseData = invoice.toObject();
+    if (req.user.role === 'company') {
+      delete responseData.staffingPartner;
+    }
+
     res.json({
       success: true,
-      data: invoice
+      data: responseData
     });
   } catch (error) {
     res.status(500).json({

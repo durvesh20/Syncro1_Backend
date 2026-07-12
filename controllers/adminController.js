@@ -137,24 +137,148 @@ exports.createAdmin = async (req, res) => {
 // @route   GET /api/admin/dashboard
 exports.getDashboard = async (req, res) => {
   try {
-    const stats = {
-      users: await User.countDocuments(),
-      staffingPartners: await StaffingPartner.countDocuments(),
-      companies: await Company.countDocuments(),
-      activeJobs: await Job.countDocuments({ status: 'ACTIVE' }),
-      totalCandidates: await Candidate.countDocuments(),
-      pendingVerifications: {
-        partners: await StaffingPartner.countDocuments({ verificationStatus: 'UNDER_REVIEW' }),
-        companies: await Company.countDocuments({ verificationStatus: 'UNDER_REVIEW' })
-      }
-    };
+    const isSubAdmin = req.user.role === 'sub_admin';
+    const showSelfDashboard = isSubAdmin && !req.user.permissions?.includes('VIEW_ADMIN_DASHBOARD');
 
-    const recentRegistrations = await User.find()
+    let stats = {};
+    let recentRegistrationsQuery = {};
+    let recentPlacementsQuery = { status: 'JOINED' };
+
+    if (showSelfDashboard) {
+      // 1. Fetch assigned partners and companies
+      const [assignedPartners, assignedCompanies] = await Promise.all([
+        StaffingPartner.find({ assignedTo: req.user._id }).select('user _id'),
+        Company.find({ assignedTo: req.user._id }).select('user _id')
+      ]);
+
+      const partnerUserIds = assignedPartners.map(p => p.user).filter(Boolean);
+      const companyUserIds = assignedCompanies.map(c => c.user).filter(Boolean);
+      const partnerIds = assignedPartners.map(p => p._id);
+      const companyIds = assignedCompanies.map(c => c._id);
+
+      // 2. Statistics based on permissions & assignments
+      // Users
+      let userQuery = {};
+      const canViewAllPartners = req.user.permissions?.includes('VIEW_ALL_PARTNERS');
+      const canViewAllCompanies = req.user.permissions?.includes('VIEW_ALL_COMPANIES');
+      if (!canViewAllPartners || !canViewAllCompanies) {
+        const allowedIds = [];
+        if (!canViewAllPartners) {
+          allowedIds.push(...partnerUserIds);
+        } else {
+          const allPartners = await StaffingPartner.find({}).select('user');
+          allowedIds.push(...allPartners.map(p => p.user).filter(Boolean));
+        }
+        if (!canViewAllCompanies) {
+          allowedIds.push(...companyUserIds);
+        } else {
+          const allCompanies = await Company.find({}).select('user');
+          allowedIds.push(...allCompanies.map(c => c.user).filter(Boolean));
+        }
+        userQuery._id = { $in: allowedIds };
+      }
+      const userCount = await User.countDocuments(userQuery);
+
+      // Staffing Partners
+      let partnerStatsQuery = {};
+      if (!canViewAllPartners) {
+        partnerStatsQuery.assignedTo = req.user._id;
+      }
+      const partnerCount = await StaffingPartner.countDocuments(partnerStatsQuery);
+
+      // Companies
+      let companyStatsQuery = {};
+      if (!canViewAllCompanies) {
+        companyStatsQuery.assignedTo = req.user._id;
+      }
+      const companyCount = await Company.countDocuments(companyStatsQuery);
+
+      // Active Jobs
+      let jobQuery = { status: 'ACTIVE' };
+      if (!req.user.permissions?.includes('VIEW_ALL_JOBS')) {
+        jobQuery.company = { $in: companyIds };
+      }
+      const activeJobsCount = await Job.countDocuments(jobQuery);
+
+      // Total Candidates
+      let candidateQuery = {};
+      if (!req.user.permissions?.includes('VIEW_ALL_CANDIDATES')) {
+        candidateQuery.$or = [
+          { submittedBy: { $in: partnerIds } },
+          { company: { $in: companyIds } }
+        ];
+      }
+      const totalCandidatesCount = await Candidate.countDocuments(candidateQuery);
+
+      // Pending Verifications
+      let pendingPartnersQuery = { verificationStatus: 'UNDER_REVIEW' };
+      let pendingCompaniesQuery = { verificationStatus: 'UNDER_REVIEW' };
+
+      const hasViewUnassigned = req.user.permissions?.includes('VIEW_UNASSIGNED_APPLICATIONS');
+      if (!hasViewUnassigned) {
+        pendingPartnersQuery.assignedTo = req.user._id;
+        pendingCompaniesQuery.assignedTo = req.user._id;
+      }
+
+      stats = {
+        users: userCount,
+        staffingPartners: partnerCount,
+        companies: companyCount,
+        activeJobs: activeJobsCount,
+        totalCandidates: totalCandidatesCount,
+        pendingVerifications: {
+          partners: await StaffingPartner.countDocuments(pendingPartnersQuery),
+          companies: await Company.countDocuments(pendingCompaniesQuery)
+        }
+      };
+
+      // 3. Recent Registrations filter
+      if (!canViewAllPartners || !canViewAllCompanies) {
+        const allowedRegIds = [];
+        if (!canViewAllPartners) {
+          allowedRegIds.push(...partnerUserIds);
+        } else {
+          const allPartners = await StaffingPartner.find({}).select('user');
+          allowedRegIds.push(...allPartners.map(p => p.user).filter(Boolean));
+        }
+        if (!canViewAllCompanies) {
+          allowedRegIds.push(...companyUserIds);
+        } else {
+          const allCompanies = await Company.find({}).select('user');
+          allowedRegIds.push(...allCompanies.map(c => c.user).filter(Boolean));
+        }
+        recentRegistrationsQuery._id = { $in: allowedRegIds };
+      }
+
+      // 4. Recent Placements filter
+      if (!req.user.permissions?.includes('VIEW_ALL_CANDIDATES')) {
+        recentPlacementsQuery.$or = [
+          { submittedBy: { $in: partnerIds } },
+          { company: { $in: companyIds } }
+        ];
+      }
+
+    } else {
+      // Admin/Full Dashboard stats
+      stats = {
+        users: await User.countDocuments(),
+        staffingPartners: await StaffingPartner.countDocuments(),
+        companies: await Company.countDocuments(),
+        activeJobs: await Job.countDocuments({ status: 'ACTIVE' }),
+        totalCandidates: await Candidate.countDocuments(),
+        pendingVerifications: {
+          partners: await StaffingPartner.countDocuments({ verificationStatus: 'UNDER_REVIEW' }),
+          companies: await Company.countDocuments({ verificationStatus: 'UNDER_REVIEW' })
+        }
+      };
+    }
+
+    const recentRegistrations = await User.find(recentRegistrationsQuery)
       .sort({ createdAt: -1 })
       .limit(10)
       .select('email role status createdAt');
 
-    const recentPlacements = await Candidate.find({ status: 'JOINED' })
+    const recentPlacements = await Candidate.find(recentPlacementsQuery)
       .populate('job', 'title')
       .populate('company', 'companyName')
       .sort({ 'joining.confirmedAt': -1 })
@@ -183,38 +307,48 @@ exports.getPendingVerifications = async (req, res) => {
   try {
     const { type } = req.query;
 
+    const isSubAdmin = req.user.role === 'sub_admin';
+    const hasViewUnassigned = req.user.permissions && req.user.permissions.includes('VIEW_UNASSIGNED_APPLICATIONS');
+
+    let partnerQuery = {
+      verificationStatus: { $in: ['UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
+    };
+    let companyQuery = {
+      verificationStatus: { $in: ['UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
+    };
+
+    // Sub-admins can see all pending verifications
+
     let partners = [];
     let companies = [];
 
     if (!type || type === 'partners') {
-      partners = await StaffingPartner.find({
-        verificationStatus: { $in: ['UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
-      })
+      partners = await StaffingPartner.find(partnerQuery)
         .populate('user', 'email mobile createdAt status')
         .populate('verifiedBy', 'email role')
+        .populate('assignedTo', 'email role')
         .sort({ createdAt: 1 })
         .select(
           'firstName lastName firmName designation city state ' +
           'verificationStatus verificationNotes rejectionReason ' +
           'verifiedAt verifiedBy submittedAt profileCompletion ' +
           'agreement documents uniqueId ' +
-          'firmDetails Syncro1Competency geographicReach compliance commercialDetails' // Added missing firm details
-);
+          'firmDetails Syncro1Competency geographicReach compliance commercialDetails assignedTo'
+        );
     }
 
     if (!type || type === 'companies') {
-      companies = await Company.find({
-        verificationStatus: { $in: ['UNDER_REVIEW', 'APPROVED', 'REJECTED'] }
-      })
+      companies = await Company.find(companyQuery)
         .populate('user', 'email mobile createdAt status')
         .populate('verifiedBy', 'email role')
+        .populate('assignedTo', 'email role')
         .sort({ createdAt: 1 })
         .select(
           'companyName decisionMakerName designation city state ' +
           'verificationStatus verificationNotes rejectionReason ' +
           'verifiedAt verifiedBy profileCompletion documents ' +
-          'kyc hiringPreferences billing legalConsents  uniqueId' 
-);
+          'kyc hiringPreferences billing legalConsents uniqueId assignedTo'
+        );
     }
 
     // ✅ Enrich with summary flags
@@ -316,6 +450,8 @@ exports.verifyPartner = async (req, res) => {
         message: 'Staffing partner not found'
       });
     }
+
+    // Sub-admins can process any staffing partner
 
     const user = await User.findById(partner.user);
 
@@ -419,6 +555,8 @@ exports.verifyCompany = async (req, res) => {
         message: 'Company not found'
       });
     }
+
+    // Sub-admins can process any company
 
     const user = await User.findById(company.user);
 
@@ -906,10 +1044,110 @@ exports.forfeitPayout = async (req, res) => {
       data: result
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to forfeit payout'
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ADMIN: Create interview slots
+// POST /api/admin/jobs/:jobId/interview-slots
+exports.adminCreateJobInterviewSlots = async (req, res) => {
+  try {
+    const { slots, roundType } = req.body;
+    const Job = require('../models/Job');
+    const InterviewSlot = require('../models/InterviewSlot');
+
+    if (!slots || !Array.isArray(slots) || slots.length === 0) {
+      return res.status(400).json({ success: false, message: 'Please provide at least one interview slot' });
+    }
+
+    const job = await Job.findById(req.params.jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+    
+    if (job.pipelineTemplate && job.pipelineTemplate.length > 0) {
+      if (!roundType) {
+        return res.status(400).json({ success: false, message: 'Please specify the roundType for these interview slots.' });
+      }
+      const validRoundTypes = job.pipelineTemplate.map(r => r.roundType);
+      if (!validRoundTypes.includes(roundType)) {
+        return res.status(400).json({ success: false, message: `Invalid roundType: ${roundType}. Allowed: ${validRoundTypes.join(', ')}` });
+      }
+    }
+
+    const invalidSlots = [];
+    const validSlots = [];
+
+    slots.forEach((slot, index) => {
+      const errors = [];
+      if (!slot.date) errors.push('Date is required');
+      if (!slot.startTime) errors.push('Start time is required');
+      if (!slot.endTime) errors.push('End time is required');
+      if (!slot.maxCandidates || slot.maxCandidates < 1) errors.push('Max candidates must be at least 1');
+      if (!slot.interviewMode) errors.push('Interview mode is required');
+      
+      if (errors.length > 0) {
+        invalidSlots.push({ index, errors });
+      } else {
+        validSlots.push(slot);
+      }
     });
+
+    if (invalidSlots.length > 0) {
+      return res.status(400).json({ success: false, message: 'Some slots are invalid', invalidSlots });
+    }
+
+    const createdSlots = await Promise.all(
+      validSlots.map(slot => 
+        InterviewSlot.create({
+          job: job._id,
+          company: job.company,
+          date: slot.date,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          maxCandidates: slot.maxCandidates,
+          availableSpots: slot.maxCandidates,
+          interviewMode: slot.interviewMode,
+          notes: slot.notes || '',
+          interviewDetails: slot.interviewDetails || '',
+          interviewerName: slot.interviewerName || '',
+          roundType: roundType || 'INTERVIEW',
+          createdBy: req.user._id,
+          status: 'ACTIVE'
+        })
+      )
+    );
+
+    res.status(201).json({ success: true, message: `Successfully created ${createdSlots.length} interview slots`, data: createdSlots });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to create interview slots' });
+  }
+};
+
+// ADMIN: Cancel interview slot
+// DELETE /api/admin/jobs/:jobId/interview-slots/:slotId
+exports.adminCancelJobInterviewSlot = async (req, res) => {
+  try {
+    const InterviewSlot = require('../models/InterviewSlot');
+    const slot = await InterviewSlot.findById(req.params.slotId);
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Interview slot not found' });
+    }
+    
+    if (slot.job.toString() !== req.params.jobId) {
+      return res.status(400).json({ success: false, message: 'Slot does not belong to this job' });
+    }
+    
+    if (slot.assignedCandidates && slot.assignedCandidates.length > 0) {
+      return res.status(400).json({ success: false, message: 'Cannot cancel slot with assigned candidates. Remove candidates first.' });
+    }
+    
+    slot.status = 'CANCELLED';
+    await slot.save();
+    
+    res.status(200).json({ success: true, message: 'Interview slot cancelled successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to cancel interview slot' });
   }
 };
 
@@ -949,6 +1187,9 @@ exports.getUsers = async (req, res) => {
         { mobile: new RegExp(search, 'i') }
       ];
     }
+
+    let allowedUserIds = null;
+    // Sub-admins can see all users
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -993,19 +1234,26 @@ exports.getUsers = async (req, res) => {
     // Calculate stats
     let stats = null;
     if (role) {
-      const totalCount = await User.countDocuments({ role });
-      const activeCount = await User.countDocuments({ 
-        role, 
-        status: { $in: ['ACTIVE', 'VERIFIED'] } 
+      const statsQuery = { role };
+      // If the main query was scoped to specific user IDs (sub_admin restriction), apply same scope to stats
+      if (query._id) {
+        statsQuery._id = query._id;
+      }
+      const totalCount = await User.countDocuments(statsQuery);
+      const activeCount = await User.countDocuments({
+        ...statsQuery,
+        status: { $in: ['ACTIVE', 'VERIFIED'] }
       });
-      const emailPendingCount = await User.countDocuments({ role, emailVerified: false });
-      const mobilePendingCount = await User.countDocuments({ role, mobileVerified: false });
-      
+      const emailPendingCount = await User.countDocuments({ ...statsQuery, emailVerified: false });
+      const mobilePendingCount = await User.countDocuments({ ...statsQuery, mobileVerified: false });
+
       let verifiedCount = 0;
       if (role === 'staffing_partner') {
-        verifiedCount = await StaffingPartner.countDocuments({ verificationStatus: 'APPROVED' });
+        const spQuery = { verificationStatus: 'APPROVED' };
+        verifiedCount = await StaffingPartner.countDocuments(spQuery);
       } else if (role === 'company') {
-        verifiedCount = await Company.countDocuments({ verificationStatus: 'APPROVED' });
+        const coQuery = { verificationStatus: 'APPROVED' };
+        verifiedCount = await Company.countDocuments(coQuery);
       }
 
       stats = {
@@ -1043,6 +1291,18 @@ exports.getUsers = async (req, res) => {
 exports.updateUserStatus = async (req, res) => {
   try {
     const { status } = req.body;
+
+    if (req.user.role === 'sub_admin') {
+      const targetUser = await User.findById(req.params.id);
+      if (!targetUser) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      if (targetUser.role !== 'staffing_partner' && targetUser.role !== 'company' && targetUser.role !== 'employer') {
+        return res.status(403).json({ success: false, message: 'Unauthorized. Sub-admins cannot modify this user type.' });
+      }
+    }
+
     const user = await User.findByIdAndUpdate(
       req.params.id,
       { status },
@@ -1173,6 +1433,8 @@ exports.getPendingJobs = async (req, res) => {
 
     const query = { approvalStatus: { $in: statusFilter } };
 
+    // Sub-admins can see all pending jobs
+
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
 
@@ -1180,7 +1442,9 @@ exports.getPendingJobs = async (req, res) => {
       .populate('company', 'companyName kyc.industry kyc.employeeCount city state')
       .populate('postedBy', 'email')
       .populate('approvedBy', 'email role')
+      .populate('rejectedBy', 'email role')
       .populate('discontinuedBy', 'email role')
+      .populate('assignedTo', 'email role')
       .sort({ createdAt: sortBy === 'oldest' ? 1 : -1 })
       .skip((sanitizedPage - 1) * sanitizedLimit)
       .limit(sanitizedLimit);
@@ -1198,8 +1462,10 @@ exports.getPendingJobs = async (req, res) => {
         approvalStatus: job.approvalStatus,
         rejectionReason: job.rejectionReason || null,
         rejectedAt: job.rejectedAt || null,
+        rejectedBy: job.rejectedBy || null,
         approvedAt: job.approvedAt || null,
         approvedBy: job.approvedBy || null,
+        assignedTo: job.assignedTo || null,
         discontinuedReason: job.discontinuedReason || null,
         discontinuedAt: job.discontinuedAt || null,
         editStats: job.getEditStats(),
@@ -1212,7 +1478,11 @@ exports.getPendingJobs = async (req, res) => {
     }));
 
     // ✅ Summary by approvalStatus
+    const matchStage = {};
+    // Sub-admins stats can see all pending jobs
+
     const statusSummary = await Job.aggregate([
+      { $match: matchStage },
       {
         $group: {
           _id: '$approvalStatus',
@@ -1271,6 +1541,8 @@ exports.approveJob = async (req, res) => {
       });
     }
 
+    // Sub-admins can approve any job
+
     if (job.approvalStatus !== 'PENDING_APPROVAL') {
       return res.status(400).json({
         success: false,
@@ -1286,6 +1558,9 @@ exports.approveJob = async (req, res) => {
     job.addToHistory('APPROVED', req.user._id, {}, notes || 'Job approved by admin');
     await job.save();
 
+    const companyDoc = await Company.findById(job.company);
+    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+
     // Trigger asynchronous JD parsing for JobPosition structure
     parseJobPosition(job).catch(err => {
       console.error(`[JD-PARSER] Asynchronous parsing error on job approval: ${err.message}`);
@@ -1298,7 +1573,7 @@ exports.approveJob = async (req, res) => {
       action: 'JOB_APPROVED',
       entityType: 'Job',
       entityId: job._id,
-      description: `Job approved: ${job.title}`,
+      description: `Job approved: ${job.title} (Company: ${companyName})`,
       notes,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
@@ -1379,6 +1654,8 @@ exports.rejectJob = async (req, res) => {
       });
     }
 
+    // Sub-admins can reject any job
+
     if (job.approvalStatus !== 'PENDING_APPROVAL') {
       return res.status(400).json({
         success: false,
@@ -1390,8 +1667,12 @@ exports.rejectJob = async (req, res) => {
     job.status = 'DRAFT';
     job.rejectionReason = reason.trim();
     job.rejectedAt = new Date();
+    job.rejectedBy = req.user._id;
     job.addToHistory('REJECTED', req.user._id, {}, reason);
     await job.save();
+
+    const companyDoc = await Company.findById(job.company);
+    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
 
     await auditService.log({
       actor: req.user._id,
@@ -1400,7 +1681,7 @@ exports.rejectJob = async (req, res) => {
       action: 'JOB_REJECTED',
       entityType: 'Job',
       entityId: job._id,
-      description: `Job rejected: ${job.title}`,
+      description: `Job rejected: ${job.title} (Company: ${companyName})`,
       notes: reason,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
@@ -1469,6 +1750,9 @@ exports.getPendingEditRequests = async (req, res) => {
 
     const query = { status: 'PENDING' };
     if (priority) query.priority = priority;
+
+    // Restrict sub-admins
+    // Sub-admins can see all pending edit requests
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -1559,6 +1843,9 @@ exports.getEditRequest = async (req, res) => {
       });
     }
 
+    // Restrict sub-admins
+    // Sub-admins can view details of any edit request
+
     const allEditRequests = await JobEditRequest.find({
       job: editRequest.job._id
     }).sort({ createdAt: -1 });
@@ -1601,6 +1888,9 @@ exports.approveEditRequest = async (req, res) => {
         message: 'Edit request not found'
       });
     }
+
+    // Restrict sub-admins
+    // Sub-admins can approve any edit request
 
     if (editRequest.status !== 'PENDING') {
       return res.status(400).json({
@@ -1755,6 +2045,9 @@ exports.rejectEditRequest = async (req, res) => {
       });
     }
 
+    // Restrict sub-admins
+    // Sub-admins can reject any edit request
+
     if (editRequest.status !== 'PENDING') {
       return res.status(400).json({
         success: false,
@@ -1822,6 +2115,19 @@ exports.rejectEditRequest = async (req, res) => {
       );
     }
 
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'EDIT_REQUEST_REJECTED',
+      entityType: 'JobEditRequest',
+      entityId: editRequest._id,
+      description: `Edit request rejected for job: ${job.title} (Company: ${editRequest.company.companyName})`,
+      notes: reason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
     res.json({
       success: true,
       message: 'Edit request rejected',
@@ -1872,6 +2178,8 @@ exports.discontinueJob = async (req, res) => {
       });
     }
 
+    // Sub-admins can discontinue any job
+
     if (job.approvalStatus === 'DISCONTINUED') {
       return res.status(400).json({
         success: false,
@@ -1886,6 +2194,22 @@ exports.discontinueJob = async (req, res) => {
     job.discontinuedAt = new Date();
     job.addToHistory('DISCONTINUED', req.user._id, {}, reason);
     await job.save();
+
+    const companyDoc = await Company.findById(job.company);
+    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'JOB_DISCONTINUED',
+      entityType: 'Job',
+      entityId: job._id,
+      description: `Job discontinued: ${job.title} (Company: ${companyName})`,
+      notes: reason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
 
     const JobEditRequest = require('../models/JobEditRequest');
     await JobEditRequest.updateMany(
@@ -1959,6 +2283,7 @@ exports.getJobEditHistory = async (req, res) => {
     const job = await Job.findById(req.params.id)
       .populate('company', 'companyName')
       .populate('approvedBy', 'email')
+      .populate('rejectedBy', 'email')
       .populate('discontinuedBy', 'email');
 
     if (!job) {
@@ -2061,6 +2386,7 @@ exports.getAllJobs = async (req, res) => {
     if (status) query.status = status;
     if (approvalStatus) query.approvalStatus = approvalStatus;
     if (company) query.company = company;
+    // Sub-admins can see all jobs
     if (search) {
       query.$or = [
         { title: new RegExp(search, 'i') },
@@ -2079,24 +2405,37 @@ exports.getAllJobs = async (req, res) => {
       Job.find(query)
         .populate('company', 'companyName kyc.industry uniqueId')
         .populate('postedBy', 'email')
+        .populate('assignedTo', 'email role')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(sanitizedLimit),
       Job.countDocuments(query)
     ]);
 
-    const statusSummary = await Job.aggregate([
-      { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+    // Build scoped summary match (same filters except status/search for global tab counts)
+    const summaryMatch = {};
+    // Sub-admins stats can see all jobs
+    if (company) summaryMatch.company = new (require('mongoose').Types.ObjectId)(company);
+
+    const [statusSummary, totalJobs] = await Promise.all([
+      Job.aggregate([
+        { $match: summaryMatch },
+        { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+      ]),
+      Job.countDocuments(summaryMatch)
     ]);
 
     res.json({
       success: true,
       data: {
         jobs,
-        summary: statusSummary.reduce((acc, item) => {
-          acc[item._id] = item.count;
-          return acc;
-        }, {}),
+        summary: {
+          ...statusSummary.reduce((acc, item) => {
+            acc[item._id] = item.count;
+            return acc;
+          }, {}),
+          TOTAL: totalJobs
+        },
         pagination: {
           current: sanitizedPage,
           pages: Math.ceil(total / sanitizedLimit),
@@ -2123,8 +2462,10 @@ exports.getJobDetail = async (req, res) => {
       .populate('company', 'companyName kyc billing uniqueId verificationStatus')
       .populate('postedBy', 'email mobile')
       .populate('approvedBy', 'email role')
+      .populate('rejectedBy', 'email role')
       .populate('discontinuedBy', 'email role')
-      .populate('changeHistory.changedBy', 'email role');
+      .populate('changeHistory.changedBy', 'email role')
+      .populate('assignedTo', 'email role');
 
     if (!job) {
       return res.status(404).json({
@@ -2132,6 +2473,8 @@ exports.getJobDetail = async (req, res) => {
         message: 'Job not found'
       });
     }
+
+    // Sub-admins can view details of any job
 
     const candidates = await Candidate.find({ job: job._id })
       .populate('submittedBy', 'firmName firstName lastName')
@@ -2143,13 +2486,19 @@ exports.getJobDetail = async (req, res) => {
       .populate('reviewedBy', 'email')
       .sort({ createdAt: -1 });
 
+    // Strip change history if sub-admin lacks VIEW_JOB_EDIT_HISTORY permission
+    const jobData = job.toObject();
+    if (req.user.role === 'sub_admin' && !req.user.permissions?.includes('VIEW_JOB_EDIT_HISTORY')) {
+      delete jobData.changeHistory;
+    }
+
     const JobPosition = require('../models/JobPosition');
     const jobPosition = await JobPosition.findOne({ jobId: job._id });
 
     res.json({
       success: true,
       data: {
-        job: { ...job.toObject(), jobPosition },
+        job: jobData,
         candidates: {
           total: candidates.length,
           list: candidates
@@ -2186,6 +2535,7 @@ exports.getAllCandidates = async (req, res) => {
     if (job) query.job = job;
     if (company) query.company = company;
     if (partner) query.submittedBy = partner;
+    // Sub-admins can see all candidates
     if (search) {
       query.$or = [
         { firstName: new RegExp(search, 'i') },
@@ -2212,7 +2562,10 @@ exports.getAllCandidates = async (req, res) => {
       Candidate.countDocuments(query)
     ]);
 
+    const summaryQuery = { ...query };
+    delete summaryQuery.status;
     const statusSummary = await Candidate.aggregate([
+      { $match: summaryQuery },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
@@ -2240,13 +2593,65 @@ exports.getAllCandidates = async (req, res) => {
   }
 };
 
+async function checkAndElevateCandidateStatus(candidate, userId) {
+  if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    return;
+  }
+  
+  const InterviewSlot = require('../models/InterviewSlot');
+  const getActiveRoundInfoLocal = (c) => {
+    for (let i = 0; i < c.rounds.length; i++) {
+      const r = c.rounds[i];
+      if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED') {
+        return { index: i, round: r };
+      }
+    }
+    return null;
+  };
+
+  const activeRoundInfo = getActiveRoundInfoLocal(candidate);
+  if (!activeRoundInfo) return;
+
+  const jobId = candidate.job?._id || candidate.job;
+  const activeSlots = await InterviewSlot.find({
+    job: jobId,
+    roundType: activeRoundInfo.round.roundType,
+    status: 'ACTIVE'
+  });
+
+  if (activeSlots.length > 0) {
+    candidate.status = 'SLOTS_PUBLISHED';
+    activeRoundInfo.round.status = 'SLOTS_PUBLISHED';
+    candidate.statusHistory.push({
+      status: 'SLOTS_PUBLISHED',
+      changedBy: userId || candidate._id,
+      changedAt: new Date(),
+      notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
+    });
+    
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: userId || candidate._id,
+      actorRole: 'system',
+      action: 'PUBLISH_SLOTS',
+      fromState: 'SLOTS_NOT_PUBLISHED',
+      toState: 'SLOTS_PUBLISHED',
+      reason: 'Active slots exist for the job',
+      roundIndex: activeRoundInfo.index,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+  }
+}
+
 // @desc    Get single candidate full detail (admin)
 // @route   GET /api/admin/candidates/:id
 exports.getCandidateDetail = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
       .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
-      .populate('job', 'title uniqueId company')
+      .populate({ path: 'job', select: 'title uniqueId company assignedTo', populate: { path: 'assignedTo', select: 'email role' } })
       .populate('company', 'companyName uniqueId')
       .populate('statusHistory.changedBy', 'email role')
       .populate('notes.addedBy', 'email role');
@@ -2257,6 +2662,9 @@ exports.getCandidateDetail = async (req, res) => {
         message: 'Candidate not found'
       });
     }
+
+    // Sub-admins can view any candidate details
+    await checkAndElevateCandidateStatus(candidate, req.user._id);
 
     res.json({
       success: true,
@@ -2292,6 +2700,8 @@ exports.getAllPartners = async (req, res) => {
       ];
     }
 
+    // Sub-admins can see all partners
+
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
     const skip = (sanitizedPage - 1) * sanitizedLimit;
@@ -2307,7 +2717,11 @@ exports.getAllPartners = async (req, res) => {
       StaffingPartner.countDocuments(query)
     ]);
 
+    const matchStage = {};
+    // Sub-admins stats can see all partners
+
     const statusSummary = await StaffingPartner.aggregate([
+      { $match: matchStage },
       { $group: { _id: '$verificationStatus', count: { $sum: 1 } } }
     ]);
 
@@ -2341,12 +2755,14 @@ exports.getPartnerDetail = async (req, res) => {
   try {
     let partner = await StaffingPartner.findById(req.params.id)
       .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
-      .populate('verifiedBy', 'email role');
+      .populate('verifiedBy', 'email role')
+      .populate('assignedTo', 'email role');
 
     if (!partner) {
       partner = await StaffingPartner.findOne({ user: req.params.id })
         .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
-        .populate('verifiedBy', 'email role');
+        .populate('verifiedBy', 'email role')
+        .populate('assignedTo', 'email role');
     }
 
     if (!partner) {
@@ -2355,6 +2771,8 @@ exports.getPartnerDetail = async (req, res) => {
         message: 'Partner not found'
       });
     }
+
+    // Sub-admins can view any partner details
 
     // Get submission and placement stats
     const submissionStats = await Candidate.aggregate([
@@ -2438,6 +2856,8 @@ exports.getAllCompanies = async (req, res) => {
       query._id = { $in: activeCompanyIds };
     }
 
+    // Sub-admins can see all companies
+
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
     const skip = (sanitizedPage - 1) * sanitizedLimit;
@@ -2453,7 +2873,11 @@ exports.getAllCompanies = async (req, res) => {
       Company.countDocuments(query)
     ]);
 
+    const matchStage = {};
+    // Sub-admins stats can see all companies
+
     const statusSummary = await Company.aggregate([
+      { $match: matchStage },
       { $group: { _id: '$verificationStatus', count: { $sum: 1 } } }
     ]);
 
@@ -2487,12 +2911,14 @@ exports.getCompanyDetail = async (req, res) => {
   try {
     let company = await Company.findById(req.params.id)
       .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
-      .populate('verifiedBy', 'email role');
+      .populate('verifiedBy', 'email role')
+      .populate('assignedTo', 'email role');
 
     if (!company) {
       company = await Company.findOne({ user: req.params.id })
         .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
-        .populate('verifiedBy', 'email role');
+        .populate('verifiedBy', 'email role')
+        .populate('assignedTo', 'email role');
     }
 
     if (!company) {
@@ -2501,6 +2927,8 @@ exports.getCompanyDetail = async (req, res) => {
         message: 'Company not found'
       });
     }
+
+    // Sub-admins can view any company details
 
     // Get job stats
     const jobStats = await Job.aggregate([
@@ -2555,60 +2983,6 @@ exports.getCompanyDetail = async (req, res) => {
   }
 };
 
-// ==================== AUDIT LOG ====================
-
-// @desc    Get audit logs
-// @route   GET /api/admin/audit-logs
-exports.getAuditLogs = async (req, res) => {
-  try {
-    const AdminActionLog = require('../models/AdminActionLog');
-    const {
-      actor,
-      action,
-      entityType,
-      page = 1,
-      limit = 50
-    } = req.query;
-
-    const query = {};
-    if (actor) query.actor = actor;
-    if (action) query.action = action;
-    if (entityType) query.entityType = entityType;
-
-    const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
-    const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
-    const skip = (sanitizedPage - 1) * sanitizedLimit;
-
-    const [logs, total] = await Promise.all([
-      AdminActionLog.find(query)
-        .populate('actor', 'email role')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(sanitizedLimit),
-      AdminActionLog.countDocuments(query)
-    ]);
-
-    res.json({
-      success: true,
-      data: {
-        logs,
-        pagination: {
-          current: sanitizedPage,
-          pages: Math.ceil(total / sanitizedLimit),
-          total
-        }
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch audit logs',
-      error: error.message
-    });
-  }
-};
-
-
 // ==================== ENHANCED JOB + CANDIDATE VIEWS ====================
 
 // @desc    Get all jobs WITH candidate counts
@@ -2629,6 +3003,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
     if (status) query.status = status;
     if (approvalStatus) query.approvalStatus = approvalStatus;
     if (company) query.company = company;
+    // Sub-admins can see all jobs with candidates
     if (search) {
       query.$or = [
         { title: new RegExp(search, 'i') },
@@ -2658,6 +3033,20 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         }
       },
       { $unwind: { path: '$companyInfo', preserveNullAndEmptyArrays: true } },
+
+      // ✅ Lookup assignedTo info
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedTo',
+          foreignField: '_id',
+          as: 'assignedToInfo',
+          pipeline: [
+            { $project: { email: 1, role: 1 } }
+          ]
+        }
+      },
+      { $unwind: { path: '$assignedToInfo', preserveNullAndEmptyArrays: true } },
 
       // ✅ Lookup ALL candidates for this job
       {
@@ -2736,7 +3125,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
             adminReview: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'ADMIN_REVIEW'] } } } },
             submitted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SUBMITTED'] } } } },
             shortlisted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SHORTLISTED'] } } } },
-            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'INTERVIEW_SCHEDULED'] } } } },
+            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', ['INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED']] } } } },
             interviewed: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'INTERVIEWED'] } } } },
             offered: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFERED'] } } } },
             offerAccepted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFER_ACCEPTED'] } } } },
@@ -2806,6 +3195,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
           isFeatured: 1,
           eligiblePlans: 1,
           createdAt: 1,
+          assignedTo: '$assignedToInfo',
 
           // Company
           company: {
@@ -2875,16 +3265,30 @@ exports.getAllJobsWithCandidates = async (req, res) => {
     });
 
     // Enrich each job's candidates with partner names
-    const enrichedJobs = jobs.map(job => ({
-      ...job,
-      candidates: job.candidates.map(c => ({
+    const enrichedJobs = jobs.map(job => {
+      let jobCandidates = job.candidates.map(c => ({
         ...c,
         partner: partnerMap[c.submittedBy?.toString()] || {
           firmName: 'Unknown',
           name: 'Unknown'
         }
-      }))
-    }));
+      }));
+
+      let jobStats = {
+        totalCandidates: job.totalCandidates,
+        candidateStatusBreakdown: job.candidateStatusBreakdown,
+        slotsUsed: job.slotsUsed,
+        slotsRemaining: job.slotsRemaining
+      };
+
+      // Sub-admins can see all candidates metrics
+
+      return {
+        ...job,
+        candidates: jobCandidates,
+        ...jobStats
+      };
+    });
 
     let total;
     if (needsAdminReview === 'true') {
@@ -2952,7 +3356,8 @@ exports.getJobWithCandidates = async (req, res) => {
     const job = await Job.findById(req.params.id)
       .populate('company', 'companyName kyc.industry kyc.logo city state verificationStatus')
       .populate('postedBy', 'email')
-      .populate('approvedBy', 'email');
+      .populate('approvedBy', 'email')
+      .populate('rejectedBy', 'email');
 
     if (!job) {
       return res.status(404).json({
@@ -2960,6 +3365,8 @@ exports.getJobWithCandidates = async (req, res) => {
         message: 'Job not found'
       });
     }
+
+    // Sub-admins can view candidates for any job
 
     // ✅ Get ALL candidates for this job with full details
     const candidates = await Candidate.find({ job: job._id })
@@ -2971,7 +3378,7 @@ exports.getJobWithCandidates = async (req, res) => {
         'resumeAnalysis.recommendation resumeAnalysis.scoreBreakdown ' +
         'resumeAnalysis.parsed resumeAnalysis.flags resumeAnalysis.advice ' +
         'whatsappConsent.status consent.consentStatus ' +
-        'offer interviews statusHistory adminQueue ' +
+        'offer interviews statusHistory adminQueue pipelineTemplate rounds ' +
         'submittedBy createdAt updatedAt'
       );
 
@@ -3133,6 +3540,8 @@ exports.withdrawCandidateByAdmin = async (req, res) => {
       });
     }
 
+    // Sub-admins can withdraw candidates of any job
+
     // Admin can withdraw from any status except already terminal ones
     const terminalStatuses = ['WITHDRAWN', 'JOINED'];
     if (terminalStatuses.includes(candidate.status)) {
@@ -3254,9 +3663,11 @@ exports.updateJobStatusByAdmin = async (req, res) => {
       });
     }
 
+    // Sub-admins can update status of any job
+
     const oldStatus = job.status;
     job.status = status;
-    
+
     // Sync approvalStatus based on active/closed status
     if (status === 'CLOSED') {
       job.approvalStatus = 'DISCONTINUED';
@@ -3267,6 +3678,9 @@ exports.updateJobStatusByAdmin = async (req, res) => {
     job.addToHistory('UPDATED', req.user._id, { status: { old: oldStatus, new: status } }, `Job status updated to ${status} by admin`);
     await job.save();
 
+    const companyDoc = await Company.findById(job.company);
+    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+
     await auditService.log({
       actor: req.user._id,
       actorRole: req.user.role,
@@ -3274,7 +3688,7 @@ exports.updateJobStatusByAdmin = async (req, res) => {
       action: 'JOB_STATUS_UPDATED',
       entityType: 'Job',
       entityId: job._id,
-      description: `Job status updated to ${status} by admin`,
+      description: `Job status updated to ${status} (Job: ${job.title}, Company: ${companyName})`,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
     });
@@ -3291,5 +3705,805 @@ exports.updateJobStatusByAdmin = async (req, res) => {
       message: 'Failed to update job status',
       error: error.message
     });
+  }
+};
+
+// @desc    Assign job to a sub-admin
+// @route   PUT /api/admin/jobs/:id/assign
+exports.assignJob = async (req, res) => {
+  try {
+    const { subAdminId } = req.body;
+
+    // Only main admin can assign
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only main admin can assign job posts'
+      });
+    }
+
+    const job = await Job.findById(req.params.id);
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+    if (job.assignedTo) {
+      return res.status(400).json({
+        success: false,
+        message: 'This job is already assigned to a sub-admin. Please revoke the assignment first.'
+      });
+    }
+
+    const subAdmin = await User.findOne({ _id: subAdminId, role: 'sub_admin', status: 'ACTIVE' });
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Active sub-admin not found'
+      });
+    }
+
+    job.assignedTo = subAdmin._id;
+    job.addToHistory('UPDATED', req.user._id, {}, `Job assigned to sub-admin: ${subAdmin.email}`);
+    await job.save();
+
+    const companyDoc = await Company.findById(job.company);
+    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+
+    // Log audit
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'JOB_ASSIGNED',
+      entityType: 'Job',
+      entityId: job._id,
+      description: `Job assigned to sub-admin ${subAdmin.email} (Job: ${job.title}, Company: ${companyName})`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Send email/notification to assignee only!
+    const notificationEngine = require('../services/notificationEngine');
+    await notificationEngine.send({
+      recipientId: subAdmin._id,
+      type: 'JOB_ASSIGNED',
+      title: `Job assigned to you: "${job.title}"`,
+      message: `You have been assigned to verify and manage candidate submissions for job: "${job.title}".`,
+      data: {
+        entityType: 'Job',
+        entityId: job._id,
+        actionUrl: `/admin/jobs/${job._id}`
+      },
+      channels: { inApp: true, email: true },
+      priority: 'high'
+    });
+
+    res.json({
+      success: true,
+      message: `Job successfully assigned to ${subAdmin.email}`,
+      data: {
+        jobId: job._id,
+        assignedTo: {
+          _id: subAdmin._id,
+          email: subAdmin.email
+        }
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to assign job'
+    });
+  }
+};
+
+// @desc    Revoke job assignment
+// @route   PUT /api/admin/jobs/:id/revoke
+exports.revokeJobAssignment = async (req, res) => {
+  try {
+    // Only main admin can revoke
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only main admin can revoke job assignments'
+      });
+    }
+
+    const job = await Job.findById(req.params.id).populate('assignedTo', 'email');
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    const previousAssignee = job.assignedTo;
+    job.assignedTo = null;
+    job.addToHistory('UPDATED', req.user._id, {}, 'Job assignment revoked');
+    await job.save();
+
+    const companyDoc = await Company.findById(job.company);
+    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+
+    // Log audit
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'JOB_ASSIGNMENT_REVOKED',
+      entityType: 'Job',
+      entityId: job._id,
+      description: `Job assignment revoked for sub-admin ${previousAssignee ? previousAssignee.email : 'N/A'} (Job: ${job.title}, Company: ${companyName})`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.json({
+      success: true,
+      message: 'Job assignment revoked successfully',
+      data: {
+        jobId: job._id,
+        assignedTo: null
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to revoke job assignment'
+    });
+  }
+};
+
+// @desc    Bulk assign jobs to a sub-admin
+// @route   POST /api/admin/jobs/bulk-assign
+exports.bulkAssignJobs = async (req, res) => {
+  try {
+    const { jobIds, subAdminId } = req.body;
+
+    // Only main admin can assign
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only main admin can assign job posts'
+      });
+    }
+
+    if (!Array.isArray(jobIds) || jobIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide an array of jobIds'
+      });
+    }
+
+    const subAdmin = await User.findOne({ _id: subAdminId, role: 'sub_admin', status: 'ACTIVE' });
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Active sub-admin not found'
+      });
+    }
+
+    const jobs = await Job.find({ _id: { $in: jobIds } });
+    if (jobs.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No matching jobs found'
+      });
+    }
+    const alreadyAssigned = jobs.filter(job => job.assignedTo);
+    if (alreadyAssigned.length > 0) {
+      const titles = alreadyAssigned.map(j => `"${j.title}"`).join(', ');
+      return res.status(400).json({
+        success: false,
+        message: `The following job(s) are already assigned: ${titles}. Please revoke their assignments first.`
+      });
+    }
+
+    const notificationEngine = require('../services/notificationEngine');
+
+    for (const job of jobs) {
+      job.assignedTo = subAdmin._id;
+      job.addToHistory('UPDATED', req.user._id, {}, `Job assigned to sub-admin: ${subAdmin.email}`);
+      await job.save();
+
+      const companyDoc = await Company.findById(job.company);
+      const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+
+      // Log audit
+      await auditService.log({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        actorEmail: req.user.email,
+        action: 'JOB_ASSIGNED',
+        entityType: 'Job',
+        entityId: job._id,
+        description: `Job assigned to sub-admin ${subAdmin.email} via bulk assignment (Job: ${job.title}, Company: ${companyName})`,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent']
+      });
+
+      // Send email/notification
+      await notificationEngine.send({
+        recipientId: subAdmin._id,
+        type: 'JOB_ASSIGNED',
+        title: `Job assigned to you: "${job.title}"`,
+        message: `You have been assigned to verify and manage candidate submissions for job: "${job.title}".`,
+        data: {
+          entityType: 'Job',
+          entityId: job._id,
+          actionUrl: `/admin/jobs/${job._id}`
+        },
+        channels: { inApp: true, email: true },
+        priority: 'high'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully assigned ${jobs.length} jobs to ${subAdmin.email}`
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed bulk job assignment'
+    });
+  }
+};
+
+// @desc    Bulk revoke job assignments
+// @route   POST /api/admin/jobs/bulk-revoke
+exports.bulkRevokeJobs = async (req, res) => {
+  try {
+    const { jobIds } = req.body;
+
+    // Only main admin can revoke
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only main admin can revoke job assignments'
+      });
+    }
+
+    if (!Array.isArray(jobIds) || jobIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide an array of jobIds'
+      });
+    }
+
+    const jobs = await Job.find({ _id: { $in: jobIds } }).populate('assignedTo', 'email');
+    if (jobs.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No matching jobs found'
+      });
+    }
+
+    for (const job of jobs) {
+      const previousAssignee = job.assignedTo;
+      job.assignedTo = null;
+      job.addToHistory('UPDATED', req.user._id, {}, 'Job assignment revoked');
+      await job.save();
+
+      const companyDoc = await Company.findById(job.company);
+      const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+
+      // Log audit
+      await auditService.log({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        actorEmail: req.user.email,
+        action: 'JOB_ASSIGNMENT_REVOKED',
+        entityType: 'Job',
+        entityId: job._id,
+        description: `Job assignment revoked for sub-admin ${previousAssignee ? previousAssignee.email : 'N/A'} via bulk revocation (Job: ${job.title}, Company: ${companyName})`,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent']
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully revoked assignment for ${jobs.length} jobs`
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed bulk job revocation'
+    });
+  }
+};
+
+// @desc    Assign verification application to a sub-admin
+// @route   PUT /api/admin/verifications/:type/:id/assign
+exports.assignVerification = async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    const { subAdminId } = req.body;
+
+    // Only main admin can assign
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only main admin can assign user applications'
+      });
+    }
+
+    let model;
+    let label;
+    if (type === 'partner' || type === 'partners') {
+      model = StaffingPartner;
+      label = 'Staffing Partner';
+    } else if (type === 'company' || type === 'companies') {
+      model = Company;
+      label = 'Company';
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid application type'
+      });
+    }
+
+    let application = await model.findById(id);
+    if (!application) {
+      application = await model.findOne({ user: id });
+    }
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: `${label} application not found`
+      });
+    }
+
+    if (application.assignedTo) {
+      return res.status(400).json({
+        success: false,
+        message: 'This application is already assigned to a sub-admin. Please revoke the assignment first.'
+      });
+    }
+
+    const subAdmin = await User.findOne({ _id: subAdminId, role: 'sub_admin', status: 'ACTIVE' });
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Active sub-admin not found'
+      });
+    }
+
+    application.assignedTo = subAdmin._id;
+    await application.save();
+
+    const nameOrFirm = label === 'Company' ? application.companyName : `${application.firmName} (${application.firstName} ${application.lastName})`;
+
+    // Log audit
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'APPLICATION_ASSIGNED',
+      entityType: label === 'Company' ? 'Company' : 'StaffingPartner',
+      entityId: application._id,
+      description: `${label} verification application assigned to sub-admin ${subAdmin.email} (Name/Firm: ${nameOrFirm})`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    // Send email/notification to assignee
+    const notificationEngine = require('../services/notificationEngine');
+    await notificationEngine.send({
+      recipientId: subAdmin._id,
+      type: 'APPLICATION_ASSIGNED',
+      title: `${label} Application assigned: "${label === 'Company' ? application.companyName : (application.firstName + ' ' + application.lastName)}"`,
+      message: `You have been assigned to verify the registration application for ${label}: "${label === 'Company' ? application.companyName : (application.firstName + ' ' + application.lastName)}".`,
+      data: {
+        entityType: label === 'Company' ? 'Company' : 'StaffingPartner',
+        entityId: application._id,
+        actionUrl: `/admin/pending-verification/${type}/${application._id}`
+      },
+      channels: { inApp: true, email: true },
+      priority: 'high'
+    });
+
+    res.json({
+      success: true,
+      message: `${label} application successfully assigned to ${subAdmin.email}`,
+      data: {
+        id: application._id,
+        assignedTo: {
+          _id: subAdmin._id,
+          email: subAdmin.email
+        }
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to assign application'
+    });
+  }
+};
+
+// @desc    Revoke verification assignment
+// @route   PUT /api/admin/verifications/:type/:id/revoke
+exports.revokeVerificationAssignment = async (req, res) => {
+  try {
+    const { type, id } = req.params;
+
+    // Only main admin can revoke
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only main admin can revoke assignments'
+      });
+    }
+
+    let model;
+    let label;
+    if (type === 'partner' || type === 'partners') {
+      model = StaffingPartner;
+      label = 'Staffing Partner';
+    } else if (type === 'company' || type === 'companies') {
+      model = Company;
+      label = 'Company';
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid application type'
+      });
+    }
+
+    let application = await model.findById(id).populate('assignedTo', 'email');
+    if (!application) {
+      application = await model.findOne({ user: id }).populate('assignedTo', 'email');
+    }
+    if (!application) {
+      return res.status(404).json({
+        success: false,
+        message: `${label} application not found`
+      });
+    }
+
+    const previousAssignee = application.assignedTo;
+    application.assignedTo = null;
+    await application.save();
+
+    const nameOrFirm = label === 'Company' ? application.companyName : `${application.firmName} (${application.firstName} ${application.lastName})`;
+
+    // Log audit
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'APPLICATION_ASSIGNMENT_REVOKED',
+      entityType: label === 'Company' ? 'Company' : 'StaffingPartner',
+      entityId: application._id,
+      description: `${label} verification application assignment revoked for sub-admin ${previousAssignee ? previousAssignee.email : 'N/A'} (Name/Firm: ${nameOrFirm})`,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.json({
+      success: true,
+      message: 'Assignment revoked successfully',
+      data: {
+        id: application._id,
+        assignedTo: null
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to revoke assignment'
+    });
+  }
+};
+
+// @desc    Bulk assign verification applications to a sub-admin
+// @route   POST /api/admin/verifications/bulk-assign
+exports.bulkAssignVerification = async (req, res) => {
+  try {
+    const { subAdminId, assignments } = req.body; // assignments is an array of { id, type }
+
+    // Only main admin can bulk assign
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only main admin can bulk assign applications'
+      });
+    }
+
+    if (!assignments || !Array.isArray(assignments) || assignments.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No assignments provided'
+      });
+    }
+
+    const subAdmin = await User.findOne({ _id: subAdminId, role: 'sub_admin', status: 'ACTIVE' });
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Active sub-admin not found'
+      });
+    }
+
+    const notificationEngine = require('../services/notificationEngine');
+
+    // Check if any of the target applications are already assigned
+    const alreadyAssignedList = [];
+    for (const item of assignments) {
+      const { id, type } = item;
+      let model;
+      let label;
+      if (type === 'partner' || type === 'partners') {
+        model = StaffingPartner;
+        label = 'Staffing Partner';
+      } else if (type === 'company' || type === 'companies') {
+        model = Company;
+        label = 'Company';
+      } else {
+        continue;
+      }
+      const application = await model.findById(id);
+      if (application && application.assignedTo) {
+        const name = label === 'Company' ? application.companyName : `${application.firstName} ${application.lastName}`;
+        alreadyAssignedList.push(`"${name}" (${label})`);
+      }
+    }
+
+    if (alreadyAssignedList.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `The following application(s) are already assigned: ${alreadyAssignedList.join(', ')}. Please revoke their assignments first.`
+      });
+    }
+
+    for (const item of assignments) {
+      const { id, type } = item;
+      let model;
+      let label;
+      if (type === 'partner' || type === 'partners') {
+        model = StaffingPartner;
+        label = 'Staffing Partner';
+      } else if (type === 'company' || type === 'companies') {
+        model = Company;
+        label = 'Company';
+      } else {
+        continue;
+      }
+
+      const application = await model.findById(id);
+      if (application) {
+        application.assignedTo = subAdmin._id;
+        await application.save();
+
+        const nameOrFirm = label === 'Company' ? application.companyName : `${application.firmName} (${application.firstName} ${application.lastName})`;
+
+        // Log audit
+        await auditService.log({
+          actor: req.user._id,
+          actorRole: req.user.role,
+          actorEmail: req.user.email,
+          action: 'APPLICATION_ASSIGNED',
+          entityType: label === 'Company' ? 'Company' : 'StaffingPartner',
+          entityId: application._id,
+          description: `${label} verification application assigned to sub-admin ${subAdmin.email} via bulk assignment (Name/Firm: ${nameOrFirm})`,
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+
+        // Send notification
+        await notificationEngine.send({
+          recipientId: subAdmin._id,
+          type: 'APPLICATION_ASSIGNED',
+          title: `${label} Application assigned: "${label === 'Company' ? application.companyName : (application.firstName + ' ' + application.lastName)}"`,
+          message: `You have been assigned to verify the registration application for ${label}: "${label === 'Company' ? application.companyName : (application.firstName + ' ' + application.lastName)}".`,
+          data: {
+            entityType: label === 'Company' ? 'Company' : 'StaffingPartner',
+            entityId: application._id,
+            actionUrl: `/admin/pending-verification/${type}/${application._id}`
+          },
+          channels: { inApp: true, email: true },
+          priority: 'high'
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully assigned ${assignments.length} applications to ${subAdmin.email}`
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed bulk application assignment'
+    });
+  }
+};
+
+// @desc    Bulk revoke verification assignments
+// @route   POST /api/admin/verifications/bulk-revoke
+exports.bulkRevokeVerificationAssignment = async (req, res) => {
+  try {
+    const { assignments } = req.body; // assignments is an array of { id, type }
+
+    // Only main admin can bulk revoke
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only main admin can bulk revoke assignments'
+      });
+    }
+
+    if (!assignments || !Array.isArray(assignments) || assignments.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No assignments provided'
+      });
+    }
+
+    for (const item of assignments) {
+      const { id, type } = item;
+      let model;
+      let label;
+      if (type === 'partner' || type === 'partners') {
+        model = StaffingPartner;
+        label = 'Staffing Partner';
+      } else if (type === 'company' || type === 'companies') {
+        model = Company;
+        label = 'Company';
+      } else {
+        continue;
+      }
+
+      const application = await model.findById(id).populate('assignedTo', 'email');
+      if (application) {
+        const previousAssignee = application.assignedTo;
+        application.assignedTo = null;
+        await application.save();
+
+        const nameOrFirm = label === 'Company' ? application.companyName : `${application.firmName} (${application.firstName} ${application.lastName})`;
+
+        // Log audit
+        await auditService.log({
+          actor: req.user._id,
+          actorRole: req.user.role,
+          actorEmail: req.user.email,
+          action: 'APPLICATION_ASSIGNMENT_REVOKED',
+          entityType: label === 'Company' ? 'Company' : 'StaffingPartner',
+          entityId: application._id,
+          description: `${label} verification application assignment revoked for sub-admin ${previousAssignee ? previousAssignee.email : 'N/A'} via bulk revocation (Name/Firm: ${nameOrFirm})`,
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully revoked assignment for ${assignments.length} applications`
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed bulk application revocation'
+    });
+  }
+};
+
+// ADMIN: Assign a shortlisted candidate to a slot
+// POST /api/admin/jobs/:jobId/interview-slots/:slotId/assign
+exports.adminAssignCandidateToSlot = async (req, res) => {
+  try {
+    const { candidateId } = req.body;
+    const Candidate = require('../models/Candidate');
+    const InterviewSlot = require('../models/InterviewSlot');
+
+    if (!candidateId) {
+      return res.status(400).json({ success: false, message: 'Please provide candidateId' });
+    }
+
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found' });
+    }
+
+    if (candidate.job.toString() !== req.params.jobId) {
+      return res.status(400).json({ success: false, message: 'Candidate is not applied for this job' });
+    }
+
+    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED' && candidate.status !== 'RESCHEDULE_REQUESTED') {
+      return res.status(400).json({ success: false, message: `Candidate current status: ${candidate.status} does not allow assignment.` });
+    }
+
+    if (candidate.assignedSlot) {
+      return res.status(400).json({ success: false, message: 'Candidate is already assigned to a slot for the current round.' });
+    }
+
+    const slot = await InterviewSlot.findById(req.params.slotId);
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Interview slot not found' });
+    }
+    if (slot.status !== 'ACTIVE') {
+      return res.status(400).json({ success: false, message: 'Selected slot is not active' });
+    }
+    if (slot.availableSpots <= 0) {
+      return res.status(400).json({ success: false, message: 'Selected slot is fully booked' });
+    }
+
+    const getActiveRoundInfoLocal = (cand) => {
+      const status = cand.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      for (let i = 0; i < cand.rounds.length; i++) {
+        const r = cand.rounds[i];
+        const L_STATES = [ 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED', 'RESCHEDULE_REQUESTED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONDUCTED', 'ROUND_ON_HOLD' ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    let activeRoundInfo = getActiveRoundInfoLocal(candidate);
+    if (!activeRoundInfo) {
+      if (candidate.status === 'SHORTLISTED') {
+        const firstRound = candidate.rounds[0];
+        if (firstRound) {
+          firstRound.status = 'SLOT_ASSIGNED';
+          activeRoundInfo = { index: 0, round: firstRound };
+        }
+      }
+    }
+
+    if (!activeRoundInfo) {
+      return res.status(400).json({ success: false, message: 'Could not determine active pipeline round for assignment' });
+    }
+
+    if (slot.roundType !== activeRoundInfo.round.roundType) {
+      return res.status(400).json({ success: false, message: `Slot is for ${slot.roundType}, but candidate is at ${activeRoundInfo.round.roundType}` });
+    }
+
+    slot.bookedCandidates.push({ candidate: candidate._id, bookedAt: new Date() });
+    slot.availableSpots -= 1;
+    if (slot.availableSpots === 0) slot.status = 'FULL';
+    await slot.save();
+
+    candidate.assignedSlot = slot._id;
+    activeRoundInfo.round.slots = [{ slotId: slot._id, isSuggested: true }];
+    candidate.status = 'SLOT_ASSIGNED';
+    activeRoundInfo.round.status = 'SLOT_ASSIGNED';
+
+    candidate.statusHistory.push({
+      status: 'SLOT_ASSIGNED',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: `Admin assigned candidate to slot ${slot._id} for round ${activeRoundInfo.round.roundType}`
+    });
+
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: req.user._id,
+      actorRole: req.user.role,
+      action: 'ASSIGN_SLOT',
+      fromState: 'SLOTS_PUBLISHED',
+      toState: 'SLOT_ASSIGNED',
+      reason: 'Admin assigned candidate to slot',
+      roundIndex: activeRoundInfo.index,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+    res.json({ success: true, message: 'Candidate assigned to slot successfully', data: candidate });
+  } catch (error) {
+    console.error('Admin assign candidate to slot error:', error);
+    res.status(500).json({ success: false, message: 'Failed to assign candidate to slot', error: error.message });
   }
 };

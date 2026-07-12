@@ -12,6 +12,7 @@ const JobInterest = require('../models/JobInterest');
 const InterviewSlot = require('../models/InterviewSlot');
 const candidateQueueService = require('../services/candidateQueueService');
 const whatsappService = require('../services/whatsappService');
+const { transition, ACTIONS, PIPELINE_STATES } = require('../services/pipelineStateMachine');
 
 // ============================================================
 // PROFILE ROUTES
@@ -712,7 +713,7 @@ exports.getProfileCompletion = async (req, res) => {
     }
 
     const completion = partner.profileCompletion ? (partner.profileCompletion.toObject ? partner.profileCompletion.toObject() : partner.profileCompletion) : {};
-    
+
     // Force basicInfo to false if email or mobile is not verified
     if (!partner.user?.emailVerified || !partner.user?.mobileVerified) {
       completion.basicInfo = false;
@@ -952,7 +953,10 @@ exports.getAvailableJobs = async (req, res) => {
         salaryMax: req.query.salaryMax,
         search: req.query.search,
         sortBy: req.query.sortBy,
-        isUrgent: req.query.urgentOnly
+        isUrgent: req.query.isUrgent || req.query.urgentOnly,
+        isFeatured: req.query.isFeatured,
+        companyName: req.query.companyName,
+        workMode: req.query.workMode
       }
     );
 
@@ -1003,26 +1007,28 @@ exports.getAvailableJobs = async (req, res) => {
 // @route   GET /api/staffing-partners/jobs/:id
 exports.getJobDetails = async (req, res) => {
   try {
-    const job = await Job.findById(req.params.id).populate(
-      'company',
-      [
-        'companyName',
-        'kyc.logo',
-        'kyc.industry',
-        'kyc.companyType',
-        'kyc.yearEstablished',
-        'kyc.employeeCount',
-        'kyc.description',
-        'kyc.website',
-        'city',
-        'state',
-        'hiringPreferences.workModePreference',
-        'hiringPreferences.typicalCtcBand',
-        'hiringPreferences.avgMonthlyHiringVolume',
-        'metrics.totalHires',
-        'metrics.totalJobsPosted'
-      ].join(' ')
-    );
+    const job = await Job.findById(req.params.id)
+      .populate(
+        'company',
+        [
+          'companyName',
+          'kyc.logo',
+          'kyc.industry',
+          'kyc.companyType',
+          'kyc.yearEstablished',
+          'kyc.employeeCount',
+          'kyc.description',
+          'kyc.website',
+          'city',
+          'state',
+          'hiringPreferences.workModePreference',
+          'hiringPreferences.typicalCtcBand',
+          'hiringPreferences.avgMonthlyHiringVolume',
+          'metrics.totalHires',
+          'metrics.totalJobsPosted'
+        ].join(' ')
+      )
+      .populate('assignedTo', 'firstName lastName email mobile');
 
     if (!job) {
       return res.status(404).json({
@@ -1204,7 +1210,8 @@ exports.submitCandidate = async (req, res) => {
       expectedSalary,
       writeup,
       profile,
-      forceSubmit
+      forceSubmit,
+      lastWorkingDay
     } = req.body;
 
     // Resume comes from multer (uploaded to Cloudinary before this runs)
@@ -1445,6 +1452,7 @@ exports.submitCandidate = async (req, res) => {
         totalExperience: parsedTotalExp,     // ✅ parsed float
         relevantExperience: parsedRelevantExp, // ✅ parsed float
         noticePeriod,
+        lastWorkingDay: lastWorkingDay ? new Date(lastWorkingDay) : null,
         currentSalary: parsedCurrentSalary,  // ✅ parsed int (no comma issue)
         expectedSalary: parsedExpectedSalary, // ✅ parsed int (no comma issue)
         writeup: writeup?.trim() || '',
@@ -1561,6 +1569,35 @@ exports.submitCandidate = async (req, res) => {
 
     notifyPartner();
 
+    // ✅ STEP 21: Notify company via email (fire and forget)
+    const notifyCompany = async () => {
+      try {
+        const companyDoc = await Company.findById(job.company).populate('user', 'email');
+        if (companyDoc && companyDoc.user && companyDoc.user.email) {
+          const emailService = require('../services/emailService');
+          await emailService.sendEmail({
+            to: companyDoc.user.email,
+            subject: `🚀 New Candidate Submitted - ${job.title}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+                <div style="background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+                  <h2 style="margin: 0; font-size: 20px;">🚀 New Candidate Submitted</h2>
+                </div>
+                <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+                  <p>Hello Team,</p>
+                  <p>A new candidate, <strong>${firstName.trim()} ${lastName.trim()}</strong>, has been submitted for the <strong>${job.title}</strong> position.</p>
+                  <p>Please log in to your dashboard to review the profile once the candidate gives consent.</p>
+                </div>
+              </div>
+            `
+          });
+        }
+      } catch (err) {
+        console.error('[NOTIFY] Company email notification failed:', err.message);
+      }
+    };
+    notifyCompany();
+
     // NOTE: AI parse + scoring + admin queue is triggered ONLY after candidate
     // confirms WhatsApp consent via GET /api/candidates/consent/agree/:token
     // DO NOT call processAfterConsent() here — candidate has not consented yet.
@@ -1631,12 +1668,12 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
       return d;
     };
 
-    // Get partner's shortlisted candidates for this job
+    // Get partner's shortlisted / slots published candidates for this job
     const partnerCandidates = await Candidate.find({
       job: req.params.jobId,
       submittedBy: partner._id,
-      status: 'SHORTLISTED', // Only shortlisted ones can be assigned
-    }).select('firstName lastName email mobile status assignedSlot profile.currentDesignation');
+      status: { $in: ['SHORTLISTED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED', 'RESCHEDULE_REQUESTED'] },
+    }).select('firstName lastName email mobile status assignedSlot profile.currentDesignation rounds');
 
     // For each slot show what partner needs to know
     const formattedSlots = slots.map((slot) => {
@@ -1657,6 +1694,9 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
         isFull: slot.availableSpots === 0,
         notes: slot.notes,
         interviewMode: slot.interviewMode || '',
+        roundType: slot.roundType || '',
+        interviewDetails: slot.interviewDetails || '',
+        interviewerName: slot.interviewerName || '',
         // How many of YOUR candidates are in this slot
         yourCandidatesBooked: partnerBookingsInSlot.length,
         isPast: getSlotDateTime(slot.date, slot.startTime) < now
@@ -1680,15 +1720,53 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
         totalSlots: futureSlots.length,
 
         // Partner's candidates eligible for slot assignment
-        yourShortlistedCandidates: partnerCandidates.map((c) => ({
-          candidateId: c._id,
-          name: `${c.firstName} ${c.lastName}`,
-          email: c.email,
-          designation: c.profile?.currentDesignation,
-          status: c.status,
-          alreadyAssigned: !!c.assignedSlot,
-          assignedSlotId: c.assignedSlot,
-        })),
+        yourShortlistedCandidates: partnerCandidates.map((c) => {
+          // Helper to identify the current active round info based on candidate status
+          const getActiveRoundInfo = (cand) => {
+            const status = cand.status;
+            if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+            const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+            if (hrStates.includes(status)) {
+              const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+              if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+            }
+            const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+            if (assessmentStates.includes(status)) {
+              const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+              if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+            }
+            const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+            if (offerStates.includes(status)) return null;
+            for (let i = 0; i < cand.rounds.length; i++) {
+              const r = cand.rounds[i];
+              const L_STATES = [
+                'SLOTS_NOT_PUBLISHED',
+                'SLOTS_PUBLISHED',
+                'SLOT_ASSIGNED',
+                'RESCHEDULE_REQUESTED',
+                'SLOT_DETAILS_SHARED',
+                'INTERVIEW_CONDUCTED',
+                'ROUND_ON_HOLD'
+              ];
+              if (L_STATES.includes(r.status)) return { index: i, round: r };
+            }
+            return null;
+          };
+
+          const activeRoundInfo = getActiveRoundInfo(c);
+
+          return {
+            candidateId: c._id,
+            name: `${c.firstName} ${c.lastName}`,
+            email: c.email,
+            designation: c.profile?.currentDesignation,
+            status: c.status,
+            alreadyAssigned: !!c.assignedSlot,
+            assignedSlotId: c.assignedSlot,
+            activeRoundType: activeRoundInfo ? activeRoundInfo.round.roundType : null,
+            rescheduleRequest: activeRoundInfo && activeRoundInfo.round.rescheduleRequest ? activeRoundInfo.round.rescheduleRequest : null
+          };
+        }),
       },
     });
   } catch (error) {
@@ -1741,22 +1819,57 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    // Candidate must be SHORTLISTED
-    if (candidate.status !== 'SHORTLISTED') {
+    // Candidate must be SHORTLISTED (legacy), SLOTS_PUBLISHED (pipeline), SLOTS_NOT_PUBLISHED, or RESCHEDULE_REQUESTED
+    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED' && candidate.status !== 'RESCHEDULE_REQUESTED') {
       return res.status(400).json({
         success: false,
-        message: `Only SHORTLISTED candidates can be assigned to slots. Current status: ${candidate.status}`,
+        message: `Only SHORTLISTED, SLOTS_PUBLISHED, SLOTS_NOT_PUBLISHED, or RESCHEDULE_REQUESTED candidates can be assigned to slots. Current status: ${candidate.status}`,
       });
     }
 
-    // Candidate must not already be assigned to a slot
+    // Candidate must not already be assigned to a slot in the current round
     if (candidate.assignedSlot) {
-      return res.status(400).json({
-        success: false,
-        message: 'Candidate is already assigned to a slot',
-        assignedSlotId: candidate.assignedSlot,
-        hint: 'Remove candidate from current slot before reassigning',
-      });
+      const assignedSlotDoc = await InterviewSlot.findById(candidate.assignedSlot);
+      const getActiveRoundInfoForCheck = (cand) => {
+        const status = cand.status;
+        if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+        const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+        if (hrStates.includes(status)) {
+          const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+          if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+        }
+        const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+        if (assessmentStates.includes(status)) {
+          const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+          if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+        }
+        const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+        if (offerStates.includes(status)) return null;
+        for (let i = 0; i < cand.rounds.length; i++) {
+          const r = cand.rounds[i];
+          const L_STATES = [
+            'SLOTS_NOT_PUBLISHED',
+            'SLOTS_PUBLISHED',
+            'SLOT_ASSIGNED',
+            'RESCHEDULE_REQUESTED',
+            'SLOT_DETAILS_SHARED',
+            'INTERVIEW_CONDUCTED',
+            'ROUND_ON_HOLD'
+          ];
+          if (L_STATES.includes(r.status)) return { index: i, round: r };
+        }
+        return null;
+      };
+
+      const activeRoundInfo = getActiveRoundInfoForCheck(candidate);
+      if (assignedSlotDoc && activeRoundInfo && assignedSlotDoc.roundType === activeRoundInfo.round.roundType) {
+        return res.status(400).json({
+          success: false,
+          message: 'Candidate is already assigned to a slot in this round',
+          assignedSlotId: candidate.assignedSlot,
+          hint: 'Remove candidate from current slot before reassigning',
+        });
+      }
     }
 
     // ── Validate slot ─────────────────────────────────────────────────
@@ -1818,6 +1931,55 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
+    // ── Check if candidate active round matches slot roundType ──────────
+    const getActiveRoundInfoForValidation = (cand) => {
+      const status = cand.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+      }
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      if (assessmentStates.includes(status)) {
+        const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
+      }
+      const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+      if (offerStates.includes(status)) return null;
+      for (let i = 0; i < cand.rounds.length; i++) {
+        const r = cand.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    const activeInfo = getActiveRoundInfoForValidation(candidate);
+    if (activeInfo && slot.roundType) {
+      const sType = slot.roundType.trim().toUpperCase();
+      const cType = (activeInfo.round.roundType || '').trim().toUpperCase();
+      
+      const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+      const isSlotHr = hrNames.includes(sType);
+      const isCandHr = hrNames.includes(cType);
+      
+      if (!(isSlotHr && isCandHr) && sType !== cType) {
+        return res.status(400).json({
+          success: false,
+          message: `This slot is for ${slot.roundType.replace('_', ' ')}, but the candidate's current round is ${activeInfo.round.roundType.replace('_', ' ')}.`,
+        });
+      }
+    }
+
     // ── Book the candidate ────────────────────────────────────────────
     slot.bookedCandidates.push({
       candidate: candidateId,
@@ -1836,25 +1998,128 @@ exports.assignCandidateToSlot = async (req, res) => {
 
     await slot.save();
 
+    // Helper to identify the current active round info based on candidate status
+    const getActiveRoundInfo = (c) => {
+      const status = c.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      if (assessmentStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+      if (offerStates.includes(status)) return null;
+      for (let i = 0; i < c.rounds.length; i++) {
+        const r = c.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
     // ── Update candidate ──────────────────────────────────────────────
     candidate.assignedSlot = slot._id;
-    candidate.status = 'SLOT_ASSIGNED';
+    const oldStatus = candidate.status;
+
+    if (oldStatus === 'SLOTS_PUBLISHED') {
+      const fsmResult = transition({
+        currentState: oldStatus,
+        action: ACTIONS.BOOK_SLOT,
+        role: 'staffing_partner',
+      });
+      if (!fsmResult.ok) {
+        return res.status(400).json({ success: false, message: fsmResult.error });
+      }
+      candidate.status = fsmResult.nextState;
+    } else if (oldStatus === 'RESCHEDULE_REQUESTED') {
+      const fsmResult = transition({
+        currentState: oldStatus,
+        action: ACTIONS.CONFIRM_RESCHEDULE,
+        role: 'staffing_partner',
+      });
+      if (!fsmResult.ok) {
+        return res.status(400).json({ success: false, message: fsmResult.error });
+      }
+      candidate.status = fsmResult.nextState;
+    } else {
+      candidate.status = 'SLOT_DETAILS_SHARED';
+    }
+
+    const activeRoundInfo = getActiveRoundInfo(candidate);
+    const crypto = require('crypto');
+    const confirmationToken = crypto.randomBytes(32).toString('hex');
+    const detailsVal = slot.interviewDetails || '';
+
+    if (activeRoundInfo) {
+      const { round } = activeRoundInfo;
+      round.status = candidate.status;
+      if (oldStatus === 'RESCHEDULE_REQUESTED' && round.rescheduleRequest) {
+        round.rescheduleRequest.status = 'ACCEPTED';
+        round.rescheduleRequest.selectedSlotId = slot._id;
+        round.rescheduleRequest.actionedAt = new Date();
+        round.rescheduleRequest.actionedBy = req.user._id;
+      }
+      round.slots = [{
+        date: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        timezone: slot.timezone || 'Asia/Kolkata',
+        mode: slot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
+        interviewerName: slot.interviewerName || '',
+        capacity: 1,
+        bookedBy: partner._id,
+        bookedAt: new Date(),
+        details: {
+          meetingLink: slot.interviewMode === 'Virtual' ? detailsVal : '',
+          address: slot.interviewMode === 'Face-to-Face' ? detailsVal : '',
+          pointOfContact: {
+            name: slot.interviewerName || '',
+            phone: '',
+            email: ''
+          }
+        }
+      }];
+    }
+
+    // Set interviewConfig for dashboard and candidate compatibility
+    candidate.interviewConfig = {
+      mode: slot.interviewMode === 'Face-to-Face' ? 'Face-to-Face' : 'Virtual',
+      details: detailsVal,
+      interviewer: slot.interviewerName || '',
+      isConfirmedByCompany: true,
+      confirmedAt: new Date(),
+      confirmationToken,
+      candidateResponse: 'PENDING'
+    };
 
     // Record in interviews array for history
     candidate.interviews.push({
       round: candidate.interviews.length + 1,
       slot: slot._id,
       scheduledAt: slot.date,
-      type: 'Video', // Defaulting to Video for now
+      type: slot.interviewMode === 'Face-to-Face' ? 'Face-to-Face' : 'Video',
       result: 'PENDING'
     });
 
     candidate.statusHistory.push({
-      status: 'SLOT_ASSIGNED',
+      status: candidate.status,
       changedBy: req.user._id,
       changedAt: new Date(),
       changedByRole: 'PARTNER',
-      notes: `Assigned to interview slot on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}`,
+      notes: `Assigned to interview slot on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime} (Details auto-shared)`,
       metadata: {
         slotId: slot._id,
         slotDate: slot.date,
@@ -1863,7 +2128,60 @@ exports.assignCandidateToSlot = async (req, res) => {
       },
     });
 
+    // Write audit trail if candidate has pipeline
+    if (activeRoundInfo) {
+      candidate.auditTrail = candidate.auditTrail || [];
+      candidate.auditTrail.push({
+        actorId: req.user._id,
+        actorRole: 'staffing_partner',
+        action: ACTIONS.BOOK_SLOT,
+        fromState: oldStatus,
+        toState: candidate.status,
+        reason: `Slot booked and details auto-shared on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}`,
+        roundIndex: activeRoundInfo.index,
+        timestamp: new Date()
+      });
+    }
+
     await candidate.save();
+
+    // Trigger WhatsApp notification to candidate asynchronously
+    const notifyCandidate = async () => {
+      try {
+        const Company = require('../models/Company');
+        const companyDoc = await Company.findById(candidate.company);
+        const companyName = companyDoc ? companyDoc.companyName : 'Syncro1 Employer';
+
+        const interviewDate = new Date(slot.date).toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        });
+
+        const mode = slot.interviewMode === 'Virtual' ? 'Online' : 'Offline';
+        const detailsStr = slot.interviewDetails || '';
+        const interviewer = slot.interviewerName || 'Hiring Team';
+
+        const whatsappService = require('../services/whatsappService');
+        const token = confirmationToken;
+        await whatsappService.sendInterviewInvitation(
+          candidate.mobile,
+          candidate.firstName,
+          companyName,
+          interviewDate,
+          slot.startTime,
+          candidate.job?.title || 'Job Interview',
+          mode,
+          detailsStr,
+          interviewer,
+          token
+        );
+      } catch (waError) {
+        console.error('[PARTNER ASSIGN] WhatsApp notification failed:', waError.message);
+      }
+    };
+
+    notifyCandidate();
 
     res.status(201).json({
       success: true,
@@ -1942,23 +2260,78 @@ exports.removeCandidateFromSlot = async (req, res) => {
 
     await slot.save();
 
-    // Update candidate status back to SHORTLISTED
-    await Candidate.findByIdAndUpdate(req.params.candidateId, {
-      $set: {
-        assignedSlot: null,
-        status: 'SHORTLISTED',
-      },
-      $push: {
-        statusHistory: {
-          status: 'SHORTLISTED',
-          changedBy: req.user._id,
-          changedAt: new Date(),
-          changedByRole: 'PARTNER',
-          notes: 'Removed from interview slot — back to shortlisted',
-          metadata: { removedFromSlot: slot._id },
-        },
-      },
+    const candidate = await Candidate.findById(req.params.candidateId);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found' });
+    }
+
+    const oldStatus = candidate.status;
+    let nextStatus = 'SHORTLISTED';
+
+    const getActiveRoundInfo = (c) => {
+      const status = c.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      if (assessmentStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+      if (offerStates.includes(status)) return null;
+      for (let i = 0; i < c.rounds.length; i++) {
+        const r = c.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    const activeRoundInfo = getActiveRoundInfo(candidate);
+    if (activeRoundInfo) {
+      nextStatus = 'SLOTS_PUBLISHED';
+      activeRoundInfo.round.status = nextStatus;
+      activeRoundInfo.round.slots = [];
+    }
+
+    candidate.assignedSlot = null;
+    candidate.status = nextStatus;
+    candidate.statusHistory.push({
+      status: nextStatus,
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: 'PARTNER',
+      notes: 'Removed from interview slot by partner — slots available again',
+      metadata: { removedFromSlot: slot._id },
     });
+
+    if (activeRoundInfo) {
+      candidate.auditTrail = candidate.auditTrail || [];
+      candidate.auditTrail.push({
+        actorId: req.user._id,
+        actorRole: 'staffing_partner',
+        action: ACTIONS.REQUEST_RESCHEDULE,
+        fromState: oldStatus,
+        toState: nextStatus,
+        reason: 'Removed from interview slot by partner',
+        roundIndex: activeRoundInfo.index,
+        timestamp: new Date()
+      });
+    }
+
+    await candidate.save();
 
     res.json({
       success: true,
@@ -2075,36 +2448,61 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status, search } = req.query;
+    const { page = 1, limit = 10, status, search, isManual, isInterview } = req.query;
     const parsedPage = parseInt(page, 10) || 1;
     const parsedLimit = parseInt(limit, 10) || 10;
     const skip = (parsedPage - 1) * parsedLimit;
 
     const query = { submittedBy: partner._id };
-    if (status) query.status = status;
+    if (isInterview === 'true') {
+      query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] };
+    } else if (status) {
+      query.status = status;
+    }
+
+    const andConditions = [];
+
+    if (isManual === 'true') {
+      andConditions.push({
+        $or: [
+          { poolCandidateRef: null },
+          { poolCandidateRef: { $exists: false } }
+        ]
+      });
+    } else if (isManual === 'false') {
+      andConditions.push({
+        poolCandidateRef: { $ne: null, $exists: true }
+      });
+    }
 
     if (search && search.trim()) {
       const rx = new RegExp(search.trim(), 'i');
-      
+
       // Find matching jobs
       const matchingJobs = await Job.find({ title: rx }).select('_id');
       const jobIds = matchingJobs.map(j => j._id);
-      
+
       // Find matching companies
       const matchingCompanies = await Company.find({ companyName: rx }).select('_id');
       const companyIds = matchingCompanies.map(c => c._id);
-      
-      query.$or = [
-        { firstName: rx },
-        { lastName: rx },
-        { email: rx },
-        { mobile: rx },
-        { job: { $in: jobIds } },
-        { company: { $in: companyIds } }
-      ];
+
+      andConditions.push({
+        $or: [
+          { firstName: rx },
+          { lastName: rx },
+          { email: rx },
+          { mobile: rx },
+          { job: { $in: jobIds } },
+          { company: { $in: companyIds } }
+        ]
+      });
     }
 
-    const [submissions, total] = await Promise.all([
+    if (andConditions.length > 0) {
+      query.$and = andConditions;
+    }
+
+    const [rawSubmissions, total] = await Promise.all([
       Candidate.find(query)
         .populate('job', 'title company commission')
         .populate('company', 'companyName')
@@ -2119,9 +2517,19 @@ exports.getMySubmissions = async (req, res) => {
           'resume interviewConfig whatsappConsent.status resumeAnalysis.profileScore ' +
           'resumeAnalysis.matchLevel createdAt job company assignedSlot'
         )
-        .populate('assignedSlot', 'date startTime endTime status interviewMode'),
+        .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName')
+        .lean(),
       Candidate.countDocuments(query)
     ]);
+
+    const submissions = rawSubmissions.map(sub => {
+      if (sub.status === 'ROUND_ON_HOLD') {
+        sub.status = 'INTERVIEW_CONDUCTED';
+      } else if (sub.status === 'HR_ON_HOLD') {
+        sub.status = 'HR_ROUND_PENDING';
+      }
+      return sub;
+    });
 
     res.json({
       success: true,
@@ -2145,6 +2553,58 @@ exports.getMySubmissions = async (req, res) => {
   }
 };
 
+async function checkAndElevateCandidateStatus(candidate, userId) {
+  if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    return;
+  }
+
+  const InterviewSlot = require('../models/InterviewSlot');
+  const getActiveRoundInfoLocal = (c) => {
+    for (let i = 0; i < c.rounds.length; i++) {
+      const r = c.rounds[i];
+      if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED') {
+        return { index: i, round: r };
+      }
+    }
+    return null;
+  };
+
+  const activeRoundInfo = getActiveRoundInfoLocal(candidate);
+  if (!activeRoundInfo) return;
+
+  const jobId = candidate.job?._id || candidate.job;
+  const activeSlots = await InterviewSlot.find({
+    job: jobId,
+    roundType: activeRoundInfo.round.roundType,
+    status: 'ACTIVE'
+  });
+
+  if (activeSlots.length > 0) {
+    candidate.status = 'SLOTS_PUBLISHED';
+    activeRoundInfo.round.status = 'SLOTS_PUBLISHED';
+    candidate.statusHistory.push({
+      status: 'SLOTS_PUBLISHED',
+      changedBy: userId || candidate._id,
+      changedAt: new Date(),
+      notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
+    });
+
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: userId || candidate._id,
+      actorRole: 'system',
+      action: 'PUBLISH_SLOTS',
+      fromState: 'SLOTS_NOT_PUBLISHED',
+      toState: 'SLOTS_PUBLISHED',
+      reason: 'Active slots exist for the job',
+      roundIndex: activeRoundInfo.index,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+  }
+}
+
 // @desc    Get Single Submission
 // @route   GET /api/staffing-partners/submissions/:id
 exports.getSubmission = async (req, res) => {
@@ -2157,7 +2617,7 @@ exports.getSubmission = async (req, res) => {
     })
       .populate('job', 'title company commission')
       .populate('company', 'companyName')
-      .populate('assignedSlot', 'date startTime endTime status interviewMode');
+      .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName');
 
     if (!submission) {
       return res.status(404).json({
@@ -2166,9 +2626,18 @@ exports.getSubmission = async (req, res) => {
       });
     }
 
+    await checkAndElevateCandidateStatus(submission, req.user._id);
+
+    const submissionObj = submission.toObject();
+    if (submissionObj.status === 'ROUND_ON_HOLD') {
+      submissionObj.status = 'INTERVIEW_CONDUCTED';
+    } else if (submissionObj.status === 'HR_ON_HOLD') {
+      submissionObj.status = 'HR_ROUND_PENDING';
+    }
+
     res.json({
       success: true,
-      data: submission
+      data: submissionObj
     });
   } catch (error) {
     res.status(500).json({
@@ -2220,17 +2689,18 @@ exports.updateSubmission = async (req, res) => {
       noticePeriod,
       currentSalary,
       expectedSalary,
-      writeup
+      writeup,
+      lastWorkingDay
     } = req.body;
 
     if (firstName) submission.firstName = firstName.trim();
     if (middleName !== undefined) submission.middleName = middleName.trim();
     if (lastName) submission.lastName = lastName.trim();
-    
+
     if (email) {
       submission.email = email.trim().toLowerCase();
     }
-    
+
     if (mobile) {
       submission.mobile = mobile.trim();
       // Update whatsappConsent sentTo if it was pending
@@ -2243,11 +2713,14 @@ exports.updateSubmission = async (req, res) => {
     if (!submission.profile) submission.profile = {};
     if (location !== undefined) submission.profile.location = location.trim();
     if (willingToRelocate !== undefined && willingToRelocate !== null && willingToRelocate !== '') {
-      submission.profile.willingToRelocate = willingToRelocate === 'true' || willingToRelocate === true;
+      submission.profile.canRelocate = willingToRelocate === 'true' || willingToRelocate === true;
     }
     if (totalExperience !== undefined && totalExperience !== '') submission.profile.totalExperience = Number(totalExperience);
     if (relevantExperience !== undefined && relevantExperience !== '') submission.profile.relevantExperience = Number(relevantExperience);
     if (noticePeriod !== undefined) submission.profile.noticePeriod = noticePeriod;
+    if (lastWorkingDay !== undefined) {
+      submission.profile.lastWorkingDay = lastWorkingDay ? new Date(lastWorkingDay) : null;
+    }
     if (currentSalary !== undefined && currentSalary !== '') submission.profile.currentSalary = Number(currentSalary);
     if (expectedSalary !== undefined && expectedSalary !== '') submission.profile.expectedSalary = Number(expectedSalary);
     if (writeup !== undefined) submission.profile.writeup = writeup.trim();
@@ -2287,7 +2760,7 @@ exports.updateSubmission = async (req, res) => {
         if (currentSalary !== undefined && currentSalary !== '') poolCandidate.currentSalary = Number(currentSalary);
         if (expectedSalary !== undefined && expectedSalary !== '') poolCandidate.expectedSalary = Number(expectedSalary);
         if (writeup !== undefined) poolCandidate.writeup = writeup.trim();
-        
+
         if (req.file && req.file.path) {
           poolCandidate.resume = {
             url: req.file.path,
@@ -2350,8 +2823,9 @@ exports.resendConsent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Submission not found' });
     }
 
-    // Only allow resend if consent is still pending
-    if (candidate.status !== 'CONSENT_PENDING') {
+    // Allow resend if consent is pending or candidate is still in draft (consent never sent)
+    const allowedResendStatuses = ['CONSENT_PENDING', 'DRAFT'];
+    if (!allowedResendStatuses.includes(candidate.status)) {
       return res.status(400).json({
         success: false,
         message: candidate.status === 'CONSENT_CONFIRMED'
@@ -2362,13 +2836,21 @@ exports.resendConsent = async (req, res) => {
 
     const whatsappService = require('../services/whatsappService');
     const Company = require('../models/Company');
+    const crypto = require('crypto');
 
     const company = await Company.findById(candidate.job?.company || candidate.company).select('companyName');
     const companyName = company?.companyName || 'a leading company';
-    const consentToken = candidate.whatsappConsent?.token;
+    let consentToken = candidate.whatsappConsent?.token;
 
+    // For DRAFT candidates, consent was never sent — generate a fresh token
     if (!consentToken) {
-      return res.status(400).json({ success: false, message: 'Consent token missing. Cannot resend.' });
+      if (candidate.status !== 'DRAFT') {
+        return res.status(400).json({ success: false, message: 'Consent token missing. Cannot resend.' });
+      }
+      consentToken = crypto.randomBytes(32).toString('hex');
+      if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
+      candidate.whatsappConsent.token = consentToken;
+      candidate.whatsappConsent.sentTo = candidate.mobile;
     }
 
     const result = await whatsappService.sendCandidateConsent(
@@ -2383,14 +2865,21 @@ exports.resendConsent = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Failed to resend WhatsApp consent', error: result.error });
     }
 
-    // Update resent timestamp
+    // Update consent timestamps and promote DRAFT → CONSENT_PENDING
+    if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
     candidate.whatsappConsent.resentAt = new Date();
     candidate.whatsappConsent.sentAt = new Date();
+
+    const previousStatus = candidate.status;
+    candidate.status = 'CONSENT_PENDING';
+
     candidate.statusHistory.push({
       status: 'CONSENT_PENDING',
       changedBy: req.user._id,
       changedAt: new Date(),
-      notes: 'WhatsApp consent resent by partner'
+      notes: previousStatus === 'DRAFT'
+        ? 'WhatsApp consent sent for the first time (from DRAFT) by partner'
+        : 'WhatsApp consent resent by partner'
     });
     await candidate.save();
 
@@ -2542,7 +3031,7 @@ exports.getDashboard = async (req, res) => {
     // 2. Shortlisted Jobs Count (unique jobs with shortlisted/interview/joined candidate)
     const shortlistedJobs = await Candidate.distinct('job', {
       submittedBy: partner._id,
-      status: { $in: ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'] }
+      status: { $in: ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'] }
     });
     const totalShortlistedJobs = shortlistedJobs.length;
 
@@ -2561,7 +3050,7 @@ exports.getDashboard = async (req, res) => {
     // 5. Active Interviews count
     const activeInterviewsCount = await Candidate.countDocuments({
       submittedBy: partner._id,
-      status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED'] }
+      status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] }
     });
 
     // 6. Calculate monthly placements for the last 6 months dynamically
@@ -2592,14 +3081,14 @@ exports.getDashboard = async (req, res) => {
 
     const placementData = [];
     const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    
+
     for (let i = 5; i >= 0; i--) {
       const d = new Date();
       d.setMonth(d.getMonth() - i);
       const year = d.getFullYear();
       const monthIndex = d.getMonth(); // 0-11
       const label = `${monthNames[monthIndex]} ${year}`;
-      
+
       const match = monthlyPlacements.find(item => item._id.year === year && item._id.month === (monthIndex + 1));
       placementData.push({
         month: label,
@@ -2607,21 +3096,47 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
-    const recentSubmissions = await Candidate.find({ submittedBy: partner._id })
+    const rawRecentSubmissions = await Candidate.find({ submittedBy: partner._id })
       .populate('job', 'title')
       .populate('company', 'companyName')
       .sort({ createdAt: -1 })
-      .limit(5);
+      .limit(5)
+      .lean();
+
+    const recentSubmissions = rawRecentSubmissions.map(sub => {
+      if (sub.status === 'ROUND_ON_HOLD') {
+        sub.status = 'INTERVIEW_CONDUCTED';
+      } else if (sub.status === 'HR_ON_HOLD') {
+        sub.status = 'HR_ROUND_PENDING';
+      }
+      return sub;
+    });
 
     const statusBreakdown = await Candidate.aggregate([
       { $match: { submittedBy: partner._id } },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
+    const mappedStatusBreakdown = [];
+    statusBreakdown.forEach(item => {
+      let mappedStatus = item._id;
+      if (mappedStatus === 'ROUND_ON_HOLD') {
+        mappedStatus = 'INTERVIEW_CONDUCTED';
+      } else if (mappedStatus === 'HR_ON_HOLD') {
+        mappedStatus = 'HR_ROUND_PENDING';
+      }
+      const existing = mappedStatusBreakdown.find(x => x._id === mappedStatus);
+      if (existing) {
+        existing.count += item.count;
+      } else {
+        mappedStatusBreakdown.push({ _id: mappedStatus, count: item.count });
+      }
+    });
+
     const availableJobsCount = await jobAccessService.getAccessibleJobsCount(partner.subscription?.plan || 'FREE');
 
     const profileCompletion = partner.profileCompletion ? (partner.profileCompletion.toObject ? partner.profileCompletion.toObject() : partner.profileCompletion) : {};
-    
+
     // Force basicInfo to false if email or mobile is not verified
     if (!partner.user?.emailVerified || !partner.user?.mobileVerified) {
       profileCompletion.basicInfo = false;
@@ -2704,7 +3219,7 @@ exports.getDashboard = async (req, res) => {
           }))
         },
         recentSubmissions,
-        statusBreakdown,
+        statusBreakdown: mappedStatusBreakdown,
         availableJobsCount,
         placementData
       }
@@ -2998,50 +3513,138 @@ exports.getWorkedJobs = async (req, res) => {
       });
     }
 
-    const { limit = 10, page = 1 } = req.query;
+    const {
+      limit = 10, page = 1, search,
+      category, location, experienceLevel, companyName,
+      salaryMin, salaryMax, workMode, isUrgent
+    } = req.query;
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Construct match object
+    const filterMatch = {};
+    const andConditions = [];
+
+    if (search) {
+      filterMatch['$or'] = [
+        { 'jobDetails.title': { $regex: search, $options: 'i' } },
+        { 'jobDetails.uniqueId': { $regex: search, $options: 'i' } },
+        { 'companyDetails.companyName': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    if (category) filterMatch['jobDetails.category'] = category;
+
+    if (experienceLevel) filterMatch['jobDetails.experienceLevel'] = experienceLevel;
+
+    if (isUrgent !== undefined && isUrgent !== '') {
+      filterMatch['jobDetails.isUrgent'] = isUrgent === 'true';
+    }
+
+    if (salaryMin) filterMatch['jobDetails.salary.max'] = { $gte: Number(salaryMin) };
+    if (salaryMax) filterMatch['jobDetails.salary.min'] = { $lte: Number(salaryMax) };
+
+    if (location) {
+      const cities = location.split(',').map(s => s.trim()).filter(Boolean);
+      if (cities.length > 0) {
+        const cityConditions = cities.map(city => {
+          const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { 'jobDetails.location.city': new RegExp(escaped, 'i') };
+        });
+        andConditions.push({ $or: cityConditions });
+      }
+    }
+
+    if (companyName) {
+      const companies = companyName.split(',').map(s => s.trim()).filter(Boolean);
+      if (companies.length > 0) {
+        const companyConditions = companies.map(name => {
+          const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { 'companyDetails.companyName': new RegExp(escaped, 'i') };
+        });
+        andConditions.push({ $or: companyConditions });
+      }
+    }
+
+    if (workMode) {
+      const modes = workMode.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (modes.length > 0) {
+        const modeConditions = [];
+        if (modes.includes('remote')) modeConditions.push({ 'jobDetails.location.isRemote': true });
+        if (modes.includes('hybrid')) modeConditions.push({ 'jobDetails.location.isHybrid': true });
+        if (modes.includes('onsite')) modeConditions.push({ 'jobDetails.location.isOnSite': true });
+        if (modeConditions.length > 0) {
+          andConditions.push({ $or: modeConditions });
+        }
+      }
+    }
+
+    if (andConditions.length > 0) {
+      filterMatch['$and'] = andConditions;
+    }
 
     // Aggregate unique jobs this partner has submitted candidates to
     const pipeline = [
       { $match: { submittedBy: partner._id } },
-      { $group: {
+      {
+        $group: {
           _id: "$job",
           submissionCount: { $sum: 1 },
           lastSubmittedAt: { $max: "$createdAt" },
           statusCounts: {
             $push: "$status"
           }
-      }},
-      { $lookup: {
+        }
+      },
+      {
+        $lookup: {
           from: "jobs",
           localField: "_id",
           foreignField: "_id",
           as: "jobDetails"
-      }},
+        }
+      },
       { $unwind: "$jobDetails" },
-      { $lookup: {
+      {
+        $lookup: {
           from: "companies",
           localField: "jobDetails.company",
           foreignField: "_id",
           as: "companyDetails"
-      }},
-      { $unwind: { path: "$companyDetails", preserveNullAndEmptyArrays: true } },
-      { $sort: { lastSubmittedAt: -1 } },
-      { $facet: {
-          metadata: [ { $count: "total" } ],
-          data: [ { $skip: skip }, { $limit: parseInt(limit) } ]
-      }}
+        }
+      },
+      { $unwind: { path: "$companyDetails", preserveNullAndEmptyArrays: true } }
     ];
+
+    if (Object.keys(filterMatch).length > 0) {
+      pipeline.push({ $match: filterMatch });
+    }
+
+    pipeline.push(
+      { $sort: { lastSubmittedAt: -1 } },
+      {
+        $facet: {
+          metadata: [{ $count: "total" }],
+          data: [{ $skip: skip }, { $limit: parseInt(limit) }],
+          locations: [{ $unwind: "$jobDetails.location.city" }, { $group: { _id: "$jobDetails.location.city" } }],
+          companies: [{ $match: { "companyDetails.companyName": { $ne: null } } }, { $group: { _id: "$companyDetails.companyName" } }]
+        }
+      }
+    );
 
     const Candidate = require('../models/Candidate');
     const aggregationResult = await Candidate.aggregate(pipeline);
 
     const total = aggregationResult[0].metadata[0]?.total || 0;
+
+    // Process filter options
+    const uniqueLocations = aggregationResult[0].locations.map(l => l._id).filter(Boolean).sort();
+    const uniqueCompanies = aggregationResult[0].companies.map(c => c._id).filter(Boolean).sort();
     const items = aggregationResult[0].data.map(item => {
       const statuses = item.statusCounts || [];
       const hired = statuses.filter(s => s === 'HIRED').length;
       const rejected = statuses.filter(s => s === 'REJECTED').length;
-      const interviewing = statuses.filter(s => ['SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEWED'].includes(s)).length;
+      const interviewing = statuses.filter(s => ['SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEWED', 'SLOT_DETAILS_SHARED'].includes(s)).length;
       const active = statuses.length - hired - rejected - interviewing;
       return {
         job: {
@@ -3077,6 +3680,10 @@ exports.getWorkedJobs = async (req, res) => {
           page: parseInt(page),
           pages: Math.ceil(total / parseInt(limit)),
           total
+        },
+        filterOptions: {
+          locations: uniqueLocations,
+          companies: uniqueCompanies
         }
       }
     });

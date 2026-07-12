@@ -763,7 +763,7 @@ exports.getProfileCompletion = async (req, res) => {
     }
 
     const completion = company.profileCompletion ? (company.profileCompletion.toObject ? company.profileCompletion.toObject() : company.profileCompletion) : {};
-    
+
     // Force basicInfo to false if email or mobile is not verified
     if (!company.user?.emailVerified || !company.user?.mobileVerified) {
       completion.basicInfo = false;
@@ -924,21 +924,20 @@ exports.getDashboard = async (req, res) => {
 
     const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
 
-    const recentCandidates = await Candidate.find({ 
+    const recentCandidates = await Candidate.find({
       company: company._id,
       status: { $nin: HIDDEN_STATUSES }
     })
       .populate("job", "title")
-      .populate("submittedBy", "firstName lastName")
       .sort({ createdAt: -1 })
       .limit(10);
 
     const hiringFunnel = await Candidate.aggregate([
-      { 
-        $match: { 
+      {
+        $match: {
           company: company._id,
           status: { $nin: HIDDEN_STATUSES }
-        } 
+        }
       },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
@@ -949,7 +948,7 @@ exports.getDashboard = async (req, res) => {
     }).limit(5);
 
     const profileCompletion = company.profileCompletion ? (company.profileCompletion.toObject ? company.profileCompletion.toObject() : company.profileCompletion) : {};
-    
+
     // Force basicInfo to false if email or mobile is not verified
     if (!company.user?.emailVerified || !company.user?.mobileVerified) {
       profileCompletion.basicInfo = false;
@@ -1037,12 +1036,36 @@ exports.createJob = async (req, res) => {
         ? req.body.eligiblePlans
         : ["FREE", "GROWTH", "PROFESSIONAL", "PREMIUM"];
 
+    // ✅ Enforce vacancies > 0 validation
+    if (req.body.vacancies !== undefined && (Number(req.body.vacancies) <= 0 || !Number.isInteger(Number(req.body.vacancies)))) {
+      return res.status(400).json({
+        success: false,
+        message: "Vacancies must be a positive integer greater than 0."
+      });
+    }
+
+    // ✅ Enforce salary >= 0 validation
+    if (req.body.salary) {
+      if (req.body.salary.min !== undefined && Number(req.body.salary.min) < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Salary minimum must be greater than or equal to 0."
+        });
+      }
+      if (req.body.salary.max !== undefined && Number(req.body.salary.max) < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Salary maximum must be greater than or equal to 0."
+        });
+      }
+    }
+
     // ✅ Enforce 30-day minimum deadline for new job posts
     if (req.body.applicationDeadline) {
       const deadline = new Date(req.body.applicationDeadline);
       const minDeadline = new Date();
       minDeadline.setDate(minDeadline.getDate() + 30);
-      
+
       // Reset hours for fair date comparison
       minDeadline.setHours(0, 0, 0, 0);
       deadline.setHours(0, 0, 0, 0);
@@ -1121,11 +1144,21 @@ exports.getJobs = async (req, res) => {
     );
 
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
-    const { status, approvalStatus } = req.query;
+    const { status, approvalStatus, search } = req.query;
 
     const query = { company: company._id };
     if (status) query.status = status;
     if (approvalStatus) query.approvalStatus = approvalStatus;
+
+    if (search && search.trim()) {
+      const rx = new RegExp(search.trim(), 'i');
+      query.$or = [
+        { title: rx },
+        { uniqueId: rx },
+        { 'location.city': rx },
+        { 'location.state': rx }
+      ];
+    }
 
     const skip = (page - 1) * limit;
 
@@ -1140,13 +1173,21 @@ exports.getJobs = async (req, res) => {
 
     const total = await Job.countDocuments(query);
 
-    // ✅ Enrich each job with safe company snapshot
-    const enrichedJobs = jobs.map(job => {
+    // ✅ Enrich each job with safe company snapshot and active candidates count
+    const enrichedJobs = await Promise.all(jobs.map(async (job) => {
       const jobObj = job.toObject();
       const comp = job.company;
 
+      const activeCandidatesCount = await Candidate.countDocuments({
+        job: job._id,
+        status: { 
+          $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED'] 
+        }
+      });
+
       return {
         ...jobObj,
+        activeCandidatesCount,
         companyDetails: comp
           ? {
             companyName: comp.companyName,
@@ -1160,7 +1201,7 @@ exports.getJobs = async (req, res) => {
           }
           : null
       };
-    });
+    }));
 
     res.json({
       success: true,
@@ -1274,15 +1315,19 @@ exports.getJob = async (req, res) => {
       await job.save();
     }
 
-    const JobPosition = require('../models/JobPosition');
-    const jobPosition = await JobPosition.findOne({ jobId: job._id });
+    const activeCandidatesCount = await Candidate.countDocuments({
+      job: job._id,
+      status: { 
+        $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED'] 
+      }
+    });
 
-    const jobData = job.toObject();
-    jobData.jobPosition = jobPosition;
+    const jobObj = job.toObject();
+    jobObj.activeCandidatesCount = activeCandidatesCount;
 
     res.json({
       success: true,
-      data: jobData,
+      data: jobObj,
     });
   } catch (error) {
     console.error('[COMPANY] Get job error:', error);
@@ -1305,6 +1350,30 @@ exports.updateJob = async (req, res) => {
         success: false,
         message: "Job not found",
       });
+    }
+
+    // ✅ Enforce vacancies > 0 validation
+    if (req.body.vacancies !== undefined && (Number(req.body.vacancies) <= 0 || !Number.isInteger(Number(req.body.vacancies)))) {
+      return res.status(400).json({
+        success: false,
+        message: "Vacancies must be a positive integer greater than 0."
+      });
+    }
+
+    // ✅ Enforce salary >= 0 validation
+    if (req.body.salary) {
+      if (req.body.salary.min !== undefined && Number(req.body.salary.min) < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Salary minimum must be greater than or equal to 0."
+        });
+      }
+      if (req.body.salary.max !== undefined && Number(req.body.salary.max) < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Salary maximum must be greater than or equal to 0."
+        });
+      }
     }
 
     // Apply fields from body
@@ -1378,8 +1447,8 @@ exports.getJobCandidates = async (req, res) => {
     const { status } = req.query;
 
     const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
-    
-    const query = { 
+
+    const query = {
       job: req.params.jobId,
       status: status ? status : { $nin: HIDDEN_STATUSES }
     };
@@ -1387,7 +1456,6 @@ exports.getJobCandidates = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const candidates = await Candidate.find(query)
-      .populate("submittedBy", "firstName lastName firmName")
       .populate("assignedSlot", "date startTime endTime status interviewMode")
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -1436,7 +1504,7 @@ exports.getAllCandidates = async (req, res) => {
 
     const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
 
-    const query = { 
+    const query = {
       company: company._id,
       status: status ? status : { $nin: HIDDEN_STATUSES }
     };
@@ -1444,7 +1512,6 @@ exports.getAllCandidates = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const candidates = await Candidate.find(query)
-      .populate("submittedBy", "firstName lastName firmName")
       .populate("job", "title")
       .populate("assignedSlot", "date startTime endTime status interviewMode")
       .sort({ createdAt: -1 })
@@ -1475,12 +1542,72 @@ exports.getAllCandidates = async (req, res) => {
   }
 };
 
+async function checkAndElevateCandidateStatus(candidate, userId) {
+  if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    return;
+  }
+  
+  const InterviewSlot = require('../models/InterviewSlot');
+  const getActiveRoundInfoLocal = (c) => {
+    for (let i = 0; i < c.rounds.length; i++) {
+      const r = c.rounds[i];
+      if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED') {
+        return { index: i, round: r };
+      }
+    }
+    return null;
+  };
+
+  const activeRoundInfo = getActiveRoundInfoLocal(candidate);
+  if (!activeRoundInfo) return;
+
+  const jobId = candidate.job?._id || candidate.job;
+  
+  const rt = (activeRoundInfo.round.roundType || '').trim().toUpperCase();
+  const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
+  const isHr = hrNames.includes(rt);
+  
+  const roundTypeQuery = isHr 
+    ? { $in: [activeRoundInfo.round.roundType, ...hrNames.map(n => new RegExp(`^${n}$`, 'i')), /HR_ROUND/i, /HR Round/i] }
+    : activeRoundInfo.round.roundType;
+
+  const activeSlots = await InterviewSlot.find({
+    job: jobId,
+    roundType: roundTypeQuery,
+    status: 'ACTIVE'
+  });
+
+  if (activeSlots.length > 0) {
+    candidate.status = 'SLOTS_PUBLISHED';
+    activeRoundInfo.round.status = 'SLOTS_PUBLISHED';
+    candidate.statusHistory.push({
+      status: 'SLOTS_PUBLISHED',
+      changedBy: userId || candidate._id,
+      changedAt: new Date(),
+      notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
+    });
+    
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: userId || candidate._id,
+      actorRole: 'system',
+      action: 'PUBLISH_SLOTS',
+      fromState: 'SLOTS_NOT_PUBLISHED',
+      toState: 'SLOTS_PUBLISHED',
+      reason: 'Active slots exist for the job',
+      roundIndex: activeRoundInfo.index,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+  }
+}
+
 // @desc    Get Single Candidate
 // @route   GET /api/companies/candidates/:id
 exports.getCandidate = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
-      .populate("submittedBy", "firstName lastName firmName email")
       .populate("job", "title commission")
       .populate("assignedSlot", "date startTime endTime status interviewMode")
       .populate({
@@ -1514,6 +1641,8 @@ exports.getCandidate = async (req, res) => {
         message: "Not authorized to view this candidate",
       });
     }
+
+    await checkAndElevateCandidateStatus(candidate, req.user._id);
 
     const responseData = candidate.toObject();
     if (responseData.company?.user) {
@@ -1637,7 +1766,7 @@ exports.rejectCandidate = async (req, res) => {
 // POST /api/companies/jobs/:jobId/interview-slots
 exports.createInterviewSlots = async (req, res) => {
   try {
-    const { slots } = req.body;
+    const { slots, roundType } = req.body;
 
     // ── Validate payload ──────────────────────────────────────────────
     if (!slots || !Array.isArray(slots) || slots.length === 0) {
@@ -1673,7 +1802,21 @@ exports.createInterviewSlots = async (req, res) => {
     if (job.company.toString() !== company._id.toString()) {
       return res.status(403).json({ success: false, message: 'Not authorized' });
     }
-
+    if (job.pipelineTemplate && job.pipelineTemplate.length > 0) {
+      if (!roundType) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please specify the roundType for these interview slots.'
+        });
+      }
+      const hasRound = job.pipelineTemplate.some(r => r.roundType === roundType) || roundType === 'HR_ROUND';
+      if (!hasRound) {
+        return res.status(400).json({
+          success: false,
+          message: `The round type "${roundType}" is not configured in this job's interview pipeline.`
+        });
+      }
+    }
     if (!job.applicationDeadline) {
       return res.status(400).json({
         success: false,
@@ -1739,10 +1882,10 @@ exports.createInterviewSlots = async (req, res) => {
         const internalOverlap = slots.find((other, otherIdx) => {
           if (otherIdx === index) return false;
           if (other.date !== slot.date) return false;
-          
+
           const oStart = timeToMinutes(other.startTime);
           const oEnd = timeToMinutes(other.endTime);
-          
+
           // Overlap if (StartA < EndB) AND (EndA > StartB)
           return (startMin < oEnd) && (endMin > oStart);
         });
@@ -1792,13 +1935,13 @@ exports.createInterviewSlots = async (req, res) => {
       let [hours, mins] = time.split(':').map(Number);
       if (modifier === 'PM' && hours < 12) hours += 12;
       if (modifier === 'AM' && hours === 12) hours = 0;
-      
+
       const totalMins = hours * 60 + mins + minutes;
       let newHours = Math.floor(totalMins / 60) % 24;
       const newMins = totalMins % 60;
       const ampm = newHours >= 12 ? 'PM' : 'AM';
       newHours = newHours % 12 || 12;
-      
+
       return `${newHours.toString().padStart(2, '0')}:${newMins.toString().padStart(2, '0')} ${ampm}`;
     };
 
@@ -1810,7 +1953,7 @@ exports.createInterviewSlots = async (req, res) => {
 
       for (let i = 0; i < slot.maxCandidates; i++) {
         const currentEndTime = addMinutesTo12h(currentStartTime, avg);
-        
+
         explodedSlots.push({
           job: job._id,
           company: company._id,
@@ -1820,9 +1963,12 @@ exports.createInterviewSlots = async (req, res) => {
           maxCandidates: 1,
           averageTime: avg,
           interviewMode: slot.interviewMode || 'Virtual',
+          interviewDetails: slot.interviewDetails || "",
+          interviewerName: slot.interviewerName || "",
           availableSpots: 1,
           notes: slot.notes || null,
           status: 'ACTIVE',
+          roundType: roundType || null,
           createdBy: req.subAdminUser ? req.subAdminUser._id : req.user._id,
         });
 
@@ -1863,18 +2009,23 @@ exports.createInterviewSlots = async (req, res) => {
 // GET /api/companies/jobs/:jobId/interview-slots
 exports.getJobInterviewSlots = async (req, res) => {
   try {
-    const company = await Company.findOne({ user: req.user._id });
-    if (!company) {
-      return res.status(404).json({ success: false, message: 'Company not found' });
-    }
-
     const job = await Job.findById(req.params.jobId);
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
-    if (job.company.toString() !== company._id.toString()) {
-      return res.status(403).json({ success: false, message: 'Not authorized' });
+    let companyId;
+    if (req.user.role === 'admin' || req.user.role === 'sub_admin') {
+      companyId = job.company;
+    } else {
+      const company = await Company.findOne({ user: req.user._id });
+      if (!company) {
+        return res.status(404).json({ success: false, message: 'Company not found' });
+      }
+      if (job.company.toString() !== company._id.toString()) {
+        return res.status(403).json({ success: false, message: 'Not authorized' });
+      }
+      companyId = company._id;
     }
 
     const callingUserId = req.subAdminUser ? req.subAdminUser._id : req.user._id;
@@ -1883,7 +2034,7 @@ exports.getJobInterviewSlots = async (req, res) => {
 
     const query = {
       job: req.params.jobId,
-      company: company._id,
+      company: companyId,
     };
 
     if (isSubAdmin && !permissions.includes('MANAGE_INTERVIEWS_ALL') && permissions.includes('MANAGE_INTERVIEWS_SELF')) {
@@ -1902,6 +2053,7 @@ exports.getJobInterviewSlots = async (req, res) => {
         path: 'bookedCandidates.partner',
         select: 'firmName contactPerson',
       })
+      .populate('createdBy', 'email role')
       .sort({ date: 1, startTime: 1 });
 
     // Group by date for easy viewing
@@ -2049,6 +2201,54 @@ exports.confirmInterviewDetails = async (req, res) => {
     // Generate unique token for confirmation
     const confirmationToken = crypto.randomBytes(32).toString("hex");
 
+    // Helper to get active round info
+    const getActiveRoundInfo = (c) => {
+      const status = c.status;
+      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      if (assessmentStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
+      if (offerStates.includes(status)) return null;
+      for (let i = 0; i < c.rounds.length; i++) {
+        const r = c.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    const activeInfo = getActiveRoundInfo(candidate);
+    if (activeInfo) {
+      if (activeInfo.round.slots && activeInfo.round.slots.length > 0) {
+        activeInfo.round.slots[0].details = {
+          meetingLink: mode === "Virtual" ? details : "",
+          address: mode !== "Virtual" ? details : "",
+          pointOfContact: {
+            name: interviewer || "",
+            phone: "",
+            email: ""
+          }
+        };
+      }
+      activeInfo.round.status = "SLOT_DETAILS_SHARED";
+    }
+
     // Update candidate
     candidate.interviewConfig = {
       mode,
@@ -2060,9 +2260,9 @@ exports.confirmInterviewDetails = async (req, res) => {
       candidateResponse: "PENDING",
     };
 
-    candidate.status = "INTERVIEW_SCHEDULED";
+    candidate.status = "SLOT_DETAILS_SHARED";
     candidate.statusHistory.push({
-      status: "INTERVIEW_SCHEDULED",
+      status: "SLOT_DETAILS_SHARED",
       changedBy: req.user._id,
       changedAt: new Date(),
       changedByRole: "COMPANY",
@@ -2154,37 +2354,37 @@ exports.getInterviewSchedule = async (req, res) => {
     }
 
     const slots = await InterviewSlot.find(query)
-    .populate({
-      path: 'bookedCandidates.candidate',
-      model: 'Candidate',
-      select: 'firstName lastName email mobile status profile.currentDesignation profile.middleName uniqueId interviewConfig'
-    })
-    .populate('job', 'title location employmentType')
-    .sort({ date: 1, startTime: 1 });
-    
+      .populate({
+        path: 'bookedCandidates.candidate',
+        model: 'Candidate',
+        select: 'firstName lastName email mobile status profile.currentDesignation profile.middleName uniqueId interviewConfig'
+      })
+      .populate('job', 'title location employmentType')
+      .sort({ date: 1, startTime: 1 });
+
     // Format response for dashboard
     const schedule = slots.map(slot => {
-      
+
       const bookings = (slot.bookedCandidates || [])
         .map(b => {
           if (!b.candidate) {
             return null;
           }
-          
+
           // Check if it's a populated object or just an ID
           const cand = b.candidate;
           if (!cand.firstName) {
-             if (cand._id) {
-                // If it's an object but empty
-                return {
-                    candidateId: cand._id,
-                    uniqueId: cand.uniqueId || "N/A",
-                    name: "Data Missing",
-                    email: "Missing",
-                    status: b.bookingStatus
-                };
-             }
-             return null;
+            if (cand._id) {
+              // If it's an object but empty
+              return {
+                candidateId: cand._id,
+                uniqueId: cand.uniqueId || "N/A",
+                name: "Data Missing",
+                email: "Missing",
+                status: b.bookingStatus
+              };
+            }
+            return null;
           }
 
           return {
@@ -2219,8 +2419,8 @@ exports.getInterviewSchedule = async (req, res) => {
         date: filterDate,
         schedule,
         debug: {
-            slotCount: slots.length,
-            totalBookings: schedule.reduce((sum, s) => sum + s.bookings.length, 0)
+          slotCount: slots.length,
+          totalBookings: schedule.reduce((sum, s) => sum + s.bookings.length, 0)
         }
       }
     });
@@ -2448,6 +2648,36 @@ exports.requestJobEdit = async (req, res) => {
 
     const { requestedChanges, changeDescription, priority } = req.body;
 
+    // ✅ Enforce vacancies > 0 validation on requested changes
+    if (requestedChanges && requestedChanges.vacancies) {
+      const newVacancies = requestedChanges.vacancies.new;
+      if (newVacancies !== undefined && (Number(newVacancies) <= 0 || !Number.isInteger(Number(newVacancies)))) {
+        return res.status(400).json({
+          success: false,
+          message: "Requested changes for vacancies must be a positive integer greater than 0."
+        });
+      }
+    }
+
+    // ✅ Enforce salary >= 0 validation on requested changes
+    if (requestedChanges && requestedChanges.salary) {
+      const newSalary = requestedChanges.salary.new;
+      if (newSalary) {
+        if (newSalary.min !== undefined && Number(newSalary.min) < 0) {
+          return res.status(400).json({
+            success: false,
+            message: "Requested changes for salary minimum must be greater than or equal to 0."
+          });
+        }
+        if (newSalary.max !== undefined && Number(newSalary.max) < 0) {
+          return res.status(400).json({
+            success: false,
+            message: "Requested changes for salary maximum must be greater than or equal to 0."
+          });
+        }
+      }
+    }
+
     // Validate requested changes
     if (!requestedChanges || typeof requestedChanges !== 'object' || Object.keys(requestedChanges).length === 0) {
       return res.status(400).json({
@@ -2489,7 +2719,7 @@ exports.requestJobEdit = async (req, res) => {
           const dateA = new Date(a);
           const dateB = new Date(b);
           if (dateA.getTime() === dateB.getTime()) return true;
-          
+
           // Fallback to split string comparison for simple dates
           const ymdA = dateA.toISOString().split('T')[0];
           const ymdB = dateB.toISOString().split('T')[0];

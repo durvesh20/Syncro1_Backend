@@ -25,10 +25,10 @@ const sanitizePagination = (page, limit) => ({
     limit: Math.max(1, Math.min(100, parseInt(limit) || 20))
 });
 
-// Helper: validate permissions
-const validatePermissions = (permissions = []) => {
-    if (!Array.isArray(permissions)) return false;
-    return permissions.every((permission) => ALL_PERMISSIONS.includes(permission));
+// Helper: sanitize permissions — strips any unknown/removed keys instead of rejecting
+const sanitizePermissions = (permissions = []) => {
+    if (!Array.isArray(permissions)) return [];
+    return permissions.filter((permission) => ALL_PERMISSIONS.includes(permission));
 };
 
 // @desc    Create sub-admin
@@ -90,12 +90,7 @@ exports.createSubAdmin = async (req, res) => {
             finalPermissions = SUB_ADMIN_BUNDLES[bundle];
         }
 
-        if (!validatePermissions(finalPermissions)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid permissions provided'
-            });
-        }
+        finalPermissions = sanitizePermissions(finalPermissions);
 
         // Auto-generate a secure password
         const autoPassword = generatePassword();
@@ -112,7 +107,16 @@ exports.createSubAdmin = async (req, res) => {
             createdBy: req.user._id,
             emailVerified: true,
             mobileVerified: true,
-            isPasswordChanged: false  // Must change on first login
+            isPasswordChanged: false,  // Must change on first login
+            subAdminActivityLogs: [{
+                action: 'CREATED',
+                actor: req.user._id,
+                timestamp: new Date(),
+                details: {
+                    newPermissions: [...new Set(finalPermissions)],
+                    newStatus: status
+                }
+            }]
         });
 
         // Send onboarding welcome email (fire-and-forget)
@@ -168,6 +172,7 @@ exports.getSubAdmins = async (req, res) => {
             User.find(query)
                 .select('-password')
                 .populate('createdBy', 'email role')
+                .populate('subAdminActivityLogs.actor', 'email role')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit),
@@ -206,7 +211,8 @@ exports.getSubAdminById = async (req, res) => {
             role: 'sub_admin'
         })
             .select('-password')
-            .populate('createdBy', 'email role');
+            .populate('createdBy', 'email role')
+            .populate('subAdminActivityLogs.actor', 'email role');
 
         if (!subAdmin) {
             return res.status(404).json({
@@ -255,25 +261,37 @@ exports.updateSubAdmin = async (req, res) => {
             });
         }
 
-        if (firstName !== undefined) subAdmin.firstName = firstName.trim();
-        if (lastName !== undefined) subAdmin.lastName = lastName.trim();
+        const previousPermissions = [...subAdmin.permissions];
+        const previousStatus = subAdmin.status;
+        const changedFields = {};
+
+        if (firstName !== undefined && firstName.trim() !== subAdmin.firstName) {
+            changedFields.firstName = { from: subAdmin.firstName, to: firstName.trim() };
+            subAdmin.firstName = firstName.trim();
+        }
+        if (lastName !== undefined && lastName.trim() !== subAdmin.lastName) {
+            changedFields.lastName = { from: subAdmin.lastName, to: lastName.trim() };
+            subAdmin.lastName = lastName.trim();
+        }
 
         if (mobile) {
             const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
-
-            const existingMobileUser = await User.findOne({
-                mobile: normalizedMobile,
-                _id: { $ne: subAdmin._id }
-            });
-
-            if (existingMobileUser) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Mobile number already in use'
+            if (normalizedMobile !== subAdmin.mobile) {
+                const existingMobileUser = await User.findOne({
+                    mobile: normalizedMobile,
+                    _id: { $ne: subAdmin._id }
                 });
-            }
 
-            subAdmin.mobile = normalizedMobile;
+                if (existingMobileUser) {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Mobile number already in use'
+                    });
+                }
+
+                changedFields.mobile = { from: subAdmin.mobile, to: normalizedMobile };
+                subAdmin.mobile = normalizedMobile;
+            }
         }
 
         let finalPermissions = permissions;
@@ -289,17 +307,16 @@ exports.updateSubAdmin = async (req, res) => {
         }
 
         if (finalPermissions !== undefined) {
-            if (!validatePermissions(finalPermissions)) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Invalid permissions provided'
-                });
+            const sanitized = [...new Set(sanitizePermissions(finalPermissions))];
+            const permissionsChanged = JSON.stringify([...sanitized].sort()) !== JSON.stringify([...previousPermissions].sort());
+            if (permissionsChanged) {
+                changedFields.permissions = { from: previousPermissions, to: sanitized };
+                subAdmin.permissions = sanitized;
             }
-
-            subAdmin.permissions = [...new Set(finalPermissions)];
         }
 
-        if (status) {
+        if (status && status !== subAdmin.status) {
+            changedFields.status = { from: subAdmin.status, to: status };
             subAdmin.status = status;
 
             if (status === 'SUSPENDED') {
@@ -311,11 +328,27 @@ exports.updateSubAdmin = async (req, res) => {
             }
         }
 
+        if (Object.keys(changedFields).length > 0) {
+            subAdmin.subAdminActivityLogs.push({
+                action: 'UPDATED',
+                actor: req.user._id,
+                timestamp: new Date(),
+                details: {
+                    previousPermissions,
+                    newPermissions: subAdmin.permissions,
+                    previousStatus,
+                    newStatus: subAdmin.status,
+                    changedFields
+                }
+            });
+        }
+
         await subAdmin.save();
 
         const updatedSubAdmin = await User.findById(subAdmin._id)
             .select('-password')
-            .populate('createdBy', 'email role');
+            .populate('createdBy', 'email role')
+            .populate('subAdminActivityLogs.actor', 'email role');
 
         res.json({
             success: true,
@@ -358,6 +391,7 @@ exports.updateSubAdminStatus = async (req, res) => {
             });
         }
 
+        const previousStatus = subAdmin.status;
         subAdmin.status = status;
 
         if (status === 'SUSPENDED') {
@@ -367,6 +401,19 @@ exports.updateSubAdminStatus = async (req, res) => {
             subAdmin.suspendedBy = null;
             subAdmin.suspendedAt = null;
         }
+
+        subAdmin.subAdminActivityLogs.push({
+            action: 'STATUS_CHANGED',
+            actor: req.user._id,
+            timestamp: new Date(),
+            details: {
+                previousStatus,
+                newStatus: status,
+                changedFields: {
+                    status: { from: previousStatus, to: status }
+                }
+            }
+        });
 
         await subAdmin.save();
 

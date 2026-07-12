@@ -248,17 +248,60 @@ class JobAccessService {
     // Apply filters
     if (filters.category) query.category = filters.category;
     if (filters.employmentType) query.employmentType = filters.employmentType;
-    if (filters.isUrgent === 'true' || filters.isUrgent === true) query.isUrgent = true;
+    
+    if (filters.isUrgent === 'true' || filters.isUrgent === true) {
+      query.isUrgent = true;
+    } else if (filters.isUrgent === 'false' || filters.isUrgent === false) {
+      query.isUrgent = false;
+    }
+
+    if (filters.isFeatured === 'true' || filters.isFeatured === true) {
+      query.isFeatured = true;
+    } else if (filters.isFeatured === 'false' || filters.isFeatured === false) {
+      query.isFeatured = false;
+    }
+
+    if (filters.workMode) {
+      const modes = filters.workMode.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+      if (modes.length > 0) {
+        const modeConditions = [];
+        if (modes.includes('remote')) modeConditions.push({ 'location.isRemote': true });
+        if (modes.includes('hybrid')) modeConditions.push({ 'location.isHybrid': true });
+        if (modes.includes('onsite')) modeConditions.push({ 'location.isOnSite': true });
+        if (modeConditions.length > 0) {
+          conditions.push({ $or: modeConditions });
+        }
+      }
+    }
+
+    if (filters.companyName) {
+      const companyNames = filters.companyName.split(',').map(s => s.trim()).filter(Boolean);
+      if (companyNames.length > 0) {
+        const companyConditions = companyNames.map(name => {
+          const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { companyName: new RegExp(escaped, 'i') };
+        });
+        const Company = require('../models/Company');
+        const matchingCompanies = await Company.find({
+          $or: companyConditions
+        }).select('_id').lean();
+        const companyIds = matchingCompanies.map(c => c._id);
+        query.company = { $in: companyIds };
+      }
+    }
 
     if (filters.location) {
-      const searchTerm = filters.location.slice(0, 100);
-      const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      conditions.push({
-        $or: [
-          { 'location.city': new RegExp(escaped, 'i') },
-          { 'location.isRemote': true }
-        ]
-      });
+      const cities = filters.location.split(',').map(s => s.trim()).filter(Boolean);
+      if (cities.length > 0) {
+        const locationConditions = cities.map(city => {
+          const escaped = city.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return { 'location.city': new RegExp(escaped, 'i') };
+        });
+        locationConditions.push({ 'location.isRemote': true });
+        conditions.push({
+          $or: locationConditions
+        });
+      }
     }
 
     if (filters.search) {
@@ -291,19 +334,19 @@ class JobAccessService {
       query.$and = conditions;
     }
 
-    let sort = { 'metrics.interestedPartners': -1, isFeatured: -1, isUrgent: -1, createdAt: -1 };
+    let sort = { createdAt: -1 };
 
     switch (filters.sortBy) {
       case 'newest': sort = { createdAt: -1 }; break;
       case 'oldest': sort = { createdAt: 1 }; break;
-      case 'salary_high': sort = { 'salary.max': -1 }; break;
-      case 'salary_low': sort = { 'salary.min': 1 }; break;
-      case 'commission': sort = { 'commission.value': -1 }; break;
+      case 'salary_high': sort = { 'salary.max': -1, createdAt: -1 }; break;
+      case 'salary_low': sort = { 'salary.min': 1, createdAt: -1 }; break;
+      case 'commission': sort = { 'commission.value': -1, createdAt: -1 }; break;
       case 'urgent': sort = { isUrgent: -1, createdAt: -1 }; break;
     }
 
     const page = Math.max(1, Math.min(1000, parseInt(filters.page) || 1));
-    const limit = Math.max(1, Math.min(100, parseInt(filters.limit) || 10));
+    const limit = Math.max(1, Math.min(1000, parseInt(filters.limit) || 10));
     const skip = (page - 1) * limit;
 
     let partnerObjectId;
@@ -316,8 +359,6 @@ class JobAccessService {
     const jobs = await Job.aggregate([
       { $match: query },
       { $sort: sort },
-      { $skip: skip },
-      { $limit: limit },
       // Join company data
       {
         $lookup: {
@@ -447,19 +488,48 @@ class JobAccessService {
 
     const total = await Job.countDocuments(query);
 
+    // Fetch unique locations and companies for filter options
+    const activeJobs = await Job.find({
+      status: 'ACTIVE',
+      eligiblePlans: { $in: accessiblePlans }
+    }).select('location company').populate('company', 'companyName').lean();
+
+    const locationsSet = new Set();
+    const companiesSet = new Set();
+
+    activeJobs.forEach(j => {
+      if (j.location?.city) {
+        if (Array.isArray(j.location.city)) {
+          j.location.city.forEach(c => locationsSet.add(c));
+        } else {
+          locationsSet.add(j.location.city);
+        }
+      }
+      if (j.company?.companyName) {
+        companiesSet.add(j.company.companyName);
+      }
+    });
+
+    const uniqueLocations = Array.from(locationsSet).filter(Boolean).sort();
+    const uniqueCompanies = Array.from(companiesSet).filter(Boolean).sort();
+
     return {
       jobs: enrichedJobs,
       pagination: {
-        current: page,
-        pages: Math.ceil(total / limit),
+        current: 1,
+        pages: 1,
         total,
-        hasNext: page < Math.ceil(total / limit),
-        hasPrev: page > 1
+        hasNext: false,
+        hasPrev: false
       },
       partnerAccess: {
         plan,
         accessiblePlans,
         totalAccessibleJobs: total
+      },
+      filterOptions: {
+        locations: uniqueLocations,
+        companies: uniqueCompanies
       }
     };
   }

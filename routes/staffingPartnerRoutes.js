@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const StaffingPartner = require('../models/StaffingPartner');
+const { partnerGetPipeline, partnerRequestReschedule } = require('../controllers/pipelineController');
 
 const {
   getProfile,
@@ -294,6 +295,8 @@ router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', remove
 // ==================== SUBMISSIONS ROUTES ====================
 router.get('/submissions', getMySubmissions);
 router.get('/submissions/:id', getSubmission);
+router.get('/submissions/:id/pipeline', partnerGetPipeline);
+router.post('/submissions/:id/pipeline/reschedule', partnerRequestReschedule);
 router.get('/worked-jobs', getWorkedJobs);
 
 // @desc    Withdraw a submitted candidate
@@ -304,10 +307,16 @@ router.put('/submissions/:id/withdraw', withdrawCandidate);
 // @route   PUT /api/staffing-partners/submissions/:id
 router.put('/submissions/:id', uploadResumeMiddleware, handleUploadError, updateSubmission);
 
-// @desc    Resend WhatsApp consent to candidate
+// @desc    Resend WhatsApp consent to candidate (Initial Consent)
 // @route   POST /api/staffing-partners/submissions/:id/resend-consent
 // @access  Only when candidate status is CONSENT_PENDING
 router.post('/submissions/:id/resend-consent', resendConsent);
+
+// @desc    Resend interview consent (WhatsApp + Email) to candidate
+// @route   POST /api/staffing-partners/submissions/:id/pipeline/resend-interview-consent
+// @access  Only when active round status is SLOT_DETAILS_SHARED
+const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
+router.post('/submissions/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
 
 // ==================== EARNINGS & INVOICES ====================
 router.get('/earnings', getEarnings);

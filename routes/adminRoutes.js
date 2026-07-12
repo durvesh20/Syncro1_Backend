@@ -23,6 +23,10 @@ const {
   rejectEditRequest,
   discontinueJob,
   getJobEditHistory,
+  assignJob,
+  revokeJobAssignment,
+  bulkAssignJobs,
+  bulkRevokeJobs,
 
   // Payout management
   getPayouts,
@@ -43,9 +47,12 @@ const {
   getPartnerDetail,
   getAllCompanies,
   getCompanyDetail,
-  getAuditLogs,
   updateJobStatusByAdmin,
-  withdrawCandidateByAdmin
+  withdrawCandidateByAdmin,
+  assignVerification,
+  revokeVerificationAssignment,
+  bulkAssignVerification,
+  bulkRevokeVerificationAssignment
 } = require('../controllers/adminController');
 
 const {
@@ -73,7 +80,7 @@ router.use(authorizeAdminAccess);
 // ==================== DASHBOARD & ANALYTICS ====================
 router.get(
   '/dashboard',
-  checkPermission(PERMISSIONS.VIEW_ADMIN_DASHBOARD),
+  checkAnyPermission([PERMISSIONS.VIEW_ADMIN_DASHBOARD, PERMISSIONS.VIEW_SUBADMIN_DASHBOARD]),
   getDashboard
 );
 
@@ -86,20 +93,41 @@ router.get(
 // ==================== VERIFICATIONS ====================
 router.get(
   '/verifications',
-  checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
   getPendingVerifications
 );
 
 router.put(
   '/verify/partner/:id',
-  checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
   verifyPartner
 );
 
 router.put(
   '/verify/company/:id',
-  checkPermission(PERMISSIONS.VIEW_VERIFICATIONS),
   verifyCompany
+);
+
+router.put(
+  '/verifications/:type/:id/assign',
+  checkAnyPermission([PERMISSIONS.ASSIGN_USERS]),
+  assignVerification
+);
+
+router.put(
+  '/verifications/:type/:id/revoke',
+  checkAnyPermission([PERMISSIONS.ASSIGN_USERS]),
+  revokeVerificationAssignment
+);
+
+router.post(
+  '/verifications/bulk-assign',
+  checkAnyPermission([PERMISSIONS.ASSIGN_USERS]),
+  bulkAssignVerification
+);
+
+router.post(
+  '/verifications/bulk-revoke',
+  checkAnyPermission([PERMISSIONS.ASSIGN_USERS]),
+  bulkRevokeVerificationAssignment
 );
 
 // ==================== USER MANAGEMENT ====================
@@ -111,7 +139,6 @@ router.post(
 
 router.get(
   '/users',
-  checkPermission(PERMISSIONS.VIEW_USERS),
   getUsers
 );
 
@@ -124,7 +151,6 @@ router.put(
 // ==================== JOB APPROVAL ====================
 router.get(
   '/jobs/pending',
-  checkPermission(PERMISSIONS.VIEW_PENDING_JOBS),
   getPendingJobs
 );
 
@@ -140,6 +166,30 @@ router.put(
   rejectJob
 );
 
+router.put(
+  '/jobs/:id/assign',
+  checkAnyPermission([PERMISSIONS.ASSIGN_JOBS]),
+  assignJob
+);
+
+router.put(
+  '/jobs/:id/revoke',
+  checkAnyPermission([PERMISSIONS.ASSIGN_JOBS]),
+  revokeJobAssignment
+);
+
+router.put(
+  '/jobs/bulk-assign',
+  checkAnyPermission([PERMISSIONS.ASSIGN_JOBS]),
+  bulkAssignJobs
+);
+
+router.put(
+  '/jobs/bulk-revoke',
+  checkAnyPermission([PERMISSIONS.ASSIGN_JOBS]),
+  bulkRevokeJobs
+);
+
 router.get(
   '/jobs/:id/edit-history',
   checkPermission(PERMISSIONS.VIEW_JOB_EDIT_HISTORY),
@@ -148,26 +198,24 @@ router.get(
 
 router.post(
   '/jobs/:id/discontinue',
-  checkPermission(PERMISSIONS.DISCONTINUE_JOB),
+  checkPermission(PERMISSIONS.UPDATE_JOB_STATUS),
   discontinueJob
 );
 
 router.put(
   '/jobs/:id/status',
-  checkAnyPermission([PERMISSIONS.APPROVE_JOB, PERMISSIONS.DISCONTINUE_JOB]),
+  checkPermission(PERMISSIONS.UPDATE_JOB_STATUS),
   updateJobStatusByAdmin
 );
 
 // ==================== EDIT REQUESTS ====================
 router.get(
   '/edit-requests/pending',
-  checkPermission(PERMISSIONS.VIEW_EDIT_REQUESTS),
   getPendingEditRequests
 );
 
 router.get(
   '/edit-requests/:id',
-  checkPermission(PERMISSIONS.VIEW_EDIT_REQUEST_DETAILS),
   getEditRequest
 );
 
@@ -188,26 +236,22 @@ router.put(
 // All jobs
 router.get(
   '/jobs',
-  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
   getAllJobs
 );
 
 router.get(
   '/jobs/:id/detail',
-  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
   getJobDetail
 );
 
 // All candidates
 router.get(
   '/candidates',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
   getAllCandidates
 );
 
 router.get(
   '/candidates/:id',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
   getCandidateDetail
 );
 
@@ -233,10 +277,10 @@ router.get(
 
 router.post(
   '/candidates/:id/notes',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
   async (req, res) => {
     try {
       const Candidate = require('../models/Candidate');
+      const Job = require('../models/Job');
       const { content } = req.body;
 
       if (!content || !content.trim()) {
@@ -247,6 +291,21 @@ router.post(
       if (!candidate) {
         return res.status(404).json({ success: false, message: 'Candidate not found' });
       }
+
+      /*
+      if (req.user.role === 'sub_admin') {
+        const hasViewAll = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
+        if (!hasViewAll) {
+          const jobObj = await Job.findById(candidate.job?._id || candidate.job);
+          if (!jobObj || !jobObj.assignedTo || jobObj.assignedTo.toString() !== req.user._id.toString()) {
+            return res.status(403).json({
+              success: false,
+              message: 'You are not assigned to this candidate\'s job post. Access denied.'
+            });
+          }
+        }
+      }
+      */
 
       candidate.notes.push({
         content,
@@ -274,35 +333,25 @@ router.post(
 // All partners
 router.get(
   '/partners',
-  checkPermission(PERMISSIONS.VIEW_ALL_PARTNERS),
   getAllPartners
 );
 
 router.get(
   '/partners/:id',
-  checkPermission(PERMISSIONS.VIEW_ALL_PARTNERS),
   getPartnerDetail
 );
 
 // All companies
 router.get(
   '/companies',
-  checkPermission(PERMISSIONS.VIEW_ALL_COMPANIES),
   getAllCompanies
 );
 
 router.get(
   '/companies/:id',
-  checkPermission(PERMISSIONS.VIEW_ALL_COMPANIES),
   getCompanyDetail
 );
 
-// Audit logs
-router.get(
-  '/audit-logs',
-  checkPermission(PERMISSIONS.VIEW_AUDIT_LOGS),
-  getAuditLogs
-);
 
 // Agreement queries via admin
 router.get(
@@ -365,7 +414,7 @@ router.get(
 
 router.get(
   '/payouts/:id',
-  checkPermission(PERMISSIONS.VIEW_PAYOUT_DETAILS),
+  checkPermission(PERMISSIONS.VIEW_PAYOUTS),
   getPayout
 );
 
@@ -446,16 +495,28 @@ router.post('/whatsapp/test', async (req, res) => {
 // @route   GET /api/admin/candidates/queue
 router.get(
   '/candidates/queue',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
   async (req, res) => {
     try {
       const candidateQueueService = require('../services/candidateQueueService');
+      const Job = require('../models/Job');
 
-      const candidates = await candidateQueueService.getAdminQueue({
+      const filters = {
         jobId: req.query.jobId,
         partnerId: req.query.partnerId,
         scoreMin: req.query.scoreMin
-      });
+      };
+
+      /*
+      if (req.user.role === 'sub_admin') {
+        const hasViewAll = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
+        if (!hasViewAll) {
+          const assignedJobs = await Job.find({ assignedTo: req.user._id }).select('_id');
+          filters.assignedJobIds = assignedJobs.map(j => j._id);
+        }
+      }
+      */
+
+      const candidates = await candidateQueueService.getAdminQueue(filters);
 
       res.json({
         success: true,
@@ -492,13 +553,17 @@ router.get(
 // @route   GET /api/admin/candidates/queue/:id
 router.get(
   '/candidates/queue/:id',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
   async (req, res) => {
     try {
       const Candidate = require('../models/Candidate');
+      const Job = require('../models/Job');
 
       const candidate = await Candidate.findById(req.params.id)
-        .populate('job', 'title category location experienceLevel salary skills')
+        .populate({
+          path: 'job',
+          select: 'title category location experienceLevel salary skills assignedTo',
+          populate: { path: 'assignedTo', select: 'email role' }
+        })
         .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')
         .populate('company', 'companyName kyc.industry')
         .populate('statusHistory.changedBy', 'email role')
@@ -511,22 +576,20 @@ router.get(
         });
       }
 
-      const JobPosition = require('../models/JobPosition');
-      let jobPosition = await JobPosition.findOne({ jobId: candidate.job?._id });
-
-      if (!jobPosition && candidate.job?._id) {
-        console.log(`[QUEUE-DETAIL] JobPosition not found for job ${candidate.job._id}. Auto-creating/parsing...`);
-        try {
-          const { getOrParseJobPosition } = require('../services/jobPositionParser');
-          const Job = require('../models/Job');
-          const jobDoc = await Job.findById(candidate.job._id);
-          if (jobDoc) {
-            jobPosition = await getOrParseJobPosition(jobDoc);
+      /*
+      if (req.user.role === 'sub_admin') {
+        const hasViewAll = req.user.permissions?.includes('VIEW_ALL_CANDIDATES');
+        if (!hasViewAll) {
+          const jobObj = await Job.findById(candidate.job?._id || candidate.job);
+          if (!jobObj || !jobObj.assignedTo || jobObj.assignedTo.toString() !== req.user._id.toString()) {
+            return res.status(403).json({
+              success: false,
+              message: 'You are not assigned to this candidate\'s job post. Access denied.'
+            });
           }
-        } catch (err) {
-          console.error(`[QUEUE-DETAIL] Error auto-creating JobPosition:`, err.message);
         }
       }
+      */
 
       res.json({
         success: true,
@@ -834,7 +897,6 @@ router.post(
 // @route   PUT /api/admin/candidates/queue/:id/approve
 router.put(
   '/candidates/queue/:id/approve',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
   async (req, res) => {
     try {
       const candidateQueueService = require('../services/candidateQueueService');
@@ -870,7 +932,6 @@ router.put(
 // @route   PUT /api/admin/candidates/queue/:id/reject
 router.put(
   '/candidates/queue/:id/reject',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
   async (req, res) => {
     try {
       const candidateQueueService = require('../services/candidateQueueService');
@@ -913,7 +974,6 @@ router.put(
 // @route   PUT /api/admin/candidates/:id/withdraw
 router.put(
   '/candidates/:id/withdraw',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
   withdrawCandidateByAdmin
 );
 
@@ -922,14 +982,12 @@ router.put(
 // All jobs with candidate counts and arrays
 router.get(
   '/jobs-with-candidates',
-  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
   require('../controllers/adminController').getAllJobsWithCandidates
 );
 
 // Single job with all candidates
 router.get(
   '/jobs/:id/candidates',
-  checkPermission(PERMISSIONS.VIEW_ALL_JOBS),
   require('../controllers/adminController').getJobWithCandidates
 );
 
@@ -959,6 +1017,42 @@ router.delete(
 );
 
 
+// ==================== PIPELINE (Admin read-only + Audit Log + Write Access) ====================
+const { 
+  adminGetPipeline, 
+  adminGetPipelineAuditLog, 
+  getJobPipelineTemplate,
+  definePipelineTemplate,
+  defineJobPipelineTemplate,
+  pipelinePublishSlots,
+  pipelineShareDetails
+} = require('../controllers/pipelineController');
+const { getJobInterviewSlots } = require('../controllers/companyController');
+const { adminAssignCandidateToSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot } = require('../controllers/adminController');
 
+router.get('/candidates/:id/pipeline', adminGetPipeline);
+router.get('/jobs/:jobId/pipeline/template', getJobPipelineTemplate);
+router.get('/jobs/:jobId/interview-slots', getJobInterviewSlots);
+router.post('/jobs/:jobId/interview-slots', adminCreateJobInterviewSlots);
+router.delete('/jobs/:jobId/interview-slots/:slotId', adminCancelJobInterviewSlot);
+
+// Admin write access to pipeline templates
+router.post('/candidates/:id/pipeline/template', definePipelineTemplate);
+router.post('/jobs/:jobId/pipeline/template', defineJobPipelineTemplate);
+
+// Admin slot creation access (same as company)
+router.post('/candidates/:id/pipeline/publish-slots', pipelinePublishSlots);
+
+// Admin candidate assignment access (same as company/partner)
+router.post('/candidates/:id/pipeline/share-details', pipelineShareDetails);
+router.post('/jobs/:jobId/interview-slots/:slotId/assign', adminAssignCandidateToSlot);
+
+// Phase 4: cross-candidate pipeline audit trail
+// GET /api/admin/pipeline/audit-log?page=1&limit=30&search=&action=&status=
+router.get('/pipeline/audit-log', adminGetPipelineAuditLog);
+
+// Resend interview consent (WhatsApp + Email) – Admin/Sub-admin
+const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
+router.post('/candidates/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
 
 module.exports = router;
