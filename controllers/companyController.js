@@ -2754,6 +2754,7 @@ exports.requestJobEdit = async (req, res) => {
     // Validate that requested fields exist and values are different
     const validatedChanges = {};
     const invalidFields = [];
+    const jobPlain = job.toObject({ virtuals: false, getters: true });
 
     for (const [field, change] of Object.entries(requestedChanges)) {
       if (change.old === undefined || change.new === undefined) {
@@ -2761,18 +2762,38 @@ exports.requestJobEdit = async (req, res) => {
         continue;
       }
 
-      // Check if field exists in job
-      const currentValue = field.split('.').reduce((obj, key) => obj?.[key], job);
+      // Check if field exists in the Job schema
+      const pathExists = Job.schema.path(field) !== undefined || 
+                         Object.keys(Job.schema.paths).some(p => p.startsWith(field + '.'));
 
-      if (currentValue === undefined) {
+      if (!pathExists) {
         invalidFields.push(`${field}: Field does not exist in job`);
         continue;
       }
 
+      // Get plain currentValue from the job
+      const currentValue = field.split('.').reduce((obj, key) => obj?.[key], jobPlain);
+
+      // Normalize current value or old value if either is empty/null/undefined
+      let normalizedCurrent = currentValue;
+      if (normalizedCurrent === undefined || normalizedCurrent === null) {
+        if (Array.isArray(change.old)) {
+          normalizedCurrent = [];
+        } else if (typeof change.old === 'object' && change.old !== null) {
+          normalizedCurrent = {};
+        } else if (typeof change.old === 'number') {
+          normalizedCurrent = 0;
+        } else {
+          normalizedCurrent = '';
+        }
+      }
+
       // Check if old value matches current (using our robust comparison helper)
-      if (!valuesAreEqual(currentValue, change.old)) {
-        invalidFields.push(`${field}: Old value doesn't match current value`);
-        continue;
+      if (!valuesAreEqual(normalizedCurrent, change.old)) {
+        // If it doesn't match, instead of returning an error and blocking, we automatically
+        // align the old value to the actual currentValue in the database.
+        // This ensures the edit request proceeds smoothly and the admin gets the correct diff.
+        change.old = currentValue !== undefined ? currentValue : null;
       }
 
       // Check if new value is actually different; if they are same, we just skip it (don't error out)
