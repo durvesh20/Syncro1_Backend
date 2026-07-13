@@ -1,19 +1,20 @@
 const Job = require('../models/Job');
+const { matchSkills } = require('./skillMatcher');
 
 class CandidateScoringService {
 
   /**
    * Score candidate profile against job using the same 8-component weights as the AI engine.
-   * 
-   * Weights (aligned with aiService.js):
+   *
+   * Weights (aligned with scoring-prompt.txt v2):
    *   skills:       30%
    *   experience:   20%
-   *   domain:       15%
-   *   education:    10%
+   *   location:     10%
    *   salary:       10%
-   *   location:      5%
-   *   noticePeriod:  5%
-   *   stability:     5%
+   *   noticePeriod: 10%
+   *   stability:    10%
+   *   domain:        5%
+   *   education:     5%
    *   ─────────────────
    *   TOTAL:       100%
    *
@@ -29,21 +30,38 @@ class CandidateScoringService {
     const scores = {};
     let totalScore = 0;
 
-    // 1. Skills Match (30%)
-    const skillResult = this._scoreSkills(
-      profile.skills || [],
-      job.skills?.required || [],
-      job.skills?.preferred || []
-    );
-    scores.skills = {
-      score: skillResult.score,
-      weight: 30,
-      matchedRequired: skillResult.matchedRequired,
-      missingRequired: skillResult.missingRequired,
-      matchedPreferred: skillResult.matchedPreferred,
-      coveragePercent: skillResult.coveragePercent
+    // 1. Skills Match (30%) — deterministic via skillMatcher
+    const jdSkills = {
+      mustHave:   job.skills?.required || job.skills?.mustHave || [],
+      shouldHave: job.skills?.preferred || job.skills?.shouldHave || [],
+      niceToHave: job.skills?.niceToHave || [],
     };
-    totalScore += skillResult.score * 0.30;
+    const skillMatch = matchSkills(profile.skills || [], jdSkills);
+    const mustTotal = jdSkills.mustHave.length;
+    const mustMatched = skillMatch.mustHaveMatched.length;
+    const shouldMatched = skillMatch.shouldHaveMatched.length;
+    const shouldTotal = jdSkills.shouldHave.length;
+    const niceMatched = skillMatch.niceToHaveMatched.length;
+    const niceTotal = jdSkills.niceToHave.length;
+    let skillsScore = (mustMatched / Math.max(mustTotal, 1) * 70)
+                    + (shouldMatched / Math.max(shouldTotal, 1) * 25)
+                    + (niceMatched  / Math.max(niceTotal, 1)  * 5);
+    const mustCoverage = mustTotal > 0 ? Math.round(mustMatched / mustTotal * 100) : 100;
+    // Apply skill caps
+    if (mustCoverage < 30) skillsScore = Math.min(skillsScore, 15);
+    else if (mustCoverage < 70) skillsScore = Math.min(skillsScore, 50);
+    skillsScore = Math.round(skillsScore);
+    scores.skills = {
+      score:            skillsScore,
+      weight:           30,
+      matchedRequired:  skillMatch.mustHaveMatched,
+      missingRequired:  skillMatch.mustHaveMissing,
+      matchedPreferred: skillMatch.shouldHaveMatched,
+      missingPreferred: skillMatch.shouldHaveMissing,
+      coveragePercent:  mustCoverage,
+      skillGate:        mustCoverage < 30,
+    };
+    totalScore += skillsScore * 0.30;
 
     // 2. Experience Match (20%)
     const expScore = this._scoreExperience(profile.totalExperience, job.experienceRange);
@@ -57,27 +75,27 @@ class CandidateScoringService {
     };
     totalScore += expScore.score * 0.20;
 
-    // 3. Domain Match (15%)
+    // 3. Domain Match (5%)
     const domainScore = this._scoreDomain(profile, job);
     scores.domain = {
       score: domainScore.score,
-      weight: 15,
+      weight: 5,
       jobDomain: job.category || 'Not specified',
       candidateDomain: profile.domain || profile.currentDesignation || 'Not specified',
       status: domainScore.status
     };
-    totalScore += domainScore.score * 0.15;
+    totalScore += domainScore.score * 0.05;
 
-    // 4. Education Match (10%)
+    // 4. Education Match (5%)
     const eduScore = this._scoreEducation(profile.education, job);
     scores.education = {
       score: eduScore.score,
-      weight: 10,
+      weight: 5,
       minimumRequired: job.educationRequirement || 'Not specified',
       candidateEducation: eduScore.candidateEducation || 'Not provided',
       status: eduScore.status
     };
-    totalScore += eduScore.score * 0.10;
+    totalScore += eduScore.score * 0.05;
 
     // 5. Salary Fit (10%)
     const salaryScore = this._scoreSalary(profile.expectedSalary, job.salary);
@@ -92,7 +110,7 @@ class CandidateScoringService {
     };
     totalScore += salaryScore.score * 0.10;
 
-    // 6. Location Match (5%)
+    // 6. Location Match (10%)
     const locScore = this._scoreLocation(
       profile.currentLocation,
       profile.preferredLocations,
@@ -101,38 +119,43 @@ class CandidateScoringService {
     );
     scores.location = {
       score: locScore.score,
-      weight: 5,
+      weight: 10,
       jobLocation: job.location?.city || 'Not specified',
       candidateLocation: profile.currentLocation || profile.location || 'Not specified',
       status: locScore.status,
       detail: locScore.detail
     };
-    totalScore += locScore.score * 0.05;
+    totalScore += locScore.score * 0.10;
 
-    // 7. Notice Period Fit (5%)
+    // 7. Notice Period Fit (10%)
     const npScore = this._scoreNoticePeriod(profile.noticePeriod);
     scores.noticePeriod = {
       score: npScore.score,
-      weight: 5,
+      weight: 10,
       actual: profile.noticePeriod || 'Not specified',
       days: npScore.days,
       status: npScore.status
     };
-    totalScore += npScore.score * 0.05;
+    totalScore += npScore.score * 0.10;
 
-    // 8. Stability Score (5%)
+    // 8. Stability Score (10%)
     const stabScore = this._scoreStability(profile);
     scores.stability = {
-      score: stabScore.score,
-      weight: 5,
-      averageTenureYears: stabScore.averageTenureYears || 0,
-      isJobHopper: stabScore.isJobHopper || false,
-      risk: stabScore.risk,
-      detail: stabScore.detail
+      score:                      stabScore.score,
+      weight:                     10,
+      averageTenureYears:         stabScore.last5YearAverageTenureYears || 0,
+      totalAverageTenureYears:    stabScore.totalAverageTenureYears    || 0,
+      last5YearAverageTenureYears: stabScore.last5YearAverageTenureYears || 0,
+      isJobHopper:                stabScore.isJobHopper || false,
+      risk:                       stabScore.risk,
+      detail:                     stabScore.detail
     };
-    totalScore += stabScore.score * 0.05;
+    totalScore += stabScore.score * 0.10;
 
-    const overall = Math.round(totalScore);
+    let overall = Math.round(totalScore);
+    // Apply skillGate hard-cutoff
+    const skillGateTriggered = scores.skills.skillGate;
+    if (skillGateTriggered) overall = Math.min(overall, 25);
 
     // Summary
     scores.summary = {
@@ -149,10 +172,13 @@ class CandidateScoringService {
       matchLevel: this._getMatchLevel(overall)
     };
 
+    const rec = skillGateTriggered ? 'REJECT' : this._getRecommendation(overall);
+
     return {
       overallScore: overall,
       matchLevel: this._getMatchLevel(overall),
-      recommendation: this._getRecommendation(overall),
+      recommendation: rec,
+      skillGate: skillGateTriggered,
       breakdown: scores,
       flags: this._getFlags(profile, job),
       advice: this._getAdvice(scores)
@@ -188,57 +214,26 @@ class CandidateScoringService {
 
     const { min, max } = range;
 
+    // Within required range
     if (candidateExp >= min && candidateExp <= max) {
       return { score: 100, status: 'MEETS', detail: `${candidateExp} years — within range (${min}-${max})` };
     }
-    if (candidateExp > max && candidateExp <= max + 2) {
-      return { score: 70, status: 'EXCEEDS', detail: `${candidateExp} years — ${candidateExp - max} year(s) above max` };
+
+    // Below minimum
+    if (candidateExp < min) {
+      const gap = min - candidateExp;
+      if (gap <= 1)  return { score: 70, status: 'BELOW', detail: `${candidateExp} years — ${gap} year(s) below min` };
+      if (gap <= 3)  return { score: 40, status: 'BELOW', detail: `${candidateExp} years — ${gap} year(s) below min` };
+                     return { score: 20, status: 'BELOW', detail: `${candidateExp} years — significant gap (${gap} years below min)` };
     }
-    if (candidateExp < min && candidateExp >= min - 1) {
-      return { score: 70, status: 'BELOW', detail: `${candidateExp} years — ${min - candidateExp} year(s) below min` };
-    }
-    if (candidateExp < min && candidateExp >= min - 3) {
-      return { score: 40, status: 'BELOW', detail: `${candidateExp} years — ${min - candidateExp} year(s) below min` };
-    }
-    if (candidateExp > max + 4) {
-      return { score: 30, status: 'EXCEEDS', detail: `${candidateExp} years — overqualified` };
-    }
-    return { score: 20, status: 'BELOW', detail: `${candidateExp} years — significant gap` };
+
+    // Above maximum (overqualified)
+    const excess = candidateExp - max;
+    if (excess <= 2) return { score: 70, status: 'EXCEEDS', detail: `${candidateExp} years — ${excess} year(s) above max` };
+    if (excess <= 4) return { score: 50, status: 'EXCEEDS', detail: `${candidateExp} years — ${excess} years above max, moderately overqualified` };
+                     return { score: 30, status: 'EXCEEDS', detail: `${candidateExp} years — overqualified by ${excess} years` };
   }
 
-  _scoreSkills(candidateSkills, required, preferred) {
-    const normalize = s => s.toLowerCase().trim();
-    const candidateNorm = candidateSkills.map(normalize);
-
-    const matchedRequired = [];
-    const missingRequired = [];
-
-    required.forEach(skill => {
-      const n = normalize(skill);
-      const found = candidateNorm.some(cs => cs.includes(n) || n.includes(cs));
-      (found ? matchedRequired : missingRequired).push(skill);
-    });
-
-    const matchedPreferred = preferred.filter(skill => {
-      const n = normalize(skill);
-      return candidateNorm.some(cs => cs.includes(n) || n.includes(cs));
-    });
-
-    const reqScore = required.length > 0 ? (matchedRequired.length / required.length) * 100 : 80;
-    const coveragePercent = required.length > 0 ? Math.round((matchedRequired.length / required.length) * 100) : 100;
-    
-    // Apply cap: if coverage < 70%, cap score at 50
-    let score = Math.round(reqScore);
-    if (coveragePercent < 70) score = Math.min(score, 50);
-
-    return {
-      score,
-      matchedRequired,
-      missingRequired,
-      matchedPreferred,
-      coveragePercent
-    };
-  }
 
   _scoreSalary(expected, jobSalary) {
     if (!expected || !jobSalary?.max) {
@@ -343,14 +338,69 @@ class CandidateScoringService {
   }
 
   _scoreStability(profile) {
-    // Without detailed job history, provide a neutral score
-    // This will be scored more accurately by the AI with full resume analysis
+    const jobHistory = profile.jobHistory;
+
+    if (!Array.isArray(jobHistory) || jobHistory.length === 0) {
+      // No job history available yet (resume not parsed at pre-submission stage) — neutral fallback
+      return {
+        score: 60,
+        totalAverageTenureYears: 0,
+        last5YearAverageTenureYears: 0,
+        isJobHopper: false,
+        risk: 'UNKNOWN',
+        detail: 'Requires resume analysis for accurate stability scoring'
+      };
+    }
+
+    // ── Total career average (informational only, not scored) ─────────
+    const totalMonths = jobHistory.reduce((sum, j) => sum + (j.durationMonths || 0), 0);
+    const totalAvgTenureYears = jobHistory.length > 0 ? (totalMonths / jobHistory.length) / 12 : 0;
+
+    // ── Last 5 years window ───────────────────────────────────
+    const now = new Date();
+    const windowStart = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
+
+    let last5Months = 0;
+    let last5JobCount = 0;
+
+    jobHistory.forEach(job => {
+      const jobEnd   = job.toYear   ? new Date(job.toYear,   (job.toMonth   || 11), 1) : now;
+      const jobStart = job.fromYear ? new Date(job.fromYear, (job.fromMonth || 0),  1) : jobEnd;
+
+      // Skip jobs that ended entirely before the 5-year window
+      if (jobEnd < windowStart) return;
+
+      const clippedStart  = jobStart < windowStart ? windowStart : jobStart;
+      const clippedMonths = Math.max(
+        0,
+        (jobEnd.getFullYear()  - clippedStart.getFullYear())  * 12 +
+        (jobEnd.getMonth()     - clippedStart.getMonth())
+      );
+
+      // Fall back to durationMonths when date fields are absent
+      last5Months   += clippedMonths || job.durationMonths || 0;
+      last5JobCount += 1;
+    });
+
+    const last5AvgTenureYears  = last5JobCount > 0 ? (last5Months / last5JobCount) / 12 : totalAvgTenureYears;
+    const last5AvgTenureMonths = last5AvgTenureYears * 12;
+
+    // ── Score on last-5-year average tenure ───────────────────────
+    let score;
+    if      (last5AvgTenureMonths >= 36) score = 100;
+    else if (last5AvgTenureMonths >= 24) score = 80;
+    else if (last5AvgTenureMonths >= 18) score = 60;
+    else if (last5AvgTenureMonths >= 12) score = 40;
+    else if (last5AvgTenureMonths >= 6)  score = 20;
+    else                                  score = 0;
+
     return {
-      score: 60,
-      averageTenureYears: 0,
-      isJobHopper: false,
-      risk: 'UNKNOWN',
-      detail: 'Requires resume analysis for accurate stability scoring'
+      score,
+      totalAverageTenureYears:     Math.round(totalAvgTenureYears  * 10) / 10,
+      last5YearAverageTenureYears: Math.round(last5AvgTenureYears  * 10) / 10,
+      isJobHopper:  last5AvgTenureMonths < 12,
+      risk: last5AvgTenureMonths < 12 ? 'HIGH' : last5AvgTenureMonths < 24 ? 'MEDIUM' : 'LOW',
+      detail: `Total career avg ${totalAvgTenureYears.toFixed(1)}yrs, last 5 years avg ${last5AvgTenureYears.toFixed(1)}yrs — scored on recent stability`
     };
   }
 

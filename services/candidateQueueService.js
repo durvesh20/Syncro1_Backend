@@ -83,7 +83,9 @@ class CandidateQueueService {
                     skills: candidate.profile?.skills || [],
                     education: candidate.profile?.education || [],
                     certifications: candidate.profile?.certifications || [],
-                    languages: candidate.profile?.languages || []
+                    languages: candidate.profile?.languages || [],
+                    // relocation willingness — stored as canRelocate in Candidate.profile
+                    willingToRelocate: candidate.profile?.canRelocate ?? null,
                 };
 
                 // ✅ Convert job to plain object
@@ -115,7 +117,8 @@ class CandidateQueueService {
                             weight: 0.30,
                             matchedRequired: ranking.mustHaveSkillsMatched || [],
                             missingRequired: ranking.mustHaveSkillsMissing || [],
-                            matchedPreferred: ranking.preferredSkillsMatched || [],
+                            matchedPreferred: ranking.shouldHaveSkillsMatched || ranking.preferredSkillsMatched || [],
+                            missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
                             coveragePercent: scoring.skillCoveragePercent || 0
                         },
                         experience: {
@@ -129,14 +132,14 @@ class CandidateQueueService {
                         },
                         domain: {
                             score: scoring.domainMatch || 0,
-                            weight: 0.15,
+                            weight: 0.05,
                             jobDomain: screening.domainMatch?.jobDomain || '',
                             candidateDomain: screening.domainMatch?.candidateDomain || '',
                             status: screening.domainMatch?.status || ''
                         },
                         education: {
                             score: scoring.educationMatch || 0,
-                            weight: 0.10,
+                            weight: 0.05,
                             minimumRequired: screening.educationMatch?.minimumRequired || '',
                             candidateEducation: screening.educationMatch?.candidateEducation || '',
                             status: screening.educationMatch?.status || ''
@@ -152,7 +155,7 @@ class CandidateQueueService {
                         },
                         location: {
                             score: scoring.locationMatch || 0,
-                            weight: 0.05,
+                            weight: 0.10,
                             jobLocation: screening.locationFit?.jobLocation || '',
                             candidateLocation: screening.locationFit?.candidateLocation || '',
                             status: screening.locationFit?.status || '',
@@ -160,7 +163,7 @@ class CandidateQueueService {
                         },
                         noticePeriod: {
                             score: scoring.noticePeriodFit || 0,
-                            weight: 0.05,
+                            weight: 0.10,
                             required: screening.noticePeriod?.required || '',
                             actual: screening.noticePeriod?.actual || '',
                             days: ranking.noticePeriodDays || 0,
@@ -168,8 +171,10 @@ class CandidateQueueService {
                         },
                         stability: {
                             score: scoring.stabilityScore || 0,
-                            weight: 0.05,
+                            weight: 0.10,
                             averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
+                            last5YearAverageTenureYears: screening.stabilityAnalysis?.last5YearAverageTenureYears || screening.stabilityAnalysis?.averageTenureYears || 0,
+                            totalAverageTenureYears: screening.stabilityAnalysis?.totalAverageTenureYears || 0,
                             isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
                             risk: screening.stabilityAnalysis?.stabilityRisk || '',
                             detail: screening.stabilityAnalysis?.detail || ''

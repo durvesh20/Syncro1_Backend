@@ -400,6 +400,7 @@ const candidateSchema = new mongoose.Schema({
         matchedRequired: [String],
         missingRequired: [String],
         matchedPreferred: [String],
+        missingPreferred: [String],
         coveragePercent: Number
       },
       experience: {
@@ -454,6 +455,8 @@ const candidateSchema = new mongoose.Schema({
         score: Number,
         weight: Number,
         averageTenureYears: Number,
+        last5YearAverageTenureYears: Number,
+        totalAverageTenureYears: Number,
         isJobHopper: Boolean,
         risk: String,
         detail: String

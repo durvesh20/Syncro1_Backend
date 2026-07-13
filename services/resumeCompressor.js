@@ -1,5 +1,5 @@
 // services/resumeCompressor.js
-// Called only when resumeText.length > 14000 chars
+// Called only when resumeText.length > 30000 chars
 // Summarizes overflow while preserving all scoreable fields using the project's OpenAI setup
 
 const { getOpenAI, getModel } = require('../config/ai');
@@ -8,7 +8,7 @@ async function compressResumeText(resumeText) {
   const openai = getOpenAI();
   if (!openai) {
     console.warn('[COMPRESSOR] OpenAI not configured — skipping resume compression');
-    return resumeText.substring(0, 14000); // fallback to truncate
+    return resumeText.substring(0, 30000); // fallback to truncate
   }
 
   const model = getModel();
@@ -47,7 +47,7 @@ ${resumeText}`
     return resultText;
   } catch (error) {
     console.error(`[COMPRESSOR] Failed to compress resume: ${error.message}. Falling back to substring.`);
-    return resumeText.substring(0, 14000);
+    return resumeText.substring(0, 30000);
   }
 }
 

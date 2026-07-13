@@ -7,7 +7,6 @@ const Company = require('../models/Company');
 const duplicateDetection = require('../services/duplicateDetectionService');
 const notificationEngine = require('../services/notificationEngine');
 const jobAccessService = require('../services/jobAccessService');
-const candidateScoringService = require('../services/candidateScoringService');
 const JobInterest = require('../models/JobInterest');
 const InterviewSlot = require('../models/InterviewSlot');
 const candidateQueueService = require('../services/candidateQueueService');

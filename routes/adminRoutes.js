@@ -557,6 +557,7 @@ router.get(
     try {
       const Candidate = require('../models/Candidate');
       const Job = require('../models/Job');
+      const JobPosition = require('../models/JobPosition');
 
       const candidate = await Candidate.findById(req.params.id)
         .populate({
@@ -575,6 +576,8 @@ router.get(
           message: 'Candidate not found'
         });
       }
+
+      const jobPosition = await JobPosition.findOne({ jobId: candidate.job?._id || candidate.job });
 
       /*
       if (req.user.role === 'sub_admin') {
@@ -759,7 +762,8 @@ router.post(
           weight: 0.30,
           matchedRequired: ranking.mustHaveSkillsMatched || [],
           missingRequired: ranking.mustHaveSkillsMissing || [],
-          matchedPreferred: ranking.preferredSkillsMatched || [],
+          matchedPreferred: ranking.shouldHaveSkillsMatched || ranking.preferredSkillsMatched || [],
+          missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
           coveragePercent: scoring.skillCoveragePercent || 0
         },
         experience: {
