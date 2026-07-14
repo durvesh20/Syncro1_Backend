@@ -59,6 +59,21 @@ const {
   handleUploadError
 } = require('../middleware/upload');
 
+// ✅ Helper: wrap multer in a proper Express middleware that catches errors
+// (including non-Error Cloudinary rejections) and passes them to next()
+const safeUpload = (multerFn) => (req, res, next) => {
+  multerFn(req, res, (err) => {
+    if (err) {
+      const uploadErr = err instanceof Error
+        ? err
+        : new Error(typeof err === 'string' ? err : JSON.stringify(err));
+      console.error('[UPLOAD] Error during file upload:', uploadErr.message);
+      return next(uploadErr);
+    }
+    next();
+  });
+};
+
 // ==================== AUTH MIDDLEWARE ====================
 // Applied to ALL routes below
 router.use(protect);
@@ -270,15 +285,11 @@ router.post('/jobs/:jobId/check-fit', async (req, res) => {
 
 // @desc    Submit candidate WITH resume — single multipart/form-data request
 // @route   POST /api/staffing-partners/jobs/:jobId/candidates
-// @access  Staffing Partner (Verified/Active)
-// @body    multipart/form-data
-//          Fields : firstName, lastName, email, mobile, + optional fields
-//          File   : resume (PDF / DOC / DOCX — max 10MB)
 router.post(
   '/jobs/:jobId/candidates',
-  uploadResumeMiddleware,   // Step 1: multer uploads file to Cloudinary
-  handleUploadError,         // Step 2: catch any multer/cloudinary errors
-  submitCandidate            // Step 3: run controller with req.file available
+  safeUpload(uploadResumeMiddleware),
+  handleUploadError,
+  submitCandidate
 );
 
 // ✅ Apply from pool: POST /api/staffing-partners/jobs/:jobId/candidates/from-pool
@@ -305,7 +316,7 @@ router.put('/submissions/:id/withdraw', withdrawCandidate);
 
 // @desc    Update a submission's candidate details
 // @route   PUT /api/staffing-partners/submissions/:id
-router.put('/submissions/:id', uploadResumeMiddleware, handleUploadError, updateSubmission);
+router.put('/submissions/:id', safeUpload(uploadResumeMiddleware), handleUploadError, updateSubmission);
 
 // @desc    Resend WhatsApp consent to candidate (Initial Consent)
 // @route   POST /api/staffing-partners/submissions/:id/resend-consent
@@ -332,7 +343,7 @@ router.get('/invoices/:id', getInvoice);
 // @note    Only the partner who submitted the candidate can update resume
 router.post(
   '/candidates/:id/resume',
-  uploadResumeMiddleware,
+  safeUpload(uploadResumeMiddleware),
   handleUploadError,
   uploadResume
 );
@@ -345,7 +356,7 @@ router.get('/my-candidates', listPoolCandidates);
 // POST   /api/staffing-partners/my-candidates         — create (with optional resume)
 router.post(
   '/my-candidates',
-  uploadResumeMiddleware,
+  safeUpload(uploadResumeMiddleware),
   handleUploadError,
   createPoolCandidate
 );

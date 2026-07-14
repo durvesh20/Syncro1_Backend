@@ -11,7 +11,8 @@ const resumeStorage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: 'syncro1/resumes',
-    resource_type: 'auto',  // ✅ auto better handles various doc formats
+    resource_type: 'auto',  // auto handles PDF, DOC, DOCX
+    timeout: 120000,        // 120s — prevents http_code:499 on larger files
     public_id: (req, file) => {
       const uniqueName = `resume_${Date.now()}_${Math.round(Math.random() * 1e9)}`;
       return uniqueName;
@@ -156,24 +157,31 @@ const uploadAny = multer({
 // ==================== ERROR HANDLER ====================
 
 const handleUploadError = (err, req, res, next) => {
+  if (!err) return next();
+
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
-        message: 'File too large. Maximum size is 2MB'
+        message: 'File too large. Maximum allowed size is 10MB'
       });
     }
-    return res.status(400).json({
+    return res.status(400).json({ success: false, message: err.message });
+  }
+
+  // Cloudinary TimeoutError is a plain object {name:'TimeoutError', http_code:499, ...}
+  if (err.name === 'TimeoutError' || err.http_code === 499) {
+    console.error('[UPLOAD] Cloudinary timeout during resume upload:', JSON.stringify(err));
+    return res.status(408).json({
       success: false,
-      message: err.message
-    });
-  } else if (err) {
-    return res.status(400).json({
-      success: false,
-      message: err.message
+      message: 'Resume upload timed out. Please try again — larger files may take a moment.'
     });
   }
-  next();
+
+  // Any other upload error
+  const msg = err instanceof Error ? err.message : (err.message || JSON.stringify(err));
+  console.error('[UPLOAD] File upload error:', msg);
+  return res.status(400).json({ success: false, message: msg });
 };
 
 // ==================== DELETE FROM CLOUDINARY ====================
