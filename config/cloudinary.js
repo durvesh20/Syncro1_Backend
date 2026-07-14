@@ -2,9 +2,10 @@
 const cloudinary = require('cloudinary').v2;
 
 cloudinary.config({
-    cloud_name: 'dwvmc04oo',
-    api_key: '358618285558873',
-    api_secret: 'Ftuw3EafdaJjWTSPuYUotWbHxxk'
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME ,
+    api_key: process.env.CLOUDINARY_API_KEY ,
+    api_secret: process.env.CLOUDINARY_API_SECRET ,
+    timeout: 120000  // 120s upload timeout (default is too low for large PDFs)
 });
 
 // Test connection

@@ -9,6 +9,35 @@ class WhatsAppService {
     this.businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '';
     this.apiVersion = process.env.META_API_VERSION || 'v19.0';
     this.baseUrl = `https://graph.facebook.com/${this.apiVersion}`;
+    this.timeout = 30000;   // 30s per attempt
+    this.maxRetries = 2;    // retry up to 2 times on timeout/network error
+  }
+
+  /**
+   * Internal: POST to Meta API with auto-retry on timeout or network error
+   */
+  async _postWithRetry(url, payload, attempt = 1) {
+    try {
+      return await axios.post(url, payload, {
+        headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: this.timeout
+      });
+    } catch (err) {
+      const isRetryable = err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' ||
+        err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN' ||
+        err.message?.includes('timeout');
+
+      if (isRetryable && attempt < this.maxRetries + 1) {
+        const delay = attempt * 2000; // 2s, 4s
+        console.warn(`[WHATSAPP] Attempt ${attempt} failed (${err.message}). Retrying in ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+        return this._postWithRetry(url, payload, attempt + 1);
+      }
+      throw err;
+    }
   }
 
   /**
@@ -83,17 +112,7 @@ class WhatsAppService {
         }
       };
 
-      const response = await axios.post(
-        `${this.baseUrl}/${this.phoneNumberId}/messages`,
-        payload,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
-        }
-      );
+      const response = await this._postWithRetry(`${this.baseUrl}/${this.phoneNumberId}/messages`, payload);
 
       const messageId = response.data?.messages?.[0]?.id;
       console.log(`[WHATSAPP] ✅ Sent: ${templateName} → +${formattedPhone} | ID: ${messageId}`);
@@ -242,17 +261,7 @@ class WhatsAppService {
 
       console.log('[WHATSAPP] Payload:', JSON.stringify(payload, null, 2));
 
-      const response = await axios.post(
-        `${this.baseUrl}/${this.phoneNumberId}/messages`,
-        payload,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
-        }
-      );
+      const response = await this._postWithRetry(`${this.baseUrl}/${this.phoneNumberId}/messages`, payload);
 
       const messageId = response.data?.messages?.[0]?.id;
       console.log(`[WHATSAPP] ✅ OTP sent to +${formattedPhone} | MsgID: ${messageId}`);
@@ -361,17 +370,7 @@ class WhatsAppService {
         }
       };
 
-      const response = await axios.post(
-        `${this.baseUrl}/${this.phoneNumberId}/messages`,
-        payload,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
-        }
-      );
+      const response = await this._postWithRetry(`${this.baseUrl}/${this.phoneNumberId}/messages`, payload);
 
       const messageId = response.data?.messages?.[0]?.id;
       console.log(
@@ -478,17 +477,7 @@ class WhatsAppService {
         }
       };
 
-      const response = await axios.post(
-        `${this.baseUrl}/${this.phoneNumberId}/messages`,
-        payload,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
-        }
-      );
+      const response = await this._postWithRetry(`${this.baseUrl}/${this.phoneNumberId}/messages`, payload);
 
       const messageId = response.data?.messages?.[0]?.id;
       console.log(
@@ -597,17 +586,7 @@ class WhatsAppService {
         }
       };
 
-      const response = await axios.post(
-        `${this.baseUrl}/${this.phoneNumberId}/messages`,
-        payload,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
-        }
-      );
+      const response = await this._postWithRetry(`${this.baseUrl}/${this.phoneNumberId}/messages`, payload);
 
       const messageId = response.data?.messages?.[0]?.id;
       console.log(`[WHATSAPP] ✅ Interview invitation sent to +${formattedPhone} | MsgID: ${messageId}`);
@@ -731,7 +710,7 @@ class WhatsAppService {
     }
 
     try {
-      const response = await axios.post(
+      const response = await this._postWithRetry(
         `${this.baseUrl}/${this.phoneNumberId}/messages`,
         {
           messaging_product: 'whatsapp',
@@ -739,13 +718,6 @@ class WhatsAppService {
           to: formattedPhone,
           type: 'text',
           text: { body: message }
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
         }
       );
 
@@ -775,16 +747,9 @@ class WhatsAppService {
     }
 
     try {
-      const response = await axios.post(
+      const response = await this._postWithRetry(
         `${this.baseUrl}/${this.businessAccountId}/message_templates`,
-        templateData,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 15000
-        }
+        templateData
       );
 
       console.log(`[WHATSAPP] ✅ Template created: ${templateData.name} | Status: ${response.data.status}`);

@@ -259,9 +259,15 @@ const server = app.listen(PORT, () => {
 ========================================================= */
 
 process.on('unhandledRejection', (err, promise) => {
-  const msg = err instanceof Error ? err.message : JSON.stringify(err);
-  console.error('[WARN] Unhandled Promise Rejection (server kept running):', msg);
-  // Do NOT crash the server — just log and continue
+  // Log full info regardless of whether err is an Error or a plain object/string
+  const msg = err instanceof Error
+    ? `${err.message}\n${err.stack}`
+    : JSON.stringify(err, null, 2);
+  console.error('[WARN] Unhandled Promise Rejection — server kept alive.');
+  console.error('[WARN] Rejection value:', msg);
+  // Do NOT kill the server — just log and continue
+  // Remove server.close()+process.exit() so one bad promise doesn't cause all
+  // subsequent requests to time out.
 });
 
 process.on('uncaughtException', (err) => {

@@ -1545,7 +1545,7 @@ exports.submitCandidate = async (req, res) => {
     };
 
     sendWhatsAppConsent().catch(err =>
-      console.error('[CONSENT] Unhandled error in sendWhatsAppConsent:', err?.message || err)
+      console.error('[CONSENT] Unhandled error in sendWhatsAppConsent:', err?.message || String(err))
     );
 
     // ✅ STEP 20: Notify partner in-app (fire and forget)
@@ -1570,7 +1570,7 @@ exports.submitCandidate = async (req, res) => {
     };
 
     notifyPartner().catch(err =>
-      console.error('[NOTIFY] Unhandled error in notifyPartner:', err?.message || err)
+      console.error('[NOTIFY] Unhandled error in notifyPartner:', err?.message || String(err))
     );
 
     // ✅ STEP 21: Notify company via email (fire and forget)
@@ -1601,7 +1601,7 @@ exports.submitCandidate = async (req, res) => {
       }
     };
     notifyCompany().catch(err =>
-      console.error('[NOTIFY] Unhandled error in notifyCompany:', err?.message || err)
+      console.error('[NOTIFY] Unhandled error in notifyCompany:', err?.message || String(err))
     );
 
     // NOTE: AI parse + scoring + admin queue is triggered ONLY after candidate
