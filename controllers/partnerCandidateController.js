@@ -162,8 +162,8 @@ exports.createPoolCandidate = async (req, res) => {
       relevantExperience: relevantExperience !== '' && relevantExperience !== undefined ? Number(relevantExperience) : undefined,
       noticePeriod,
       lastWorkingDay: lastWorkingDay ? new Date(lastWorkingDay) : null,
-      currentSalary: currentSalary !== '' && currentSalary !== undefined ? Number(currentSalary) : undefined,
-      expectedSalary: expectedSalary !== '' && expectedSalary !== undefined ? Number(expectedSalary) : undefined,
+      currentSalary: currentSalary !== '' && currentSalary !== undefined ? Number(String(currentSalary).replace(/,/g, '')) : undefined,
+      expectedSalary: expectedSalary !== '' && expectedSalary !== undefined ? Number(String(expectedSalary).replace(/,/g, '')) : undefined,
       writeup: writeup?.trim(),
       tags: Array.isArray(tags) ? tags : (tags ? [tags] : []),
       ...(resume && { resume })
@@ -313,9 +313,9 @@ exports.updatePoolCandidate = async (req, res) => {
       candidate.lastWorkingDay = lastWorkingDay ? new Date(lastWorkingDay) : null;
     }
     if (currentSalary !== undefined && currentSalary !== '')
-      candidate.currentSalary = Number(currentSalary);
+      candidate.currentSalary = Number(String(currentSalary).replace(/,/g, ''));
     if (expectedSalary !== undefined && expectedSalary !== '')
-      candidate.expectedSalary = Number(expectedSalary);
+      candidate.expectedSalary = Number(String(expectedSalary).replace(/,/g, ''));
     if (writeup !== undefined) candidate.writeup = writeup.trim();
     if (tags) candidate.tags = Array.isArray(tags) ? tags : [tags];
 
@@ -538,6 +538,7 @@ exports.applyFromPool = async (req, res) => {
       // Professional — copied by value
       profile: {
         location: poolCandidate.location,
+        currentLocation: poolCandidate.location,
         willingToRelocate: poolCandidate.willingToRelocate,
         totalExperience: poolCandidate.totalExperience,
         relevantExperience: poolCandidate.relevantExperience,

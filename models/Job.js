@@ -64,8 +64,28 @@ const jobSchema = new mongoose.Schema({
 
   // ==================== COMPENSATION ====================
   salary: {
-    min: { type: Number, min: 0 },
-    max: { type: Number, min: 0 },
+    min: {
+      type: Number,
+      min: 0,
+      set: function(val) {
+        if (val == null || val === '') return val;
+        const num = Number(val);
+        if (isNaN(num)) return val;
+        if (num >= 100000) return Number((num / 100000).toFixed(2));
+        return num;
+      }
+    },
+    max: {
+      type: Number,
+      min: 0,
+      set: function(val) {
+        if (val == null || val === '') return val;
+        const num = Number(val);
+        if (isNaN(num)) return val;
+        if (num >= 100000) return Number((num / 100000).toFixed(2));
+        return num;
+      }
+    },
     currency: {
       type: String,
       default: 'INR'

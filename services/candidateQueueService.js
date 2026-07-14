@@ -124,6 +124,14 @@ class CandidateQueueService {
                         experience: {
                             score: scoring.experienceMatch || 0,
                             weight: 0.20,
+                            totalExperience: candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} years` : 'Not provided',
+                            relevantExperience: candidate.profile?.relevantExperience != null ? `${candidate.profile.relevantExperience} years` : 'Not provided',
+                            actualExperienceFromResume: (() => {
+                                const a = fullAnalysis.candidateProfile || {};
+                                if (a.actualTotalExperience) return a.actualTotalExperience;
+                                if (a.actualTotalMonths != null) return `${Math.round(a.actualTotalMonths / 12)} years`;
+                                return 'Not provided';
+                            })(),
                             actual: screening.experienceRange?.actual || '',
                             required: screening.experienceRange?.required || '',
                             status: screening.experienceRange?.status || '',
@@ -273,7 +281,8 @@ class CandidateQueueService {
                 education: parsedData.profile?.education?.length > 0 ? parsedData.profile.education : candidate.profile?.education || [],
                 languages: parsedData.profile?.languages?.length > 0 ? parsedData.profile.languages : candidate.profile?.languages || [],
                 certifications: parsedData.profile?.certifications?.length > 0 ? parsedData.profile.certifications : candidate.profile?.certifications || [],
-                location: parsedData.profile?.currentLocation || candidate.profile?.location
+                location: candidate.profile?.location,
+                currentLocation: parsedData.profile?.currentLocation || candidate.profile?.currentLocation || candidate.profile?.location
             };
         }
 

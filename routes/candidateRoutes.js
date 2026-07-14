@@ -204,7 +204,9 @@ router.get('/consent/agree/:token', async (req, res) => {
       }
     };
 
-    processCandidate();
+    processCandidate().catch(err =>
+      console.error('[QUEUE] Unhandled error in processCandidate:', err?.message || err)
+    );
 
     res.json({
       success: true,
@@ -343,7 +345,9 @@ router.get('/consent/disagree/:token', async (req, res) => {
       }
     };
 
-    notifyPartner();
+    notifyPartner().catch(err =>
+      console.error('[CONSENT] Unhandled error in notifyPartner:', err?.message || err)
+    );
 
     res.json({
       success: true,
@@ -443,7 +447,9 @@ router.get("/interview/agree/:token", async (req, res) => {
       }
     };
 
-    notifyStakeholders();
+    notifyStakeholders().catch(err =>
+      console.error('[INTERVIEW] Unhandled error in notifyStakeholders (agree):', err?.message || err)
+    );
 
     res.json({
       success: true,
@@ -520,7 +526,9 @@ router.get("/interview/disagree/:token", async (req, res) => {
       }
     };
 
-    notifyStakeholders();
+    notifyStakeholders().catch(err =>
+      console.error('[INTERVIEW] Unhandled error in notifyStakeholders (disagree):', err?.message || err)
+    );
 
     res.json({
       success: true,

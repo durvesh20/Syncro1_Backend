@@ -562,7 +562,7 @@ router.get(
       const candidate = await Candidate.findById(req.params.id)
         .populate({
           path: 'job',
-          select: 'title category location experienceLevel salary skills assignedTo',
+          select: 'title category location experienceLevel salary skills education assignedTo',
           populate: { path: 'assignedTo', select: 'email role' }
         })
         .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')

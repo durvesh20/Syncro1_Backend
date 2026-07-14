@@ -1210,7 +1210,8 @@ exports.submitCandidate = async (req, res) => {
       writeup,
       profile,
       forceSubmit,
-      lastWorkingDay
+      lastWorkingDay,
+      willingToRelocate
     } = req.body;
 
     // Resume comes from multer (uploaded to Cloudinary before this runs)
@@ -1334,8 +1335,8 @@ exports.submitCandidate = async (req, res) => {
     }
 
     // ✅ FIX: Salary validation — parse from string properly
-    const parsedCurrentSalary = parseInt(String(currentSalary).trim().replace(/,/g, ''));
-    const parsedExpectedSalary = parseInt(String(expectedSalary).trim().replace(/,/g, ''));
+    const parsedCurrentSalary = parseFloat(String(currentSalary).trim().replace(/,/g, ''));
+    const parsedExpectedSalary = parseFloat(String(expectedSalary).trim().replace(/,/g, ''));
 
     if (isNaN(parsedCurrentSalary) || parsedCurrentSalary < 0) {
       return res.status(400).json({
@@ -1460,7 +1461,7 @@ exports.submitCandidate = async (req, res) => {
         skills: parsedProfile?.skills || [],
         education: parsedProfile?.education || [],
         preferredLocations: parsedProfile?.preferredLocations || [],
-        canRelocate: parsedProfile?.canRelocate || false,
+        willingToRelocate: willingToRelocate === 'true' || willingToRelocate === true || parsedProfile?.willingToRelocate || parsedProfile?.canRelocate || false,
         linkedinProfile: parsedProfile?.linkedinProfile || '',
         portfolioUrl: parsedProfile?.portfolioUrl || ''
       },
@@ -1543,7 +1544,9 @@ exports.submitCandidate = async (req, res) => {
       }
     };
 
-    sendWhatsAppConsent();
+    sendWhatsAppConsent().catch(err =>
+      console.error('[CONSENT] Unhandled error in sendWhatsAppConsent:', err?.message || err)
+    );
 
     // ✅ STEP 20: Notify partner in-app (fire and forget)
     const notifyPartner = async () => {
@@ -1566,7 +1569,9 @@ exports.submitCandidate = async (req, res) => {
       }
     };
 
-    notifyPartner();
+    notifyPartner().catch(err =>
+      console.error('[NOTIFY] Unhandled error in notifyPartner:', err?.message || err)
+    );
 
     // ✅ STEP 21: Notify company via email (fire and forget)
     const notifyCompany = async () => {
@@ -1595,7 +1600,9 @@ exports.submitCandidate = async (req, res) => {
         console.error('[NOTIFY] Company email notification failed:', err.message);
       }
     };
-    notifyCompany();
+    notifyCompany().catch(err =>
+      console.error('[NOTIFY] Unhandled error in notifyCompany:', err?.message || err)
+    );
 
     // NOTE: AI parse + scoring + admin queue is triggered ONLY after candidate
     // confirms WhatsApp consent via GET /api/candidates/consent/agree/:token
@@ -2712,7 +2719,7 @@ exports.updateSubmission = async (req, res) => {
     if (!submission.profile) submission.profile = {};
     if (location !== undefined) submission.profile.location = location.trim();
     if (willingToRelocate !== undefined && willingToRelocate !== null && willingToRelocate !== '') {
-      submission.profile.canRelocate = willingToRelocate === 'true' || willingToRelocate === true;
+      submission.profile.willingToRelocate = willingToRelocate === 'true' || willingToRelocate === true;
     }
     if (totalExperience !== undefined && totalExperience !== '') submission.profile.totalExperience = Number(totalExperience);
     if (relevantExperience !== undefined && relevantExperience !== '') submission.profile.relevantExperience = Number(relevantExperience);

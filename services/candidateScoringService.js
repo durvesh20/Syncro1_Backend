@@ -63,15 +63,18 @@ class CandidateScoringService {
     };
     totalScore += skillsScore * 0.30;
 
-    // 2. Experience Match (20%)
-    const expScore = this._scoreExperience(profile.totalExperience, job.experienceRange);
+    // 2. Experience Match (20%) — uses relevantExperience if available, falls back to totalExperience
+    const expScore = this._scoreExperience(profile.totalExperience, job.experienceRange, profile.relevantExperience);
     scores.experience = {
       score: expScore.score,
       weight: 20,
-      actual: profile.totalExperience ? `${profile.totalExperience} years` : 'Not provided',
+      totalExperience: profile.totalExperience ? `${profile.totalExperience} years` : 'Not provided',
+      relevantExperience: profile.relevantExperience ? `${profile.relevantExperience} years` : 'Not provided',
+      actual: expScore.usedForScoring ? `${expScore.usedForScoring} years` : 'Not provided',
       required: job.experienceRange ? `${job.experienceRange.min}-${job.experienceRange.max} years` : 'Not specified',
       status: expScore.status,
-      detail: expScore.detail
+      detail: expScore.detail,
+      usedForScoringLabel: expScore.usedLabel || 'total'
     };
     totalScore += expScore.score * 0.20;
 
@@ -88,10 +91,28 @@ class CandidateScoringService {
 
     // 4. Education Match (5%)
     const eduScore = this._scoreEducation(profile.education, job);
+    let detailedRequired = 'Not specified';
+    if (job.education) {
+      if (job.education.minimum) {
+        detailedRequired = job.education.minimum;
+      } else if (job.educationRequirement) {
+        detailedRequired = job.educationRequirement;
+      }
+      
+      if (Array.isArray(job.education.preferred) && job.education.preferred.length > 0) {
+        const filteredPref = job.education.preferred.filter(p => p && p.trim() !== '');
+        if (filteredPref.length > 0) {
+          detailedRequired += ` (Preferred: ${filteredPref.join(', ')})`;
+        }
+      }
+    } else if (job.educationRequirement) {
+      detailedRequired = job.educationRequirement;
+    }
+
     scores.education = {
       score: eduScore.score,
       weight: 5,
-      minimumRequired: job.educationRequirement || 'Not specified',
+      minimumRequired: detailedRequired,
       candidateEducation: eduScore.candidateEducation || 'Not provided',
       status: eduScore.status
     };
@@ -99,11 +120,20 @@ class CandidateScoringService {
 
     // 5. Salary Fit (10%)
     const salaryScore = this._scoreSalary(profile.expectedSalary, job.salary);
+    const formatValueToLPA = (val) => {
+      if (val == null || val === '') return 'Not specified';
+      const num = Number(val);
+      if (isNaN(num)) return val;
+      if (num >= 100000) {
+        return `${(num / 100000).toFixed(1).replace(/\.0$/, '')} LPA`;
+      }
+      return `${num.toFixed(1).replace(/\.0$/, '')} LPA`;
+    };
     scores.salary = {
       score: salaryScore.score,
       weight: 10,
-      budget: job.salary ? `₹${(job.salary.min || 0).toLocaleString('en-IN')}-₹${(job.salary.max || 0).toLocaleString('en-IN')}` : 'Not specified',
-      expected: profile.expectedSalary ? `₹${profile.expectedSalary.toLocaleString('en-IN')}` : 'Not provided',
+      budget: job.salary ? (job.salary.min && job.salary.max ? `${formatValueToLPA(job.salary.min)} - ${formatValueToLPA(job.salary.max)}` : (job.salary.max ? `<= ${formatValueToLPA(job.salary.max)}` : 'Not specified')) : 'Not specified',
+      expected: profile.expectedSalary ? formatValueToLPA(profile.expectedSalary) : 'Not provided',
       deltaPercent: salaryScore.deltaPercent || 0,
       status: salaryScore.status,
       withinBudget: salaryScore.withinBudget
@@ -207,31 +237,35 @@ class CandidateScoringService {
 
   // ── SCORING METHODS ──
 
-  _scoreExperience(candidateExp, range) {
+  _scoreExperience(candidateExp, range, relevantExp = null) {
+    // Use relevantExperience for scoring if available and valid
+    const expUsed = (relevantExp != null && relevantExp >= 0) ? relevantExp : candidateExp;
+    const usedLabel = (relevantExp != null && relevantExp >= 0) ? 'relevant' : 'total';
+
     if (candidateExp === undefined || candidateExp === null || !range) {
-      return { score: 50, status: 'UNKNOWN', detail: 'Not specified' };
+      return { score: 50, status: 'UNKNOWN', detail: 'Not specified', usedForScoring: expUsed, usedLabel };
     }
 
     const { min, max } = range;
 
     // Within required range
-    if (candidateExp >= min && candidateExp <= max) {
-      return { score: 100, status: 'MEETS', detail: `${candidateExp} years — within range (${min}-${max})` };
+    if (expUsed >= min && expUsed <= max) {
+      return { score: 100, status: 'MEETS', detail: `${expUsed} years (${usedLabel}) — within range (${min}-${max})`, usedForScoring: expUsed, usedLabel };
     }
 
     // Below minimum
-    if (candidateExp < min) {
-      const gap = min - candidateExp;
-      if (gap <= 1)  return { score: 70, status: 'BELOW', detail: `${candidateExp} years — ${gap} year(s) below min` };
-      if (gap <= 3)  return { score: 40, status: 'BELOW', detail: `${candidateExp} years — ${gap} year(s) below min` };
-                     return { score: 20, status: 'BELOW', detail: `${candidateExp} years — significant gap (${gap} years below min)` };
+    if (expUsed < min) {
+      const gap = min - expUsed;
+      if (gap <= 1)  return { score: 70, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — ${gap} year(s) below min`, usedForScoring: expUsed, usedLabel };
+      if (gap <= 3)  return { score: 40, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — ${gap} year(s) below min`, usedForScoring: expUsed, usedLabel };
+                     return { score: 20, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — significant gap (${gap} years below min)`, usedForScoring: expUsed, usedLabel };
     }
 
     // Above maximum (overqualified)
-    const excess = candidateExp - max;
-    if (excess <= 2) return { score: 70, status: 'EXCEEDS', detail: `${candidateExp} years — ${excess} year(s) above max` };
-    if (excess <= 4) return { score: 50, status: 'EXCEEDS', detail: `${candidateExp} years — ${excess} years above max, moderately overqualified` };
-                     return { score: 30, status: 'EXCEEDS', detail: `${candidateExp} years — overqualified by ${excess} years` };
+    const excess = expUsed - max;
+    if (excess <= 2) return { score: 70, status: 'EXCEEDS', detail: `${expUsed} years (${usedLabel}) — ${excess} year(s) above max`, usedForScoring: expUsed, usedLabel };
+    if (excess <= 4) return { score: 50, status: 'EXCEEDS', detail: `${expUsed} years (${usedLabel}) — ${excess} years above max, moderately overqualified`, usedForScoring: expUsed, usedLabel };
+                     return { score: 30, status: 'EXCEEDS', detail: `${expUsed} years (${usedLabel}) — overqualified by ${excess} years`, usedForScoring: expUsed, usedLabel };
   }
 
 
@@ -240,20 +274,25 @@ class CandidateScoringService {
       return { score: 50, status: 'UNKNOWN', detail: 'Salary data not available', deltaPercent: 0, withinBudget: false };
     }
 
-    const min = jobSalary.min || 0;
-    const max = jobSalary.max;
-    const deltaPercent = max > 0 ? Math.round(((expected / max) - 1) * 100) : 0;
+    // Normalize both values to LPA (e.g. 12 instead of 1200000)
+    let normExpected = expected;
+    if (normExpected >= 100000) normExpected = normExpected / 100000;
 
-    if (expected <= max) {
+    let normMax = jobSalary.max;
+    if (normMax >= 100000) normMax = normMax / 100000;
+
+    const deltaPercent = normMax > 0 ? Math.round(((normExpected / normMax) - 1) * 100) : 0;
+
+    if (normExpected <= normMax) {
       return { score: 100, status: 'WITHIN', detail: 'Within budget', deltaPercent, withinBudget: true };
     }
-    if (expected <= max * 1.10) {
+    if (normExpected <= normMax * 1.10) {
       return { score: 80, status: 'SLIGHTLY_OVER', detail: `${deltaPercent}% above — may be negotiable`, deltaPercent, withinBudget: false };
     }
-    if (expected <= max * 1.20) {
+    if (normExpected <= normMax * 1.20) {
       return { score: 60, status: 'OVER', detail: `${deltaPercent}% above budget`, deltaPercent, withinBudget: false };
     }
-    if (expected <= max * 1.30) {
+    if (normExpected <= normMax * 1.30) {
       return { score: 40, status: 'OVER', detail: `${deltaPercent}% above budget`, deltaPercent, withinBudget: false };
     }
     return { score: 0, status: 'OVER', detail: `${deltaPercent}% above — unlikely to fit`, deltaPercent, withinBudget: false };

@@ -2651,7 +2651,7 @@ exports.getCandidateDetail = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
       .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
-      .populate({ path: 'job', select: 'title uniqueId company assignedTo', populate: { path: 'assignedTo', select: 'email role' } })
+      .populate({ path: 'job', select: 'title uniqueId company education assignedTo', populate: { path: 'assignedTo', select: 'email role' } })
       .populate('company', 'companyName uniqueId')
       .populate('statusHistory.changedBy', 'email role')
       .populate('notes.addedBy', 'email role');

@@ -84,12 +84,26 @@ const partnerCandidateSchema = new mongoose.Schema({
   currentSalary: {
     type: Number,
     required: [true, 'Current salary is required'],
-    min: 0
+    min: 0,
+    set: function(val) {
+      if (val == null || val === '') return val;
+      const num = Number(val);
+      if (isNaN(num)) return val;
+      if (num >= 100000) return Number((num / 100000).toFixed(2));
+      return val;
+    }
   },
   expectedSalary: {
     type: Number,
     required: [true, 'Expected salary is required'],
-    min: 0
+    min: 0,
+    set: function(val) {
+      if (val == null || val === '') return val;
+      const num = Number(val);
+      if (isNaN(num)) return val;
+      if (num >= 100000) return Number((num / 100000).toFixed(2));
+      return val;
+    }
   },
   writeup: {
     type: String,

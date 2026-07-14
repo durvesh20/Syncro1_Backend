@@ -406,11 +406,14 @@ const candidateSchema = new mongoose.Schema({
       experience: {
         score: Number,
         weight: Number,
+        totalExperience: String,        // (from form — partner-reported)
+        relevantExperience: String,     // (from form — partner-reported)
         actual: String,
         required: String,
         status: String,
         detail: String,
-        relevancePercent: Number
+        relevancePercent: Number,
+        usedForScoringLabel: String     // "relevant" or "total"
       },
       domain: {
         score: Number,
