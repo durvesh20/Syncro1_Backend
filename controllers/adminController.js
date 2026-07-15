@@ -4,6 +4,7 @@ const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
 const Job = require('../models/Job');
 const Candidate = require('../models/Candidate');
+const { parseJobPosition } = require('../services/jobPositionParser');
 const { PERMISSIONS } = require('../utils/permissions');
 const emailService = require('../services/emailService');
 const auditService = require('../services/auditService');
@@ -1560,6 +1561,11 @@ exports.approveJob = async (req, res) => {
     const companyDoc = await Company.findById(job.company);
     const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
 
+    // Trigger asynchronous JD parsing for JobPosition structure
+    parseJobPosition(job).catch(err => {
+      console.error(`[JD-PARSER] Asynchronous parsing error on job approval: ${err.message}`);
+    });
+
     await auditService.log({
       actor: req.user._id,
       actorRole: req.user.role,
@@ -1932,6 +1938,11 @@ exports.approveEditRequest = async (req, res) => {
       notes || 'Edit request approved'
     );
     await job.save();
+
+    // Trigger asynchronous JD parsing for JobPosition structure
+    parseJobPosition(job).catch(err => {
+      console.error(`[JD-PARSER] Asynchronous parsing error on edit approval: ${err.message}`);
+    });
 
     editRequest.status = 'APPROVED';
     editRequest.reviewedBy = req.user._id;
@@ -2481,6 +2492,9 @@ exports.getJobDetail = async (req, res) => {
       delete jobData.changeHistory;
     }
 
+    const JobPosition = require('../models/JobPosition');
+    const jobPosition = await JobPosition.findOne({ jobId: job._id });
+
     res.json({
       success: true,
       data: {
@@ -2637,7 +2651,7 @@ exports.getCandidateDetail = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
       .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
-      .populate({ path: 'job', select: 'title uniqueId company assignedTo', populate: { path: 'assignedTo', select: 'email role' } })
+      .populate({ path: 'job', select: 'title uniqueId company education assignedTo', populate: { path: 'assignedTo', select: 'email role' } })
       .populate('company', 'companyName uniqueId')
       .populate('statusHistory.changedBy', 'email role')
       .populate('notes.addedBy', 'email role');

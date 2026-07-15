@@ -7,7 +7,6 @@ const Company = require('../models/Company');
 const duplicateDetection = require('../services/duplicateDetectionService');
 const notificationEngine = require('../services/notificationEngine');
 const jobAccessService = require('../services/jobAccessService');
-const candidateScoringService = require('../services/candidateScoringService');
 const JobInterest = require('../models/JobInterest');
 const InterviewSlot = require('../models/InterviewSlot');
 const candidateQueueService = require('../services/candidateQueueService');
@@ -317,7 +316,7 @@ exports.updateCompliance = async (req, res) => {
       'candidateConsentPolicy',
       'nonCircumventionClause',
       'commissionPayoutTerms',
-      'replacementBackoutLiability'
+      'replacementBackoutLiability'   
     ];
 
     const allAccepted = requiredClauses.every(
@@ -1088,10 +1087,13 @@ exports.getJobDetails = async (req, res) => {
     const jobData = job.toObject();
     delete jobData.company;
 
+    const JobPosition = require('../models/JobPosition');
+    const jobPosition = await JobPosition.findOne({ jobId: job._id });
+
     res.json({
       success: true,
       data: {
-        job: { ...jobData, company: safeCompanyInfo },
+        job: { ...jobData, company: safeCompanyInfo, jobPosition },
         shareableLink: job.shareableLink
       }
     });
@@ -1208,7 +1210,8 @@ exports.submitCandidate = async (req, res) => {
       writeup,
       profile,
       forceSubmit,
-      lastWorkingDay
+      lastWorkingDay,
+      willingToRelocate
     } = req.body;
 
     // Resume comes from multer (uploaded to Cloudinary before this runs)
@@ -1273,7 +1276,7 @@ exports.submitCandidate = async (req, res) => {
         success: false,
         message: 'Invalid file type. Only PDF, DOC and DOCX are allowed.',
         receivedType: resumeFile.mimetype
-      });
+      }); 
     }
 
     // Validate file size (max 10MB)
@@ -1332,8 +1335,8 @@ exports.submitCandidate = async (req, res) => {
     }
 
     // ✅ FIX: Salary validation — parse from string properly
-    const parsedCurrentSalary = parseInt(String(currentSalary).trim().replace(/,/g, ''));
-    const parsedExpectedSalary = parseInt(String(expectedSalary).trim().replace(/,/g, ''));
+    const parsedCurrentSalary = parseFloat(String(currentSalary).trim().replace(/,/g, ''));
+    const parsedExpectedSalary = parseFloat(String(expectedSalary).trim().replace(/,/g, ''));
 
     if (isNaN(parsedCurrentSalary) || parsedCurrentSalary < 0) {
       return res.status(400).json({
@@ -1457,8 +1460,11 @@ exports.submitCandidate = async (req, res) => {
         currentDesignation: parsedProfile?.currentDesignation || '',
         skills: parsedProfile?.skills || [],
         education: parsedProfile?.education || [],
+        experience: parsedProfile?.experience || [],
+        totalExperienceMonths: parsedProfile?.totalExperienceMonths || null,
+        experienceYears: parsedProfile?.experienceYears || null,
         preferredLocations: parsedProfile?.preferredLocations || [],
-        canRelocate: parsedProfile?.canRelocate || false,
+        willingToRelocate: willingToRelocate === 'true' || willingToRelocate === true || parsedProfile?.willingToRelocate || parsedProfile?.canRelocate || false,
         linkedinProfile: parsedProfile?.linkedinProfile || '',
         portfolioUrl: parsedProfile?.portfolioUrl || ''
       },
@@ -2716,7 +2722,8 @@ exports.updateSubmission = async (req, res) => {
     if (!submission.profile) submission.profile = {};
     if (location !== undefined) submission.profile.location = location.trim();
     if (willingToRelocate !== undefined && willingToRelocate !== null && willingToRelocate !== '') {
-      submission.profile.canRelocate = willingToRelocate === 'true' || willingToRelocate === true;
+      const val = willingToRelocate === 'true' || willingToRelocate === true;
+      submission.profile.willingToRelocate = val;
     }
     if (totalExperience !== undefined && totalExperience !== '') submission.profile.totalExperience = Number(totalExperience);
     if (relevantExperience !== undefined && relevantExperience !== '') submission.profile.relevantExperience = Number(relevantExperience);

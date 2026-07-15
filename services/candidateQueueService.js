@@ -68,6 +68,7 @@ class CandidateQueueService {
                 console.log(`[QUEUE] 🤖 Starting AI analysis for: ${candidate.firstName} ${candidate.lastName}`);
 
                 const formData = {
+                    candidateId: candidate._id,
                     firstName: candidate.firstName,
                     lastName: candidate.lastName,
                     email: candidate.email,
@@ -78,7 +79,13 @@ class CandidateQueueService {
                     noticePeriod: candidate.profile?.noticePeriod,
                     currentSalary: candidate.profile?.currentSalary,
                     expectedSalary: candidate.profile?.expectedSalary,
-                    writeup: candidate.profile?.writeup
+                    writeup: candidate.profile?.writeup,
+                    skills: candidate.profile?.skills || [],
+                    education: candidate.profile?.education || [],
+                    certifications: candidate.profile?.certifications || [],
+                    languages: candidate.profile?.languages || [],
+                    // relocation willingness
+                    willingToRelocate: candidate.profile?.willingToRelocate ?? null,
                 };
 
                 // ✅ Convert job to plain object
@@ -110,12 +117,21 @@ class CandidateQueueService {
                             weight: 0.30,
                             matchedRequired: ranking.mustHaveSkillsMatched || [],
                             missingRequired: ranking.mustHaveSkillsMissing || [],
-                            matchedPreferred: ranking.preferredSkillsMatched || [],
+                            matchedPreferred: ranking.shouldHaveSkillsMatched || ranking.preferredSkillsMatched || [],
+                            missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
                             coveragePercent: scoring.skillCoveragePercent || 0
                         },
                         experience: {
                             score: scoring.experienceMatch || 0,
                             weight: 0.20,
+                            totalExperience: candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} years` : 'Not provided',
+                            relevantExperience: candidate.profile?.relevantExperience != null ? `${candidate.profile.relevantExperience} years` : 'Not provided',
+                            actualExperienceFromResume: (() => {
+                                const a = fullAnalysis.candidateProfile || {};
+                                if (a.actualTotalExperience) return a.actualTotalExperience;
+                                if (a.actualTotalMonths != null) return `${Math.round((a.actualTotalMonths / 12) * 10) / 10} years`;
+                                return 'Not provided';
+                            })(),
                             actual: screening.experienceRange?.actual || '',
                             required: screening.experienceRange?.required || '',
                             status: screening.experienceRange?.status || '',
@@ -124,14 +140,14 @@ class CandidateQueueService {
                         },
                         domain: {
                             score: scoring.domainMatch || 0,
-                            weight: 0.15,
+                            weight: 0.05,
                             jobDomain: screening.domainMatch?.jobDomain || '',
                             candidateDomain: screening.domainMatch?.candidateDomain || '',
                             status: screening.domainMatch?.status || ''
                         },
                         education: {
                             score: scoring.educationMatch || 0,
-                            weight: 0.10,
+                            weight: 0.05,
                             minimumRequired: screening.educationMatch?.minimumRequired || '',
                             candidateEducation: screening.educationMatch?.candidateEducation || '',
                             status: screening.educationMatch?.status || ''
@@ -147,7 +163,7 @@ class CandidateQueueService {
                         },
                         location: {
                             score: scoring.locationMatch || 0,
-                            weight: 0.05,
+                            weight: 0.10,
                             jobLocation: screening.locationFit?.jobLocation || '',
                             candidateLocation: screening.locationFit?.candidateLocation || '',
                             status: screening.locationFit?.status || '',
@@ -155,7 +171,7 @@ class CandidateQueueService {
                         },
                         noticePeriod: {
                             score: scoring.noticePeriodFit || 0,
-                            weight: 0.05,
+                            weight: 0.10,
                             required: screening.noticePeriod?.required || '',
                             actual: screening.noticePeriod?.actual || '',
                             days: ranking.noticePeriodDays || 0,
@@ -163,8 +179,10 @@ class CandidateQueueService {
                         },
                         stability: {
                             score: scoring.stabilityScore || 0,
-                            weight: 0.05,
+                            weight: 0.10,
                             averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
+                            last5YearAverageTenureYears: screening.stabilityAnalysis?.last5YearAverageTenureYears || screening.stabilityAnalysis?.averageTenureYears || 0,
+                            totalAverageTenureYears: screening.stabilityAnalysis?.totalAverageTenureYears || 0,
                             isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
                             risk: screening.stabilityAnalysis?.stabilityRisk || '',
                             detail: screening.stabilityAnalysis?.detail || ''
@@ -261,9 +279,14 @@ class CandidateQueueService {
                 currentDesignation: parsedData.profile?.currentDesignation || candidate.profile?.currentDesignation,
                 skills: parsedData.profile?.skills?.length > 0 ? parsedData.profile.skills : candidate.profile?.skills || [],
                 education: parsedData.profile?.education?.length > 0 ? parsedData.profile.education : candidate.profile?.education || [],
+                experience: parsedData.profile?.experience?.length > 0 ? parsedData.profile.experience : candidate.profile?.experience || [],
+                // Preserve AI-calculated experience months for scoring
+                totalExperienceMonths: parsedData.profile?.totalExperienceMonths || candidate.profile?.totalExperienceMonths || null,
+                experienceYears: parsedData.profile?.experienceYears || candidate.profile?.experienceYears || null,
                 languages: parsedData.profile?.languages?.length > 0 ? parsedData.profile.languages : candidate.profile?.languages || [],
                 certifications: parsedData.profile?.certifications?.length > 0 ? parsedData.profile.certifications : candidate.profile?.certifications || [],
-                location: parsedData.profile?.currentLocation || candidate.profile?.location
+                location: candidate.profile?.location,
+                currentLocation: parsedData.profile?.currentLocation || candidate.profile?.currentLocation || candidate.profile?.location
             };
         }
 

@@ -117,12 +117,23 @@ const candidateSchema = new mongoose.Schema({
     currentDesignation: String,
     currentLocation: String,        // kept for backward compatibility
     preferredLocations: [String],
-    canRelocate: Boolean,
+    willingToRelocate: Boolean,
     education: [{
       degree: String,
       institution: String,
       year: Number
     }],
+    experience: [{
+      company: String,            // company / employer name
+      title: String,              // designation / role
+      startDate: String,          // normalized "YYYY-MM"
+      endDate: String,            // normalized "YYYY-MM" or null for ongoing
+      isCurrent: Boolean,         // true when role is ongoing / "Present"
+      durationMonths: Number      // inclusive months for this role
+    }],
+    // Calculated fields (not input)
+    totalExperienceMonths: Number,  // derived from merged experience ranges
+    experienceYears: Number,       // rounded years from resume parsing
     skills: [String],
     linkedinProfile: String,
     portfolioUrl: String
@@ -235,6 +246,7 @@ const candidateSchema = new mongoose.Schema({
       enum: ['Remote', 'On-site', 'Hybrid']
     },
     workLocation: String,
+    officeAddress: String,
     offerLetterUrl: String,
     negotiationStartedAt: Date,
     isOfferSent: { type: Boolean, default: false },
@@ -400,16 +412,20 @@ const candidateSchema = new mongoose.Schema({
         matchedRequired: [String],
         missingRequired: [String],
         matchedPreferred: [String],
+        missingPreferred: [String],
         coveragePercent: Number
       },
       experience: {
         score: Number,
         weight: Number,
+        totalExperience: String,        // (from form — partner-reported)
+        relevantExperience: String,     // (from form — partner-reported)
         actual: String,
         required: String,
         status: String,
         detail: String,
-        relevancePercent: Number
+        relevancePercent: Number,
+        usedForScoringLabel: String     // "relevant" or "total"
       },
       domain: {
         score: Number,
@@ -454,6 +470,8 @@ const candidateSchema = new mongoose.Schema({
         score: Number,
         weight: Number,
         averageTenureYears: Number,
+        last5YearAverageTenureYears: Number,
+        totalAverageTenureYears: Number,
         isJobHopper: Boolean,
         risk: String,
         detail: String
@@ -495,6 +513,14 @@ const candidateSchema = new mongoose.Schema({
           degree: String,
           institution: String,
           year: Number
+        }],
+        experience: [{
+          company: String,
+          title: String,
+          startDate: String,
+          endDate: String,
+          isCurrent: Boolean,
+          durationMonths: Number
         }],
         languages: [String],
         certifications: [String]
