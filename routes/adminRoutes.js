@@ -562,7 +562,7 @@ router.get(
       const candidate = await Candidate.findById(req.params.id)
         .populate({
           path: 'job',
-          select: 'title category location experienceLevel salary skills education assignedTo',
+          select: 'title uniqueId category location experienceLevel experienceRange salary skills education assignedTo',
           populate: { path: 'assignedTo', select: 'email role' }
         })
         .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')
@@ -621,68 +621,7 @@ router.get(
   }
 );
 
-// @desc    Trigger/Generate market intelligence for a job position manually
-// @route   POST /api/admin/job-positions/:id/market-intel
-router.post(
-  '/job-positions/:id/market-intel',
-  checkPermission(PERMISSIONS.VIEW_ALL_CANDIDATES),
-  async (req, res) => {
-    try {
-      const JobPosition = require('../models/JobPosition');
-      const { triggerMarketIntel } = require('../services/marketIntelService');
 
-      let jobPosition = await JobPosition.findById(req.params.id);
-      if (!jobPosition) {
-        // Fallback 1: try finding by jobId
-        jobPosition = await JobPosition.findOne({ jobId: req.params.id });
-      }
-
-      if (!jobPosition) {
-        // Fallback 2: try parsing it from Job model
-        const Job = require('../models/Job');
-        const jobDoc = await Job.findById(req.params.id);
-        if (jobDoc) {
-          const { getOrParseJobPosition } = require('../services/jobPositionParser');
-          jobPosition = await getOrParseJobPosition(jobDoc);
-        }
-      }
-
-      if (!jobPosition) {
-        return res.status(404).json({
-          success: false,
-          message: 'Job position not found or could not be initialized/parsed'
-        });
-      }
-
-      console.log(`[ADMIN-MANUAL-INTEL] Triggering manual market intel for JobPosition ${jobPosition._id}`);
-      
-      const updated = await triggerMarketIntel(jobPosition._id, {
-        title: jobPosition.title,
-        category: jobPosition.category,
-        subCategory: jobPosition.subCategory
-      });
-
-      if (!updated) {
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to generate market intelligence. Check server logs.'
-        });
-      }
-
-      res.json({
-        success: true,
-        message: 'Market intelligence generated successfully',
-        data: updated
-      });
-    } catch (err) {
-      console.error('[ADMIN-MANUAL-INTEL] Error:', err.message);
-      res.status(500).json({
-        success: false,
-        message: err.message
-      });
-    }
-  }
-);
 
 // @desc    Manually re-run AI parsing/scoring for a candidate
 // @route   POST /api/admin/candidates/:id/re-score

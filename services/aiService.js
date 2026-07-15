@@ -1,4 +1,3 @@
-// backend/services/aiService.js
 const { getOpenAI, getModel } = require('../config/ai');
 const axios = require('axios');
 const fs = require('fs');
@@ -19,27 +18,27 @@ const MAX_CACHE_ENTRIES = 500; // hard memory bound: evict oldest when full
 // insertion order) so the cache can NEVER grow unbounded and exhaust memory.
 // Each entry holds the full AI analysis (~10–50KB), so 500 ≈ ≤12MB max.
 function _cacheSet(key, value) {
-  if (_scoreCache.size >= MAX_CACHE_ENTRIES) {
-    const oldest = _scoreCache.keys().next().value;
-    if (oldest !== undefined) _scoreCache.delete(oldest);
-  }
-  _scoreCache.set(key, value);
+    if (_scoreCache.size >= MAX_CACHE_ENTRIES) {
+        const oldest = _scoreCache.keys().next().value;
+        if (oldest !== undefined) _scoreCache.delete(oldest);
+    }
+    _scoreCache.set(key, value);
 }
 
 // Periodic sweep: drop expired entries so the Map doesn't accumulate dead
 // weight. .unref() so this timer never keeps the Node process alive on its own.
 const _cacheSweep = setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of _scoreCache) {
-    if (now - v.ts > CACHE_TTL_MS) _scoreCache.delete(k);
-  }
+    const now = Date.now();
+    for (const [k, v] of _scoreCache) {
+        if (now - v.ts > CACHE_TTL_MS) _scoreCache.delete(k);
+    }
 }, 30 * 60 * 1000);
 if (_cacheSweep && typeof _cacheSweep.unref === 'function') _cacheSweep.unref();
 
 function _scoreCacheKey(resumeUrl, jobId, formSkills) {
-  return crypto.createHash('sha256')
-    .update(resumeUrl + '|' + jobId + '|' + JSON.stringify(formSkills || []) + '|v' + WEIGHTS_VERSION)
-    .digest('hex');
+    return crypto.createHash('sha256')
+        .update(resumeUrl + '|' + jobId + '|' + JSON.stringify(formSkills || []) + '|v' + WEIGHTS_VERSION)
+        .digest('hex');
 }
 
 // ── Deterministic skill-sweep precompiled term list (Change A perf + safety) ──
@@ -50,18 +49,18 @@ function _scoreCacheKey(resumeUrl, jobId, formSkills) {
 // "golang") are still matched when the resume contains the full phrase.
 let _sweepTerms = null;
 function _buildSweepTerms() {
-  const raw = [];
-  for (const group of ALIAS_GROUPS) {
-    if (Array.isArray(group)) raw.push(...group);
-    else if (typeof group === 'string') raw.push(group);
-  }
-  _sweepTerms = raw
-    .map((t) => String(t).trim().toLowerCase())
-    .filter((tl) => tl.replace(/[^a-z0-9]/g, '').length >= 2 && !_ambiguousTokens.has(tl))
-    .map((tl) => {
-      const escaped = tl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return { term: tl, re: new RegExp('(^|[^a-z0-9])' + escaped + '($|[^a-z0-9])', 'i') };
-    });
+    const raw = [];
+    for (const group of ALIAS_GROUPS) {
+        if (Array.isArray(group)) raw.push(...group);
+        else if (typeof group === 'string') raw.push(group);
+    }
+    _sweepTerms = raw
+        .map((t) => String(t).trim().toLowerCase())
+        .filter((tl) => tl.replace(/[^a-z0-9]/g, '').length >= 2 && !_ambiguousTokens.has(tl))
+        .map((tl) => {
+            const escaped = tl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return { term: tl, re: new RegExp('(^|[^a-z0-9])' + escaped + '($|[^a-z0-9])', 'i') };
+        });
 }
 
 class AIService {
@@ -140,7 +139,41 @@ class AIService {
             // ── Stage 6: deterministic skill overwrite (skillMatcher) ─────
             // Pass resolvedSkills (same source used to build the prompt) so the
             // corrector always reads from the same skill tier arrays the AI saw.
-            aiResult = this._applyDeterministicSkillMatch(aiResult, resolvedSkills);
+            const expRange = jobDescription?.experienceRange || {};
+
+            // ── Stage 6b: deterministic experience recompute ─────────────
+            // Overwrite the LLM's hand-summed totals with an exact calculation
+            // from jobHistory: overlapping/concurrent roles merged (counted once),
+            // gaps excluded, inclusive +1 month rule, ongoing roles → today.
+            // Runs BEFORE _applyDeterministicSkillMatch so its _scoreExperience
+            // fallback reads the corrected actualTotalMonths.
+            try {
+                const { calculateFromResume, buildExperienceEntries } = require('./experienceCalculator');
+                aiResult.candidateProfile = aiResult.candidateProfile || {};
+                const calc = calculateFromResume(aiResult.candidateProfile.jobHistory || [], new Date());
+                if (calc.roles.length > 0) {
+                    aiResult.candidateProfile.actualTotalMonths = calc.totalMonths;
+                    aiResult.candidateProfile.actualTotalExperience = calc.totalExperience;
+                    aiResult.candidateProfile.actualExperienceBreakdown = calc.roles;
+                    // ✅ Structured experience records for storage in candidate.profile
+                    aiResult.candidateProfile.experience = buildExperienceEntries(aiResult.candidateProfile.jobHistory || [], new Date());
+                    // ✅ Update jobHistory with corrected durationMonths so logs and storage show accurate values
+                    if (Array.isArray(aiResult.candidateProfile.jobHistory)) {
+                        aiResult.candidateProfile.jobHistory.forEach((job, idx) => {
+                            const corrected = calc.roles[idx];
+                            if (corrected) job.durationMonths = corrected.duration_months;
+                        });
+                    }
+                    if (aiResult.screening?.experienceRange) {
+                        aiResult.screening.experienceRange.actual = `${calc.yearsDecimal} years`;
+                    }
+                    console.log(`[AI] Deterministic experience: ${calc.totalExperience} (${calc.totalMonths}mo) from ${calc.roles.length} role(s)`);
+                }
+            } catch (expErr) {
+                console.error('[AI] Deterministic experience recompute failed (non-fatal):', expErr.message);
+            }
+
+            aiResult = this._applyDeterministicSkillMatch(aiResult, resolvedSkills, expRange, jobDescription?.salary, candidateFormData, jobDescription);
 
             // ── Stage 7: structure result ─────────────────────────────────
             const structuredData = this._structureAIResult(aiResult, candidateFormData);
@@ -232,7 +265,7 @@ class AIService {
                 console.log(`[AI] Using structured JobPosition for job ${rawJobObj._id}`);
                 const pr = jobPosition.parsedRequirements;
                 const resolvedSkills = {
-                    mustHave:   Array.isArray(pr.skills?.mustHave)   ? pr.skills.mustHave   : [],
+                    mustHave: Array.isArray(pr.skills?.mustHave) ? pr.skills.mustHave : [],
                     shouldHave: Array.isArray(pr.skills?.shouldHave) ? pr.skills.shouldHave : [],
                     niceToHave: Array.isArray(pr.skills?.niceToHave) ? pr.skills.niceToHave : [],
                 };
@@ -247,8 +280,8 @@ class AIService {
 
         // Fallback: read skills directly from the job document
         const resolvedSkills = {
-            mustHave:   rawJobObj.skills?.required   || rawJobObj.skills?.mustHave   || [],
-            shouldHave: rawJobObj.skills?.preferred  || rawJobObj.skills?.shouldHave || [],
+            mustHave: rawJobObj.skills?.required || rawJobObj.skills?.mustHave || [],
+            shouldHave: rawJobObj.skills?.preferred || rawJobObj.skills?.shouldHave || [],
             niceToHave: rawJobObj.skills?.niceToHave || [],
         };
 
@@ -310,7 +343,7 @@ Be deterministic, consistent and evidence-based in all scoring.`
                 rawResponse: responseText,
                 success: false,
                 error: 'truncated_response'
-            }).catch(() => {});
+            }).catch(() => { });
             throw new Error('AI response truncated after retry — falling back');
         }
 
@@ -369,65 +402,208 @@ Be deterministic, consistent and evidence-based in all scoring.`
         return Array.from(matched);
     }
 
-    _applyDeterministicSkillMatch(aiResult, resolvedSkills) {
+    /**
+ * Score a candidate's experience (years) against a job's required range.
+ * Mirror of candidateScoringService._scoreExperience — kept here so the
+ * deterministic overwrite can recompute experienceMatch without a circular import.
+ * @param {number} expUsed - years to score (relevantExperience if present, else actual)
+ * @param {number} min - job required minimum
+ * @param {number} max - job required maximum
+ * @returns {number} 0-100
+ */
+    _scoreExperience(expUsed, min, max) {
+        if (expUsed >= min && expUsed <= max) return 100;
+        if (expUsed < min) {
+            const gap = min - expUsed;
+            if (gap <= 1) return 70;
+            if (gap <= 3) return 40;
+            return 20;
+        }
+        const excess = expUsed - max;
+        if (excess <= 2) return 70;
+        if (excess <= 4) return 50;
+        return 30;
+    }
+
+    _applyDeterministicSkillMatch(aiResult, resolvedSkills, experienceRange, jobSalary, candidateFormData, jobDescription) {
         try {
             const candidateSkills = aiResult.candidateProfile?.skills || [];
-            if (candidateSkills.length === 0) return aiResult;
-
             const jdSkills = resolvedSkills || {};
             const hasJdSkills = (jdSkills.mustHave?.length || 0) > 0 || (jdSkills.shouldHave?.length || 0) > 0;
-            if (!hasJdSkills) {
-                console.warn('[AI] No JD skills found in either parsedRequirements or raw job doc — deterministic skill correction skipped, AI output unverified');
-                return aiResult;
+
+            let coverage = 0;
+            let skillsMatch = 0;
+            let mustTotal = jdSkills.mustHave?.length || 0;
+            let shouldTotal = jdSkills.shouldHave?.length || 0;
+            let niceTotal = jdSkills.niceToHave?.length || 0;
+
+            let mustHaveMatched = [];
+            let mustHaveMissing = [];
+            let shouldHaveMatched = [];
+
+            if (candidateSkills.length > 0 && hasJdSkills) {
+                const { matchSkills } = require('./skillMatcher');
+                // ── Step A: classify skills deterministically ─────────────────
+                const result = matchSkills(candidateSkills, jdSkills);
+                coverage = result.mustHaveCoveragePercent; // 0–100
+
+                mustHaveMatched = result.mustHaveMatched;
+                mustHaveMissing = result.mustHaveMissing;
+                shouldHaveMatched = result.shouldHaveMatched;
+
+                console.log('[AI] skillMatcher deterministic overwrite:');
+                console.log(`   mustHaveMatched: ${result.mustHaveMatched.length}/${jdSkills.mustHave.length}`);
+                console.log(`   mustHaveMissing: ${result.mustHaveMissing.length}`);
+                console.log(`   shouldHaveMatched: ${result.shouldHaveMatched.length}`);
+                console.log(`   coverage: ${coverage}%`);
+
+                // ── Step B: overwrite rankingSignals classification arrays ─────
+                if (!aiResult.rankingSignals) aiResult.rankingSignals = {};
+                aiResult.rankingSignals.mustHaveSkillsMatched = result.mustHaveMatched;
+                aiResult.rankingSignals.mustHaveSkillsMissing = result.mustHaveMissing;
+                aiResult.rankingSignals.mustHaveSkillsMatchedCount = result.mustHaveMatched.length;
+                aiResult.rankingSignals.mustHaveSkillsTotal = jdSkills.mustHave.length;
+                aiResult.rankingSignals.shouldHaveSkillsMatched = result.shouldHaveMatched;
+                aiResult.rankingSignals.shouldHaveSkillsMissing = result.shouldHaveMissing;
+                aiResult.rankingSignals.niceToHaveSkillsMatched = result.niceToHaveMatched;
+
+                // ── Step C: recompute skillsMatch (same formula as scoring-prompt.txt) ──
+                skillsMatch = (result.mustHaveMatched.length / Math.max(mustTotal, 1) * 70)
+                    + (result.shouldHaveMatched.length / Math.max(shouldTotal, 1) * 25)
+                    + (result.niceToHaveMatched.length / Math.max(niceTotal, 1) * 5);
+                if (coverage < 70) skillsMatch = Math.min(skillsMatch, 50);
+                if (coverage < 30) skillsMatch = Math.min(skillsMatch, 15);
+                skillsMatch = Math.round(skillsMatch);
+            } else {
+                skillsMatch = aiResult.scoring?.skillsMatch || 0;
+                coverage = aiResult.scoring?.skillCoveragePercent || 0;
+
+                if (aiResult.rankingSignals) {
+                    mustHaveMatched = aiResult.rankingSignals.mustHaveSkillsMatched || [];
+                    mustHaveMissing = aiResult.rankingSignals.mustHaveSkillsMissing || [];
+                    shouldHaveMatched = aiResult.rankingSignals.shouldHaveSkillsMatched || [];
+                }
             }
 
-            // ── Step A: classify skills deterministically ─────────────────
-            const result = matchSkills(candidateSkills, jdSkills);
-            const coverage = result.mustHaveCoveragePercent; // 0–100
-
-            console.log('[AI] skillMatcher deterministic overwrite:');
-            console.log(`   mustHaveMatched: ${result.mustHaveMatched.length}/${jdSkills.mustHave.length}`);
-            console.log(`   mustHaveMissing: ${result.mustHaveMissing.length}`);
-            console.log(`   shouldHaveMatched: ${result.shouldHaveMatched.length}`);
-            console.log(`   coverage: ${coverage}%`);
-
-            // ── Step B: overwrite rankingSignals classification arrays ─────
-            if (!aiResult.rankingSignals) aiResult.rankingSignals = {};
-            aiResult.rankingSignals.mustHaveSkillsMatched      = result.mustHaveMatched;
-            aiResult.rankingSignals.mustHaveSkillsMissing      = result.mustHaveMissing;
-            aiResult.rankingSignals.mustHaveSkillsMatchedCount = result.mustHaveMatched.length;
-            aiResult.rankingSignals.mustHaveSkillsTotal        = jdSkills.mustHave.length;
-            aiResult.rankingSignals.shouldHaveSkillsMatched    = result.shouldHaveMatched;
-            aiResult.rankingSignals.shouldHaveSkillsMissing    = result.shouldHaveMissing;
-            aiResult.rankingSignals.niceToHaveSkillsMatched    = result.niceToHaveMatched;
-
-            // ── Step C: recompute skillsMatch (same formula as scoring-prompt.txt) ──
-            const mustTotal   = jdSkills.mustHave.length;
-            const shouldTotal = jdSkills.shouldHave.length;
-            const niceTotal   = jdSkills.niceToHave?.length || 0;
-
-            let skillsMatch = (result.mustHaveMatched.length  / Math.max(mustTotal, 1)   * 70)
-                            + (result.shouldHaveMatched.length / Math.max(shouldTotal, 1) * 25)
-                            + (result.niceToHaveMatched.length / Math.max(niceTotal, 1)   * 5);
-            if (coverage < 70) skillsMatch = Math.min(skillsMatch, 50);
-            if (coverage < 30) skillsMatch = Math.min(skillsMatch, 15);
-            skillsMatch = Math.round(skillsMatch);
-
-            // ── Step D: recompute weightedScore (trust AI for other 7 components) ──
+            // ── Step D: recompute weightedScore (trust AI for other 6 components, overwrite exp & salary) ──
             if (!aiResult.scoring) aiResult.scoring = {};
             const s = aiResult.scoring;
-            aiResult.scoring.skillsMatch          = skillsMatch;
+
+            // ── Step D2: recompute experienceMatch deterministically ───────
+            // Use ONLY the resume-calculated actualTotalMonths matched against JD experience range.
+            const expRange = experienceRange || {};
+            const { min: expMin, max: expMax } = expRange;
+            let experienceMatch = s.experienceMatch || 0;
+            if (expMin != null && expMax != null) {
+                const actualYears = aiResult.candidateProfile?.actualTotalMonths
+                    ? Math.round((aiResult.candidateProfile.actualTotalMonths / 12) * 10) / 10
+                    : null;
+                if (actualYears != null && actualYears >= 0) {
+                    experienceMatch = this._scoreExperience(actualYears, expMin, expMax);
+                }
+            }
+            aiResult.scoring.experienceMatch = experienceMatch;
+
+            // ── Step D3: recompute salaryFit deterministically ─────────────
+            const expectedSal = candidateFormData?.expectedSalary || aiResult.candidateProfile?.expectedSalary;
+            if (expectedSal != null && jobSalary?.max) {
+                const salaryResult = this._scoreSalary(expectedSal, jobSalary);
+
+                aiResult.scoring.salaryFit = salaryResult.score;
+
+                if (!aiResult.screening) aiResult.screening = {};
+                aiResult.screening.salaryFit = {
+                    budget: jobSalary ? (jobSalary.min && jobSalary.max ? `${jobSalary.min} - ${jobSalary.max} LPA` : (jobSalary.max ? `<= ${jobSalary.max} LPA` : 'Not specified')) : 'Not specified',
+                    expected: expectedSal ? `${expectedSal} LPA` : 'Not provided',
+                    deltaPercent: salaryResult.deltaPercent,
+                    status: salaryResult.status
+                };
+
+                if (!aiResult.validation) aiResult.validation = {};
+                aiResult.validation.salaryStatus = salaryResult.status;
+                aiResult.validation.salaryDeltaPercent = salaryResult.deltaPercent;
+
+                if (!aiResult.rankingSignals) aiResult.rankingSignals = {};
+                aiResult.rankingSignals.salaryWithinBudget = salaryResult.withinBudget;
+            }
+            
+            // ── Step D4: recompute educationMatch deterministically ──────────
+            if (jobDescription) {
+                const candidateEdu = aiResult.candidateProfile?.education || [];
+                const eduResult = this._scoreEducation(candidateEdu, jobDescription);
+                
+                aiResult.scoring.educationMatch = eduResult.score;
+
+                if (!aiResult.screening) aiResult.screening = {};
+                let detailedRequired = 'Not specified';
+                if (jobDescription.education) {
+                    if (jobDescription.education.minimum) {
+                        detailedRequired = jobDescription.education.minimum;
+                    } else if (jobDescription.educationRequirement) {
+                        detailedRequired = jobDescription.educationRequirement;
+                    }
+                    
+                    if (Array.isArray(jobDescription.education.preferred) && jobDescription.education.preferred.length > 0) {
+                        const filteredPref = jobDescription.education.preferred.filter(p => p && p.trim() !== '');
+                        if (filteredPref.length > 0) {
+                            detailedRequired += ` (Preferred: ${filteredPref.join(', ')})`;
+                        }
+                    }
+                } else if (jobDescription.educationRequirement) {
+                    detailedRequired = jobDescription.educationRequirement;
+                }
+
+                aiResult.screening.educationMatch = {
+                    minimumRequired: detailedRequired,
+                    candidateEducation: eduResult.candidateEducation || 'Not provided',
+                    status: eduResult.status
+                };
+
+                if (!aiResult.validation) aiResult.validation = {};
+                aiResult.validation.educationStatus = eduResult.status;
+            }
+
+            // ── Step D5: recompute locationMatch deterministically ──────────
+            if (jobDescription) {
+                const candLoc = candidateFormData?.location || '';
+                const willingToRelocate = candidateFormData?.willingToRelocate !== undefined 
+                    ? candidateFormData.willingToRelocate 
+                    : aiResult.candidateProfile?.willingToRelocate;
+                const preferredLocations = candidateFormData?.preferredLocations || aiResult.candidateProfile?.preferredLocations || [];
+                
+                const locResult = this._scoreLocation(
+                    candLoc,
+                    preferredLocations,
+                    willingToRelocate,
+                    jobDescription.location
+                );
+                
+                aiResult.scoring.locationMatch = locResult.score;
+
+                if (!aiResult.screening) aiResult.screening = {};
+                aiResult.screening.locationFit = {
+                    jobLocation: jobDescription.location?.city ? (Array.isArray(jobDescription.location.city) ? jobDescription.location.city.join(', ') : jobDescription.location.city) : 'Not specified',
+                    candidateLocation: candLoc || 'Not specified',
+                    status: locResult.status,
+                    relocationWilling: !!willingToRelocate
+                };
+
+                if (!aiResult.validation) aiResult.validation = {};
+                aiResult.validation.locationMatch = locResult.status;
+            }
+
+            aiResult.scoring.skillsMatch = skillsMatch;
             aiResult.scoring.skillCoveragePercent = coverage;
 
             const weightedScore = Math.round(
-                skillsMatch                    * 0.30 +
-                (s.experienceMatch    || 0)    * 0.20 +
-                (s.locationMatch      || 0)    * 0.10 +
-                (s.salaryFit          || 0)    * 0.10 +
-                (s.noticePeriodFit    || 0)    * 0.10 +
-                (s.stabilityScore     || 0)    * 0.10 +
-                (s.domainMatch        || 0)    * 0.05 +
-                (s.educationMatch     || 0)    * 0.05
+                skillsMatch * 0.30 +
+                (s.experienceMatch || 0) * 0.20 +
+                (s.locationMatch || 0) * 0.10 +
+                (s.salaryFit || 0) * 0.10 +
+                (s.noticePeriodFit || 0) * 0.10 +
+                (s.stabilityScore || 0) * 0.10 +
+                (s.domainMatch || 0) * 0.05 +
+                (s.educationMatch || 0) * 0.05
             );
             aiResult.scoring.weightedScore = weightedScore;
 
@@ -439,28 +615,28 @@ Be deterministic, consistent and evidence-based in all scoring.`
 
             // ── Step F: recompute matchLevel and decision ─────────────────
             let matchLevel, decision;
-            if      (finalAdjustedScore >= 80) matchLevel = 'STRONG';
+            if (finalAdjustedScore >= 80) matchLevel = 'STRONG';
             else if (finalAdjustedScore >= 65) matchLevel = 'GOOD';
             else if (finalAdjustedScore >= 50) matchLevel = 'PARTIAL';
-            else                               matchLevel = 'WEAK';
+            else matchLevel = 'WEAK';
 
-            if      (finalAdjustedScore >= 70) decision = 'SHORTLIST';
+            if (finalAdjustedScore >= 70) decision = 'SHORTLIST';
             else if (finalAdjustedScore >= 50) decision = 'HOLD';
-            else                               decision = 'REJECT';
+            else decision = 'REJECT';
 
             // Skill gate forces worst-case outcome regardless of other scores
             if (skillGate) { matchLevel = 'WEAK'; decision = 'REJECT'; }
 
             aiResult.matchLevel = matchLevel;
             if (!aiResult.recommendation) aiResult.recommendation = {};
-            aiResult.recommendation.decision  = decision;
+            aiResult.recommendation.decision = decision;
             aiResult.recommendation.skillGate = skillGate;
 
             // ── Step G: recompute priorityScore (same formula as scoring-prompt.txt) ──
             const withinBudget = aiResult.rankingSignals?.salaryWithinBudget ?? true;
-            const noticeFit    = s.noticePeriodFit || 0;
+            const noticeFit = s.noticePeriodFit || 0;
             const priorityScore = Math.round(
-                (result.mustHaveMatched.length / Math.max(mustTotal, 1)) * 40 +
+                (mustHaveMatched.length / Math.max(mustTotal, 1)) * 40 +
                 finalAdjustedScore * 0.40 +
                 noticeFit * 0.10 +
                 (withinBudget ? 10 : 0)
@@ -472,7 +648,7 @@ Be deterministic, consistent and evidence-based in all scoring.`
 
         } catch (err) {
             // Non-fatal — if matcher fails, keep AI output as-is
-            console.error('[AI] skillMatcher overwrite failed (non-fatal):', err.message);
+            console.error('[AI] skillMatcher overwrite failed (non-fatal):', err.stack || err.message);
         }
 
         return aiResult;
@@ -506,24 +682,24 @@ Be deterministic, consistent and evidence-based in all scoring.`
             : 'Not provided';
 
         return template
-            .replace('{{firstName}}',                  formData.firstName || 'Not provided')
-            .replace('{{lastName}}',                   formData.lastName || 'Not provided')
-            .replace('{{email}}',                      formData.email || 'Not provided')
-            .replace('{{mobile}}',                     formData.mobile || 'Not provided')
-            .replace('{{location}}',                   formData.location || 'Not provided')
-            .replace('{{willingToRelocate}}',           formData.willingToRelocate === true ? 'Yes' : formData.willingToRelocate === false ? 'No' : 'Not specified')
-            .replace('{{totalExperience}}',            formData.totalExperience || 'Not provided')
-            .replace('{{relevantExperience}}',         formData.relevantExperience || 'Not provided')
-            .replace('{{noticePeriod}}',               formData.noticePeriod || 'Not provided')
-            .replace('{{currentSalary}}',              formData.currentSalary ? '₹' + Number(formData.currentSalary).toLocaleString('en-IN') : 'Not provided')
-            .replace('{{expectedSalary}}',             formData.expectedSalary ? '₹' + Number(formData.expectedSalary).toLocaleString('en-IN') : 'Not provided')
-            .replace('{{partnerReportedSkills}}',      skillsString)
-            .replace('{{partnerReportedEducation}}',   educationString)
+            .replace('{{firstName}}', formData.firstName || 'Not provided')
+            .replace('{{lastName}}', formData.lastName || 'Not provided')
+            .replace('{{email}}', formData.email || 'Not provided')
+            .replace('{{mobile}}', formData.mobile || 'Not provided')
+            .replace('{{location}}', formData.location || 'Not provided')
+            .replace('{{willingToRelocate}}', formData.willingToRelocate === true ? 'Yes' : formData.willingToRelocate === false ? 'No' : 'Not specified')
+            .replace('{{totalExperience}}', formData.totalExperience || 'Not provided')
+            .replace('{{relevantExperience}}', formData.relevantExperience || 'Not provided')
+            .replace('{{noticePeriod}}', formData.noticePeriod || 'Not provided')
+            .replace('{{currentSalary}}', this._formatSalaryForPrompt(formData.currentSalary))
+            .replace('{{expectedSalary}}', this._formatSalaryForPrompt(formData.expectedSalary))
+            .replace('{{partnerReportedSkills}}', skillsString)
+            .replace('{{partnerReportedEducation}}', educationString)
             .replace('{{partnerReportedCertifications}}', certificationsString)
-            .replace('{{partnerReportedLanguages}}',   languagesString)
-            .replace('{{candidateWriteup}}',           formData.writeup || 'Not provided')
-            .replace('{{resumeText}}',                 resumeText)
-            .replace('{{jobDescription}}',             jobDescriptionText);
+            .replace('{{partnerReportedLanguages}}', languagesString)
+            .replace('{{candidateWriteup}}', formData.writeup || 'Not provided')
+            .replace('{{resumeText}}', resumeText)
+            .replace('{{jobDescription}}', jobDescriptionText);
     }
 
     _buildJobDescriptionString(job) {
@@ -540,30 +716,30 @@ Be deterministic, consistent and evidence-based in all scoring.`
         }
 
         const lines = [];
-        if (jobObj.title)          lines.push(`Title: ${jobObj.title}`);
-        if (jobObj.category)       lines.push(`Category: ${jobObj.category}`);
+        if (jobObj.title) lines.push(`Title: ${jobObj.title}`);
+        if (jobObj.category) lines.push(`Category: ${jobObj.category}`);
         if (jobObj.employmentType) lines.push(`Employment Type: ${jobObj.employmentType}`);
         if (jobObj.experienceLevel) lines.push(`Experience Level: ${jobObj.experienceLevel}`);
         if (jobObj.experienceRange) lines.push(`Experience Required: ${jobObj.experienceRange.min} to ${jobObj.experienceRange.max} years`);
 
         if (jobObj.salary) {
-            const min = jobObj.salary.min ? `₹${jobObj.salary.min.toLocaleString('en-IN')}` : 'Not specified';
-            const max = jobObj.salary.max ? `₹${jobObj.salary.max.toLocaleString('en-IN')}` : 'Not specified';
-            lines.push(`Salary Budget: ${min} to ${max} per annum`);
+            const minStr = this._formatSalaryForPrompt(jobObj.salary.min);
+            const maxStr = this._formatSalaryForPrompt(jobObj.salary.max);
+            lines.push(`Salary Budget: ${minStr} to ${maxStr}`);
         }
 
         if (jobObj.location) {
             const loc = [];
-            if (jobObj.location.city)     loc.push(jobObj.location.city);
-            if (jobObj.location.state)    loc.push(jobObj.location.state);
+            if (jobObj.location.city) loc.push(jobObj.location.city);
+            if (jobObj.location.state) loc.push(jobObj.location.state);
             if (jobObj.location.isRemote) loc.push('Remote OK');
             if (jobObj.location.isHybrid) loc.push('Hybrid');
             lines.push(`Location: ${loc.join(', ')}`);
         }
 
-        if (jobObj.skills?.required?.length > 0)   lines.push(`MUST-HAVE Skills: ${jobObj.skills.required.join(', ')}`);
-        if (jobObj.skills?.preferred?.length > 0)  lines.push(`PREFERRED Skills: ${jobObj.skills.preferred.join(', ')}`);
-        if (jobObj.description)    lines.push(`\nJob Description:\n${jobObj.description.substring(0, 1000)}`);
+        if (jobObj.skills?.required?.length > 0) lines.push(`MUST-HAVE Skills: ${jobObj.skills.required.join(', ')}`);
+        if (jobObj.skills?.preferred?.length > 0) lines.push(`PREFERRED Skills: ${jobObj.skills.preferred.join(', ')}`);
+        if (jobObj.description) lines.push(`\nJob Description:\n${jobObj.description.substring(0, 1000)}`);
         if (jobObj.requirements?.length > 0) lines.push(`\nRequirements:\n${jobObj.requirements.map(r => `- ${r}`).join('\n')}`);
         if (jobObj.responsibilities?.length > 0) lines.push(`\nResponsibilities:\n${jobObj.responsibilities.map(r => `- ${r}`).join('\n')}`);
 
@@ -578,23 +754,27 @@ Be deterministic, consistent and evidence-based in all scoring.`
 
         return {
             firstName: formData.firstName || this._cleanString(profile.extractedName?.split(' ')[0]),
-            lastName:  formData.lastName  || this._cleanString(profile.extractedName?.split(' ').slice(1).join(' ')),
-            email:     formData.email     || this._cleanEmail(profile.extractedEmail),
-            mobile:    formData.mobile    || this._cleanMobile(profile.extractedMobile),
+            lastName: formData.lastName || this._cleanString(profile.extractedName?.split(' ').slice(1).join(' ')),
+            email: formData.email || this._cleanEmail(profile.extractedEmail),
+            mobile: formData.mobile || this._cleanMobile(profile.extractedMobile),
 
             profile: {
-                currentCompany:      this._cleanString(profile.currentCompany),
-                currentDesignation:  this._cleanString(profile.currentDesignation),
-                totalExperience:     formData.totalExperience || null,
-                relevantExperience:  formData.relevantExperience || null,
-                currentLocation:     this._cleanString(profile.standardizedLocation) || formData.location,
-                skills:              Array.isArray(profile.skills) ? profile.skills.filter(Boolean) : [],
-                education:           Array.isArray(profile.education) ? profile.education : [],
-                languages:           Array.isArray(profile.languages) ? profile.languages : [],
-                certifications:      Array.isArray(profile.certifications) ? profile.certifications : [],
-                noticePeriod:        formData.noticePeriod || null,
-                currentSalary:       formData.currentSalary || null,
-                expectedSalary:      formData.expectedSalary || null,
+                currentCompany: this._cleanString(profile.currentCompany),
+                currentDesignation: this._cleanString(profile.currentDesignation),
+                totalExperience: formData.totalExperience || null,
+                relevantExperience: formData.relevantExperience || null,
+                currentLocation: this._cleanString(profile.standardizedLocation) || formData.location,
+                skills: Array.isArray(profile.skills) ? profile.skills.filter(Boolean) : [],
+                education: Array.isArray(profile.education) ? profile.education : [],
+                // Preserve AI-calculated experience data
+                totalExperienceMonths: profile.actualTotalMonths || null,
+                experienceYears: profile.actualTotalMonths ? Math.round((profile.actualTotalMonths / 12) * 10) / 10 : null,
+                experience: Array.isArray(profile.experience) ? profile.experience : [],
+                languages: Array.isArray(profile.languages) ? profile.languages : [],
+                certifications: Array.isArray(profile.certifications) ? profile.certifications : [],
+                noticePeriod: formData.noticePeriod || null,
+                currentSalary: formData.currentSalary || null,
+                expectedSalary: formData.expectedSalary || null,
             },
 
             summary: aiResult.recommendation?.justification || null
@@ -632,7 +812,7 @@ Be deterministic, consistent and evidence-based in all scoring.`
         try {
             const fileName = url.toLowerCase();
             if (fileName.includes('.docx') || fileName.includes('.doc')) return await this._extractFromDoc(url);
-            if (fileName.includes('.pdf') || url.includes('/raw/'))       return await this._extractFromPdf(url);
+            if (fileName.includes('.pdf') || url.includes('/raw/')) return await this._extractFromPdf(url);
 
             const response = await axios.get(url, { responseType: 'text', timeout: 30000 });
             return response.data;
@@ -711,6 +891,183 @@ Be deterministic, consistent and evidence-based in all scoring.`
         if (!value || value === 'Not Found') return null;
         const cleaned = String(value).replace(/\D/g, '').slice(-10);
         return cleaned.length === 10 ? cleaned : null;
+    }
+
+    _scoreEducation(education, job) {
+        const candidateDegrees = (Array.isArray(education) ? education : [])
+          .map(e => e?.degree)
+          .filter(d => d && typeof d === 'string');
+
+        const primaryDegree = candidateDegrees[0] || (typeof education === 'string' ? education : null);
+        if (!primaryDegree && candidateDegrees.length === 0) {
+          return { score: 50, status: 'UNKNOWN', candidateEducation: 'Not provided' };
+        }
+
+        const EDU_MAP = {
+          'btech': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
+          'bacheloroftechnology': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
+          'be': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
+          'bachelorofengineering': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
+          'mtech': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
+          'masteroftechnology': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
+          'me': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
+          'masterofengineering': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
+          'mca': ['mca', 'masterofcomputerapplications'],
+          'masterofcomputerapplications': ['mca', 'masterofcomputerapplications'],
+          'bca': ['bca', 'bachelorofcomputerapplications'],
+          'bachelorofcomputerapplications': ['bca', 'bachelorofcomputerapplications'],
+          'mba': ['mba', 'masterofbusinessadministration'],
+          'masterofbusinessadministration': ['mba', 'masterofbusinessadministration'],
+          'bsc': ['bsc', 'bachelorofscience'],
+          'bachelorofscience': ['bsc', 'bachelorofscience'],
+          'msc': ['msc', 'masterofscience'],
+          'masterofscience': ['msc', 'masterofscience'],
+          'bba': ['bba', 'bachelorofbusinessadministration'],
+          'bachelorofbusinessadministration': ['bba', 'bachelorofbusinessadministration'],
+          'bcom': ['bcom', 'bachelorofcommerce'],
+          'bachelorofcommerce': ['bcom', 'bachelorofcommerce'],
+          'mcom': ['mcom', 'masterofcommerce'],
+          'masterofcommerce': ['mcom', 'masterofcommerce'],
+          'phd': ['phd', 'doctorofphilosophy'],
+          'doctorofphilosophy': ['phd', 'doctorofphilosophy']
+        };
+
+        const normalizeEduString = (str) => {
+          if (!str || typeof str !== 'string') return '';
+          return str.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+        };
+
+        const degreesMatch = (candDegree, jobDegree) => {
+          if (!candDegree || !jobDegree) return false;
+          const normCand = normalizeEduString(candDegree);
+          const normJob = normalizeEduString(jobDegree);
+          if (normCand === normJob) return true;
+          const candEquivs = EDU_MAP[normCand] || [normCand];
+          const jobEquivs = EDU_MAP[normJob] || [normJob];
+          for (const c of candEquivs) {
+            if (jobEquivs.includes(c)) return true;
+          }
+          if (normCand.includes(normJob) || normJob.includes(normCand)) {
+            return true;
+          }
+          return false;
+        };
+
+        const preferredList = (job?.education && Array.isArray(job.education.preferred))
+          ? job.education.preferred.filter(p => p && p.trim() !== '')
+          : [];
+        const minEdu = job?.education?.minimum || job?.educationRequirement || '';
+
+        // Check candidate degrees against job requirements
+        const degreesToCheck = candidateDegrees.length > 0 ? candidateDegrees : [primaryDegree];
+
+        if (preferredList.length > 0) {
+          // Check if any candidate degree matches any preferred education
+          const matchesPreferred = degreesToCheck.some(candDeg => 
+            preferredList.some(prefDeg => degreesMatch(candDeg, prefDeg))
+          );
+          if (matchesPreferred) {
+            return { score: 100, status: 'EXCEEDS', candidateEducation: primaryDegree };
+          }
+
+          // Check if any candidate degree matches minimum education
+          if (minEdu) {
+            const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
+            if (matchesMin) {
+              return { score: 85, status: 'MEETS', candidateEducation: primaryDegree };
+            }
+            return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+          }
+
+          return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+        }
+
+        // No preferred education specified, check against minimum
+        if (minEdu) {
+          const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
+          if (matchesMin) {
+            return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
+          }
+          return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+        }
+
+        // Default fallback if no requirements specified
+        return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
+    }
+
+    _scoreLocation(current, preferred, willingToRelocate, jobLoc) {
+        if (!jobLoc?.city) return { score: 50, status: 'UNKNOWN', detail: 'Job location not specified' };
+
+        const cities = Array.isArray(jobLoc.city) 
+          ? jobLoc.city.map(c => c.toLowerCase()) 
+          : [jobLoc.city.toLowerCase()];
+        
+        const displayCities = Array.isArray(jobLoc.city) ? jobLoc.city.join(', ') : jobLoc.city;
+
+        if (jobLoc.isRemote) return { score: 100, status: 'EXACT', detail: 'Remote — no location constraint' };
+        
+        const currentLower = current?.toLowerCase();
+        const isExact = currentLower && cities.some(c => currentLower.includes(c) || c.includes(currentLower));
+        if (isExact) return { score: 100, status: 'EXACT', detail: `Already in ${displayCities}` };
+        
+        const isPreferred = preferred?.some(pref => {
+          const prefLower = pref.toLowerCase();
+          return cities.some(c => prefLower.includes(c) || c.includes(prefLower));
+        });
+        if (isPreferred) return { score: 80, status: 'NEARBY', detail: `${displayCities} is preferred` };
+        
+        if (jobLoc.isHybrid && willingToRelocate) return { score: 60, status: 'NEARBY', detail: 'Hybrid + willing to relocate' };
+        if (willingToRelocate) return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
+        return { score: 20, status: 'DIFFERENT', detail: `In ${current || 'unknown city'} — relocation not confirmed` };
+    }
+
+    _normalizeSalaryToLPA(val) {
+        if (val == null || val === '') return 0;
+        const num = Number(String(val).replace(/,/g, ''));
+        if (isNaN(num)) return 0;
+        if (num < 100) return num;
+        return num / 100000;
+    }
+
+    _scoreSalary(expected, jobSalary) {
+        if (expected == null || expected === '' || !jobSalary?.max) {
+            return { score: 50, status: 'UNKNOWN', detail: 'Salary data not available', deltaPercent: 0, withinBudget: false };
+        }
+
+        const normExpected = this._normalizeSalaryToLPA(expected);
+        const normMax = this._normalizeSalaryToLPA(jobSalary.max);
+        const normMin = jobSalary.min ? this._normalizeSalaryToLPA(jobSalary.min) : 0;
+
+        const deltaPercent = normMax > 0 ? Math.round(((normExpected / normMax) - 1) * 100) : 0;
+
+        if (normMin > 0 && normExpected < normMin) {
+            return { score: 100, status: 'BELOW_BUDGET', detail: 'Below budget minimum', deltaPercent, withinBudget: true };
+        }
+        if (normExpected <= normMax) {
+            return { score: 100, status: 'WITHIN', detail: 'Within budget', deltaPercent, withinBudget: true };
+        }
+        if (normExpected <= normMax * 1.10) {
+            return { score: 80, status: 'SLIGHTLY_OVER', detail: `${deltaPercent}% above — may be negotiable`, deltaPercent, withinBudget: false };
+        }
+        if (normExpected <= normMax * 1.20) {
+            return { score: 60, status: 'OVER', detail: `${deltaPercent}% above budget`, deltaPercent, withinBudget: false };
+        }
+        if (normExpected <= normMax * 1.30) {
+            return { score: 40, status: 'OVER', detail: `${deltaPercent}% above budget`, deltaPercent, withinBudget: false };
+        }
+        return { score: 0, status: 'OVER', detail: `${deltaPercent}% above — unlikely to fit`, deltaPercent, withinBudget: false };
+    }
+
+    _formatSalaryForPrompt(val) {
+        if (val == null || val === '') return 'Not specified';
+        const num = Number(String(val).replace(/,/g, ''));
+        if (isNaN(num)) return val;
+        let rupees = num;
+        if (num < 100) {
+            rupees = num * 100000;
+        }
+        const lpa = Number((rupees / 100000).toFixed(2));
+        return `₹${rupees.toLocaleString('en-IN')} per annum (${lpa} LPA)`;
     }
 }
 

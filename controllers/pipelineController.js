@@ -2235,17 +2235,38 @@ exports.pipelineSendOffer = async (req, res) => {
       joiningDate,
       workMode,
       workLocation,
+      officeAddress,
       notes 
     } = req.body;
     
     const offerLetterUrl = req.file ? req.file.path : req.body.offerLetterUrl;
 
     if (!salary || isNaN(Number(salary)) || Number(salary) <= 0) {
-      return res.status(400).json({ success: false, message: 'A valid annual CTC (salary) is required to log an offer.' });
+      return res.status(400).json({ success: false, message: 'A valid annual CTC is required.' });
     }
 
-    if (!offerLetterUrl) {
-      return res.status(400).json({ success: false, message: 'Either an Offer Letter URL or a file upload is required.' });
+    if (inhandCtc === undefined || inhandCtc === '' || isNaN(Number(inhandCtc)) || Number(inhandCtc) < 0) {
+      return res.status(400).json({ success: false, message: 'A valid In-hand/Fixed CTC is required.' });
+    }
+
+    if (variableCtc === undefined || variableCtc === '' || isNaN(Number(variableCtc)) || Number(variableCtc) < 0) {
+      return res.status(400).json({ success: false, message: 'A valid Variable CTC is required.' });
+    }
+
+    if (!expectedJoiningDate) {
+      return res.status(400).json({ success: false, message: 'Tentative Date of Joining is required.' });
+    }
+
+    if (!workMode || !['Remote', 'On-site', 'Hybrid'].includes(workMode)) {
+      return res.status(400).json({ success: false, message: 'A valid Work Mode is required.' });
+    }
+
+    if (!workLocation || workLocation.trim() === '') {
+      return res.status(400).json({ success: false, message: 'Location is required.' });
+    }
+
+    if (['On-site', 'Hybrid'].includes(workMode) && (!officeAddress || officeAddress.trim() === '')) {
+      return res.status(400).json({ success: false, message: 'Office Address is required for On-site or Hybrid mode.' });
     }
 
     const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
@@ -2271,6 +2292,7 @@ exports.pipelineSendOffer = async (req, res) => {
       joiningDate: joiningDate && joiningDate !== 'undefined' ? new Date(joiningDate) : undefined,
       workMode: workMode && workMode !== 'undefined' ? workMode : undefined,
       workLocation: workLocation && workLocation !== 'undefined' ? workLocation : undefined,
+      officeAddress: officeAddress && officeAddress !== 'undefined' ? officeAddress : undefined,
       offerLetterUrl: offerLetterUrl || '',
       offeredAt: new Date(),
       response: 'PENDING',
@@ -2510,7 +2532,10 @@ exports.pipelineGetOfferDetails = async (req, res) => {
           offeredAt: candidate.offer.offeredAt,
           joiningDate: candidate.offer.joiningDate,
           response: candidate.offer.response,
-          expiresAt: candidate.offer.offerExpiresAt
+          expiresAt: candidate.offer.offerExpiresAt,
+          workMode: candidate.offer.workMode,
+          workLocation: candidate.offer.workLocation,
+          officeAddress: candidate.offer.officeAddress
         },
         partner: {
           firmName: candidate.submittedBy?.firmName,

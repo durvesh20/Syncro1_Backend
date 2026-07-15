@@ -103,15 +103,7 @@ async function parseJobPosition(job) {
       success: true
     }).catch(err => console.error('[JD-PARSER] Failed to create success scoring log:', err.message));
 
-    // Trigger market intelligence generation asynchronously (TASK-005)
-    const { triggerMarketIntel } = require('./marketIntelService');
-    triggerMarketIntel(jobPosition._id, {
-      title: jobPosition.title,
-      category: jobPosition.category,
-      subCategory: jobPosition.subCategory
-    }).catch(err => {
-      console.error(`[JD-PARSER] Asynchronous market intelligence trigger failed: ${err.message}`);
-    });
+
 
     return jobPosition;
 

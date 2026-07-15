@@ -40,26 +40,7 @@ const jobPositionSchema = new mongoose.Schema({
     parsedAt:            Date
   },
 
-  // Market intelligence (Layer 2 — TASK-005)
-  marketIntel: {
-    marketSkillImportance: [{
-      skill:         String,
-      demandPercent: Number,
-      trend:         String   // rising / stable / declining
-    }],
-    emergingSkillsToWatch: [String],
-    decliningSkills:       [String],
-    salaryBenchmark: {
-      entry:    Number,
-      mid:      Number,
-      senior:   Number,
-      currency: { type: String, default: 'INR' }
-    },
-    typicalExperienceRange: String,
-    commonCertifications:   [String],
-    industryContext:        String,
-    refreshedAt:            Date
-  },
+
 
   parseStatus: {
     type:    String,

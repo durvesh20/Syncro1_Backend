@@ -58,9 +58,14 @@ NOTE: All skills extracted from the JD only. Do NOT assume any default technolog
 ---
 
 ## EXPERIENCE VALIDATION:
-1. actualExperienceFromResume = sum of all jobHistory durationMonths / 12.
+1. For EACH job in jobHistory, extract the ACCURATE start and end dates: fromYear + fromMonth (1-12) and toYear + toMonth (1-12). If a role is current/"Present"/ongoing, set "ongoing": true and leave toYear/toMonth null. Use month-level precision whenever the resume shows it; if only a year is given, still fill fromYear/toYear.
+   Provide your own best-estimate durationMonths per role, BUT NOTE: the backend RECOMPUTES actualTotalMonths / actualTotalExperience deterministically from these dates — it merges overlapping/concurrent roles (counts shared months once), excludes gaps between roles, applies the inclusive +1 month rule, and substitutes today's date for ongoing roles. Do NOT hand-sum durations for the authoritative total; just extract accurate per-role dates.
+   For your own cross-check, estimate actualExperienceFromResume ≈ merged non-overlapping jobHistory months / 12.
 2. diff<=6mo = MATCH | 7-18mo = MINOR_DIFF | >18mo = MAJOR_DIFF (add redFlag "Experience inflation detected")
-3. ALWAYS use the LOWER of (formData.totalExperience, actualExperienceFromResume) for scoring.
+3. EXPERIENCE USED FOR SCORING (in priority order):
+   - If formData.relevantExperience is provided and >= 0, use it as the candidate's experience for scoring (this is the experience directly relevant to the role).
+   - Else use the LOWER of (formData.totalExperience, actualExperienceFromResume).
+   Store the chosen value in candidateProfile.formReportedExperience (in "X years" format) and use it for the EXPERIENCE MATCH component below.
 
 ---
 
@@ -101,7 +106,8 @@ IF mustHaveCoverage < 0.30: cap skillsMatch at 15 (skill gate — see above).
 skillCoveragePercent = (mustHaveMatched+shouldHaveMatched)/MAX(mustHaveTotal+shouldHaveTotal,1)*100
 
 ### 2. EXPERIENCE MATCH (Weight: 20%) — graduated both directions:
-Use LOWER of (formData.totalExperience, actualExperienceFromResume). Let min/max = job's required experience range.
+Use the experience chosen in EXPERIENCE VALIDATION step 3 (relevantExperience if provided, else LOWER of totalExperience | actualExperienceFromResume).
+Let min/max = job's required experience range.
 - Within range (min to max): 100
 - 1 year below min: 70
 - 2-3 years below min: 40
@@ -238,7 +244,7 @@ candidateWriteup: {{candidateWriteup}}
     "certifications": [],
     "careerGaps": [],
     "jobHistory": [
-      { "company": "company", "designation": "title", "fromYear": 2023, "toYear": 2024, "durationMonths": 12, "domain": "domain" }
+      { "company": "company", "designation": "title", "fromYear": 2023, "fromMonth": 1, "toYear": 2024, "toMonth": 12, "ongoing": false, "durationMonths": 12, "domain": "domain" }
     ]
   },
 

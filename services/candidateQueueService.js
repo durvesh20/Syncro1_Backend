@@ -84,8 +84,8 @@ class CandidateQueueService {
                     education: candidate.profile?.education || [],
                     certifications: candidate.profile?.certifications || [],
                     languages: candidate.profile?.languages || [],
-                    // relocation willingness — stored as canRelocate in Candidate.profile
-                    willingToRelocate: candidate.profile?.canRelocate ?? null,
+                    // relocation willingness
+                    willingToRelocate: candidate.profile?.willingToRelocate ?? null,
                 };
 
                 // ✅ Convert job to plain object
@@ -129,7 +129,7 @@ class CandidateQueueService {
                             actualExperienceFromResume: (() => {
                                 const a = fullAnalysis.candidateProfile || {};
                                 if (a.actualTotalExperience) return a.actualTotalExperience;
-                                if (a.actualTotalMonths != null) return `${Math.round(a.actualTotalMonths / 12)} years`;
+                                if (a.actualTotalMonths != null) return `${Math.round((a.actualTotalMonths / 12) * 10) / 10} years`;
                                 return 'Not provided';
                             })(),
                             actual: screening.experienceRange?.actual || '',
@@ -279,6 +279,10 @@ class CandidateQueueService {
                 currentDesignation: parsedData.profile?.currentDesignation || candidate.profile?.currentDesignation,
                 skills: parsedData.profile?.skills?.length > 0 ? parsedData.profile.skills : candidate.profile?.skills || [],
                 education: parsedData.profile?.education?.length > 0 ? parsedData.profile.education : candidate.profile?.education || [],
+                experience: parsedData.profile?.experience?.length > 0 ? parsedData.profile.experience : candidate.profile?.experience || [],
+                // Preserve AI-calculated experience months for scoring
+                totalExperienceMonths: parsedData.profile?.totalExperienceMonths || candidate.profile?.totalExperienceMonths || null,
+                experienceYears: parsedData.profile?.experienceYears || candidate.profile?.experienceYears || null,
                 languages: parsedData.profile?.languages?.length > 0 ? parsedData.profile.languages : candidate.profile?.languages || [],
                 certifications: parsedData.profile?.certifications?.length > 0 ? parsedData.profile.certifications : candidate.profile?.certifications || [],
                 location: candidate.profile?.location,

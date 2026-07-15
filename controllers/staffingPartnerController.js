@@ -316,7 +316,7 @@ exports.updateCompliance = async (req, res) => {
       'candidateConsentPolicy',
       'nonCircumventionClause',
       'commissionPayoutTerms',
-      'replacementBackoutLiability'
+      'replacementBackoutLiability'   
     ];
 
     const allAccepted = requiredClauses.every(
@@ -1276,7 +1276,7 @@ exports.submitCandidate = async (req, res) => {
         success: false,
         message: 'Invalid file type. Only PDF, DOC and DOCX are allowed.',
         receivedType: resumeFile.mimetype
-      });
+      }); 
     }
 
     // Validate file size (max 10MB)
@@ -1460,6 +1460,9 @@ exports.submitCandidate = async (req, res) => {
         currentDesignation: parsedProfile?.currentDesignation || '',
         skills: parsedProfile?.skills || [],
         education: parsedProfile?.education || [],
+        experience: parsedProfile?.experience || [],
+        totalExperienceMonths: parsedProfile?.totalExperienceMonths || null,
+        experienceYears: parsedProfile?.experienceYears || null,
         preferredLocations: parsedProfile?.preferredLocations || [],
         willingToRelocate: willingToRelocate === 'true' || willingToRelocate === true || parsedProfile?.willingToRelocate || parsedProfile?.canRelocate || false,
         linkedinProfile: parsedProfile?.linkedinProfile || '',
@@ -2719,7 +2722,8 @@ exports.updateSubmission = async (req, res) => {
     if (!submission.profile) submission.profile = {};
     if (location !== undefined) submission.profile.location = location.trim();
     if (willingToRelocate !== undefined && willingToRelocate !== null && willingToRelocate !== '') {
-      submission.profile.willingToRelocate = willingToRelocate === 'true' || willingToRelocate === true;
+      const val = willingToRelocate === 'true' || willingToRelocate === true;
+      submission.profile.willingToRelocate = val;
     }
     if (totalExperience !== undefined && totalExperience !== '') submission.profile.totalExperience = Number(totalExperience);
     if (relevantExperience !== undefined && relevantExperience !== '') submission.profile.relevantExperience = Number(relevantExperience);

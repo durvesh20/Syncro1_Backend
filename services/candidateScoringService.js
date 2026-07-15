@@ -63,8 +63,12 @@ class CandidateScoringService {
     };
     totalScore += skillsScore * 0.30;
 
-    // 2. Experience Match (20%) — uses relevantExperience if available, falls back to totalExperience
-    const expScore = this._scoreExperience(profile.totalExperience, job.experienceRange, profile.relevantExperience);
+    // 2. Experience Match (20%) — uses AI-calculated experience from resume
+    // Prefer AI-derived actualExperienceMonths (fractional years), fall back to form-reported values
+    const aiExperienceYears = profile.totalExperienceMonths != null
+      ? Math.round((profile.totalExperienceMonths / 12) * 10) / 10  // Round to 1 decimal place
+      : (profile.experienceYears || null);
+    const expScore = this._scoreExperience(aiExperienceYears, job.experienceRange, null);
     scores.experience = {
       score: expScore.score,
       weight: 20,
@@ -140,18 +144,18 @@ class CandidateScoringService {
     };
     totalScore += salaryScore.score * 0.10;
 
-    // 6. Location Match (10%)
+        // 6. Location Match (10%)
     const locScore = this._scoreLocation(
-      profile.currentLocation,
+      profile.location,
       profile.preferredLocations,
-      profile.canRelocate,
+      profile.willingToRelocate,
       job.location
     );
     scores.location = {
       score: locScore.score,
       weight: 10,
       jobLocation: job.location?.city || 'Not specified',
-      candidateLocation: profile.currentLocation || profile.location || 'Not specified',
+      candidateLocation: profile.location || 'Not specified',
       status: locScore.status,
       detail: locScore.detail
     };
@@ -269,20 +273,28 @@ class CandidateScoringService {
   }
 
 
+  _normalizeSalaryToLPA(val) {
+    if (val == null || val === '') return 0;
+    const num = Number(String(val).replace(/,/g, ''));
+    if (isNaN(num)) return 0;
+    if (num < 100) return num;
+    return num / 100000;
+  }
+
   _scoreSalary(expected, jobSalary) {
-    if (!expected || !jobSalary?.max) {
+    if (expected == null || expected === '' || !jobSalary?.max) {
       return { score: 50, status: 'UNKNOWN', detail: 'Salary data not available', deltaPercent: 0, withinBudget: false };
     }
 
-    // Normalize both values to LPA (e.g. 12 instead of 1200000)
-    let normExpected = expected;
-    if (normExpected >= 100000) normExpected = normExpected / 100000;
-
-    let normMax = jobSalary.max;
-    if (normMax >= 100000) normMax = normMax / 100000;
+    const normExpected = this._normalizeSalaryToLPA(expected);
+    const normMax = this._normalizeSalaryToLPA(jobSalary.max);
+    const normMin = jobSalary.min ? this._normalizeSalaryToLPA(jobSalary.min) : 0;
 
     const deltaPercent = normMax > 0 ? Math.round(((normExpected / normMax) - 1) * 100) : 0;
 
+    if (normMin > 0 && normExpected < normMin) {
+      return { score: 100, status: 'BELOW_BUDGET', detail: 'Below budget minimum', deltaPercent, withinBudget: true };
+    }
     if (normExpected <= normMax) {
       return { score: 100, status: 'WITHIN', detail: 'Within budget', deltaPercent, withinBudget: true };
     }
@@ -298,7 +310,7 @@ class CandidateScoringService {
     return { score: 0, status: 'OVER', detail: `${deltaPercent}% above — unlikely to fit`, deltaPercent, withinBudget: false };
   }
 
-  _scoreLocation(current, preferred, canRelocate, jobLoc) {
+  _scoreLocation(current, preferred, willingToRelocate, jobLoc) {
     if (!jobLoc?.city) return { score: 50, status: 'UNKNOWN', detail: 'Job location not specified' };
 
     const cities = Array.isArray(jobLoc.city) 
@@ -319,8 +331,8 @@ class CandidateScoringService {
     });
     if (isPreferred) return { score: 80, status: 'NEARBY', detail: `${displayCities} is preferred` };
     
-    if (jobLoc.isHybrid && canRelocate) return { score: 60, status: 'NEARBY', detail: 'Hybrid + willing to relocate' };
-    if (canRelocate) return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
+    if (jobLoc.isHybrid && willingToRelocate) return { score: 60, status: 'NEARBY', detail: 'Hybrid + willing to relocate' };
+    if (willingToRelocate) return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
     return { score: 20, status: 'DIFFERENT', detail: `In ${current || 'unknown city'} — relocation not confirmed` };
   }
 
@@ -329,7 +341,7 @@ class CandidateScoringService {
 
     const p = np.toLowerCase();
     if (p.includes('immediate') || p.includes('0')) return { score: 100, status: 'IMMEDIATE', detail: 'Immediately available', days: 0 };
-    if (p.includes('15') || p.includes('2 week')) return { score: 100, status: 'IMMEDIATE', detail: '2 weeks', days: 15 };
+    if (p.includes('15') || p.includes('2 week')) return { score: 100, status: 'WITHIN', detail: '2 weeks', days: 15 };
     if (p.includes('30') || p.includes('1 month')) return { score: 90, status: 'ACCEPTABLE', detail: '1 month', days: 30 };
     if (p.includes('45')) return { score: 80, status: 'ACCEPTABLE', detail: '45 days', days: 45 };
     if (p.includes('60') || p.includes('2 month')) return { score: 70, status: 'ACCEPTABLE', detail: '2 months', days: 60 };
@@ -362,24 +374,150 @@ class CandidateScoringService {
   }
 
   _scoreEducation(education, job) {
-    const candidateEdu = Array.isArray(education) && education.length > 0 ? education[0]?.degree : null;
-    
-    if (!candidateEdu) return { score: 50, status: 'UNKNOWN', candidateEducation: 'Not provided' };
+    const candidateDegrees = (Array.isArray(education) ? education : [])
+      .map(e => e?.degree)
+      .filter(d => d && typeof d === 'string');
 
-    // Basic education scoring — without AI, we can't deeply compare
-    const eduLower = candidateEdu.toLowerCase();
-    const hasPostgrad = eduLower.includes('master') || eduLower.includes('mba') || eduLower.includes('m.tech') || eduLower.includes('m.s');
-    const hasGrad = eduLower.includes('bachelor') || eduLower.includes('b.tech') || eduLower.includes('b.e') || eduLower.includes('bca') || eduLower.includes('b.sc');
+    const primaryDegree = candidateDegrees[0] || (typeof education === 'string' ? education : null);
+    if (!primaryDegree && candidateDegrees.length === 0) {
+      return { score: 50, status: 'UNKNOWN', candidateEducation: 'Not provided' };
+    }
 
-    if (hasPostgrad) return { score: 100, status: 'EXCEEDS', candidateEducation: candidateEdu };
-    if (hasGrad) return { score: 90, status: 'MEETS', candidateEducation: candidateEdu };
-    return { score: 50, status: 'UNKNOWN', candidateEducation: candidateEdu };
+    const EDU_MAP = {
+      'btech': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
+      'bacheloroftechnology': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
+      'be': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
+      'bachelorofengineering': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
+      'mtech': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
+      'masteroftechnology': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
+      'me': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
+      'masterofengineering': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
+      'mca': ['mca', 'masterofcomputerapplications'],
+      'masterofcomputerapplications': ['mca', 'masterofcomputerapplications'],
+      'bca': ['bca', 'bachelorofcomputerapplications'],
+      'bachelorofcomputerapplications': ['bca', 'bachelorofcomputerapplications'],
+      'mba': ['mba', 'masterofbusinessadministration'],
+      'masterofbusinessadministration': ['mba', 'masterofbusinessadministration'],
+      'bsc': ['bsc', 'bachelorofscience'],
+      'bachelorofscience': ['bsc', 'bachelorofscience'],
+      'msc': ['msc', 'masterofscience'],
+      'masterofscience': ['msc', 'masterofscience'],
+      'bba': ['bba', 'bachelorofbusinessadministration'],
+      'bachelorofbusinessadministration': ['bba', 'bachelorofbusinessadministration'],
+      'bcom': ['bcom', 'bachelorofcommerce'],
+      'bachelorofcommerce': ['bcom', 'bachelorofcommerce'],
+      'mcom': ['mcom', 'masterofcommerce'],
+      'masterofcommerce': ['mcom', 'masterofcommerce'],
+      'phd': ['phd', 'doctorofphilosophy'],
+      'doctorofphilosophy': ['phd', 'doctorofphilosophy']
+    };
+
+    const normalizeEduString = (str) => {
+      if (!str || typeof str !== 'string') return '';
+      return str.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+    };
+
+    const degreesMatch = (candDegree, jobDegree) => {
+      if (!candDegree || !jobDegree) return false;
+      const normCand = normalizeEduString(candDegree);
+      const normJob = normalizeEduString(jobDegree);
+      if (normCand === normJob) return true;
+      const candEquivs = EDU_MAP[normCand] || [normCand];
+      const jobEquivs = EDU_MAP[normJob] || [normJob];
+      for (const c of candEquivs) {
+        if (jobEquivs.includes(c)) return true;
+      }
+      if (normCand.includes(normJob) || normJob.includes(normCand)) {
+        return true;
+      }
+      return false;
+    };
+
+    const preferredList = (job?.education && Array.isArray(job.education.preferred))
+      ? job.education.preferred.filter(p => p && p.trim() !== '')
+      : [];
+    const minEdu = job?.education?.minimum || job?.educationRequirement || '';
+
+    // Check candidate degrees against job requirements
+    const degreesToCheck = candidateDegrees.length > 0 ? candidateDegrees : [primaryDegree];
+
+    if (preferredList.length > 0) {
+      // Check if any candidate degree matches any preferred education
+      const matchesPreferred = degreesToCheck.some(candDeg => 
+        preferredList.some(prefDeg => degreesMatch(candDeg, prefDeg))
+      );
+      if (matchesPreferred) {
+        return { score: 100, status: 'EXCEEDS', candidateEducation: primaryDegree };
+      }
+
+      // Check if any candidate degree matches minimum education
+      if (minEdu) {
+        const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
+        if (matchesMin) {
+          return { score: 85, status: 'MEETS', candidateEducation: primaryDegree };
+        }
+        return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+      }
+
+      return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+    }
+
+    // No preferred education specified, check against minimum
+    if (minEdu) {
+      const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
+      if (matchesMin) {
+        return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
+      }
+      return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+    }
+
+    // Default fallback if no requirements specified
+    return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
   }
 
   _scoreStability(profile) {
-    const jobHistory = profile.jobHistory;
+    let rawHistory = profile.jobHistory || profile.experience;
+    if (!Array.isArray(rawHistory)) {
+      rawHistory = [];
+    }
 
-    if (!Array.isArray(jobHistory) || jobHistory.length === 0) {
+    const jobHistory = rawHistory.map(job => {
+      if (job.fromYear !== undefined || job.toYear !== undefined) {
+        return job;
+      }
+      
+      let fromYear = null;
+      let fromMonth = null;
+      if (job.startDate) {
+        const parts = String(job.startDate).split('-');
+        fromYear = parseInt(parts[0], 10);
+        if (parts[1]) {
+          fromMonth = parseInt(parts[1], 10);
+        }
+      }
+      
+      let toYear = null;
+      let toMonth = null;
+      let ongoing = !!job.isCurrent;
+      if (job.endDate) {
+        const parts = String(job.endDate).split('-');
+        toYear = parseInt(parts[0], 10);
+        if (parts[1]) {
+          toMonth = parseInt(parts[1], 10);
+        }
+      }
+
+      return {
+        fromYear,
+        fromMonth: fromMonth != null ? fromMonth : 0,
+        toYear,
+        toMonth: toMonth != null ? toMonth : 11,
+        ongoing,
+        durationMonths: job.durationMonths
+      };
+    });
+
+    if (jobHistory.length === 0) {
       // No job history available yet (resume not parsed at pre-submission stage) — neutral fallback
       return {
         score: 60,
@@ -424,22 +562,35 @@ class CandidateScoringService {
     const last5AvgTenureYears  = last5JobCount > 0 ? (last5Months / last5JobCount) / 12 : totalAvgTenureYears;
     const last5AvgTenureMonths = last5AvgTenureYears * 12;
 
+    const hasOnlyOneJob = jobHistory.length === 1 || last5JobCount === 1;
+
     // ── Score on last-5-year average tenure ───────────────────────
     let score;
-    if      (last5AvgTenureMonths >= 36) score = 100;
-    else if (last5AvgTenureMonths >= 24) score = 80;
-    else if (last5AvgTenureMonths >= 18) score = 60;
-    else if (last5AvgTenureMonths >= 12) score = 40;
-    else if (last5AvgTenureMonths >= 6)  score = 20;
-    else                                  score = 0;
+    if (hasOnlyOneJob) {
+      score = 100;
+    } else if (last5AvgTenureMonths >= 36) {
+      score = 100;
+    } else if (last5AvgTenureMonths >= 24) {
+      score = 80;
+    } else if (last5AvgTenureMonths >= 18) {
+      score = 60;
+    } else if (last5AvgTenureMonths >= 12) {
+      score = 40;
+    } else if (last5AvgTenureMonths >= 6) {
+      score = 20;
+    } else {
+      score = 0;
+    }
 
     return {
       score,
       totalAverageTenureYears:     Math.round(totalAvgTenureYears  * 10) / 10,
       last5YearAverageTenureYears: Math.round(last5AvgTenureYears  * 10) / 10,
-      isJobHopper:  last5AvgTenureMonths < 12,
-      risk: last5AvgTenureMonths < 12 ? 'HIGH' : last5AvgTenureMonths < 24 ? 'MEDIUM' : 'LOW',
-      detail: `Total career avg ${totalAvgTenureYears.toFixed(1)}yrs, last 5 years avg ${last5AvgTenureYears.toFixed(1)}yrs — scored on recent stability`
+      isJobHopper:  hasOnlyOneJob ? false : last5AvgTenureMonths < 12,
+      risk: hasOnlyOneJob ? 'LOW' : (last5AvgTenureMonths < 12 ? 'HIGH' : last5AvgTenureMonths < 24 ? 'MEDIUM' : 'LOW'),
+      detail: hasOnlyOneJob 
+        ? `Only 1 job held in recent career — stable tenure`
+        : `Total career avg ${totalAvgTenureYears.toFixed(1)}yrs, last 5 years avg ${last5AvgTenureYears.toFixed(1)}yrs — scored on recent stability`
     };
   }
 
