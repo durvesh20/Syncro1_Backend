@@ -775,6 +775,26 @@ router.post(
         }
       };
 
+      // Build flags from validation
+      let flags = [];
+      if (validation.redFlags && validation.redFlags.length > 0) {
+        flags = flags.concat(validation.redFlags.map(f => ({
+          type: 'WARNING',
+          message: f
+        })));
+      }
+      if (validation.greenFlags && validation.greenFlags.length > 0) {
+        flags = flags.concat(validation.greenFlags.map(f => ({
+          type: 'SUCCESS',
+          message: f
+        })));
+      }
+
+      const advice = [
+        ...(rec.suggestedActions || []),
+        ...(rec.interviewFocusAreas || [])
+      ];
+
       // Update candidate's resume analysis
       candidate.resumeAnalysis = {
         parsed: true,
@@ -783,8 +803,8 @@ router.post(
         matchLevel: fullAnalysis.matchLevel || 'UNKNOWN',
         recommendation: rec.decision || 'HOLD',
         scoreBreakdown,
-        flags: validation.redFlags?.map(msg => ({ type: 'RED', message: msg })) || [],
-        advice: rec.suggestedActions?.map(msg => ({ message: msg })) || []
+        flags,
+        advice
       };
 
       if (candidate.submissionMetadata) {

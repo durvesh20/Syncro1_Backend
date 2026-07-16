@@ -305,7 +305,7 @@ class AIService {
 
         console.log(`[AI] Calling OpenAI (attempt ${attempt}), model: ${model}`);
 
-        const completion = await openai.chat.completions.create({
+        const params = {
             model,
             messages: [
                 {
@@ -317,10 +317,13 @@ Be deterministic, consistent and evidence-based in all scoring.`
                 },
                 { role: 'user', content: prompt }
             ],
-            temperature: 0.1,
-            max_tokens: AI_MAX_TOKENS,
+            max_completion_tokens: AI_MAX_TOKENS,
             response_format: { type: 'json_object' }
-        });
+        };
+        if (!model.includes('gpt-5') && !model.includes('o1') && !model.includes('o3')) {
+            params.temperature = 0.1;
+        }
+        const completion = await openai.chat.completions.create(params);
 
         const finishReason = completion.choices[0]?.finish_reason;
         const responseText = completion.choices[0]?.message?.content;

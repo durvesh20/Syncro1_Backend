@@ -37,7 +37,7 @@ async function parseJobPosition(job) {
     });
 
     const model = getModel();
-    const completion = await openai.chat.completions.create({
+    const params = {
       model,
       messages: [
         {
@@ -49,13 +49,20 @@ async function parseJobPosition(job) {
           content: prompt
         }
       ],
-      temperature:     0.1,
-      max_tokens:      1500,
+      max_completion_tokens: 8000,
       response_format: { type: 'json_object' }
-    });
+    };
+    if (!model.includes('gpt-5') && !model.includes('o1') && !model.includes('o3')) {
+      params.temperature = 0.1;
+    }
+    const completion = await openai.chat.completions.create(params);
+    console.log('[JD-PARSER] Raw OpenAI completion:', JSON.stringify(completion, null, 2));
 
     const responseText = completion.choices[0]?.message?.content;
-    if (!responseText) throw new Error('Empty response from OpenAI');
+    if (!responseText) {
+      console.error('[JD-PARSER] OpenAI completion had no content. Full completion response:', JSON.stringify(completion));
+      throw new Error('Empty response from OpenAI');
+    }
 
     const parsed = JSON.parse(responseText);
     parsed.parsedAt = new Date();

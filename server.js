@@ -247,7 +247,7 @@ const server = app.listen(PORT, () => {
   console.log(
     '   AI:         ' +
     (process.env.AI_ENABLED === 'true' && process.env.OPENAI_API_KEY
-      ? '🤖 Enabled (OpenAI ' + (process.env.OPENAI_MODEL || 'gpt-4o-mini') + ')'
+      ? '🤖 Enabled (OpenAI ' + (process.env.OPENAI_MODEL || 'gpt-5-mini') + ')'
       : '⏸️  Disabled')
   );
   console.log('═══════════════════════════════════════════════════════');
