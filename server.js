@@ -157,6 +157,7 @@ app.use('/api/cities', require('./routes/citySuggestionRoutes'));
 app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
 app.use('/api/agreements', require('./routes/agreementRoutes'));
 app.use('/api/ai', require('./routes/aiRoutes'));
+app.use('/api/reports', require('./routes/reportRoutes'));
 
 /* =========================================================
    ERROR HANDLER

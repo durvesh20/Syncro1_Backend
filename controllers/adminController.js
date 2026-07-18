@@ -1,4 +1,5 @@
 // backend/controllers/adminController.js
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
@@ -2385,7 +2386,22 @@ exports.getAllJobs = async (req, res) => {
     const query = {};
     if (status) query.status = status;
     if (approvalStatus) query.approvalStatus = approvalStatus;
-    if (company) query.company = company;
+    if (company) {
+      if (typeof company === 'string' && company.includes(',')) {
+        const ids = company.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (ids.length > 0) {
+          query.company = { $in: ids };
+        }
+      } else if (Array.isArray(company)) {
+        const ids = company.map(id => String(id).trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (ids.length > 0) {
+          query.company = { $in: ids };
+        }
+      } else if (mongoose.Types.ObjectId.isValid(company)) {
+        query.company = new mongoose.Types.ObjectId(company);
+      }
+      console.log("getAllJobs company query:", query.company);
+    }
     // Sub-admins can see all jobs
     if (search) {
       query.$or = [
@@ -2415,7 +2431,7 @@ exports.getAllJobs = async (req, res) => {
     // Build scoped summary match (same filters except status/search for global tab counts)
     const summaryMatch = {};
     // Sub-admins stats can see all jobs
-    if (company) summaryMatch.company = new (require('mongoose').Types.ObjectId)(company);
+    if (query.company) summaryMatch.company = query.company;
 
     const [statusSummary, totalJobs] = await Promise.all([
       Job.aggregate([
@@ -3002,7 +3018,22 @@ exports.getAllJobsWithCandidates = async (req, res) => {
     const query = {};
     if (status) query.status = status;
     if (approvalStatus) query.approvalStatus = approvalStatus;
-    if (company) query.company = company;
+    if (company) {
+      if (typeof company === 'string' && company.includes(',')) {
+        const ids = company.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (ids.length > 0) {
+          query.company = { $in: ids };
+        }
+      } else if (Array.isArray(company)) {
+        const ids = company.map(id => String(id).trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (ids.length > 0) {
+          query.company = { $in: ids };
+        }
+      } else if (mongoose.Types.ObjectId.isValid(company)) {
+        query.company = new mongoose.Types.ObjectId(company);
+      }
+      console.log("getAllJobsWithCandidates company query:", query.company);
+    }
     // Sub-admins can see all jobs with candidates
     if (search) {
       query.$or = [

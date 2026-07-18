@@ -11,7 +11,7 @@ const adminActionLogSchema = new mongoose.Schema({
     },
     actorRole: {
         type: String,
-        enum: ['admin', 'sub_admin'],
+        enum: ['admin', 'sub_admin', 'company', 'staffing_partner'],
         required: true
     },
     actorEmail: {
@@ -77,7 +77,10 @@ const adminActionLogSchema = new mongoose.Schema({
             'EXTENSION_REQUEST_REJECTED',
 
             // Agreement query
-            'AGREEMENT_QUERY_RESPONDED'
+            'AGREEMENT_QUERY_RESPONDED',
+
+            // Report downloads
+            'REPORT_DOWNLOAD'
         ]
     },
 
@@ -93,7 +96,8 @@ const adminActionLogSchema = new mongoose.Schema({
             'Invoice',
             'User',
             'LimitExtensionRequest',
-            'AgreementQuery'
+            'AgreementQuery',
+            'Report'
         ],
         required: true
     },
