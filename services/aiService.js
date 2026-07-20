@@ -310,10 +310,7 @@ class AIService {
             messages: [
                 {
                     role: 'system',
-                    content: `You are Syncro1's advanced talent intelligence engine.
-Your job is to analyze resumes against job descriptions and output ONLY valid JSON.
-No explanations. No markdown. No text outside JSON.
-Be deterministic, consistent and evidence-based in all scoring.`
+                    content: `You are Syncro1's advanced talent intelligence engine.Your job is to analyze resumes against job descriptions and output ONLY valid JSON.No explanations. No markdown. No text outside JSON.Be deterministic, consistent and evidence-based in all scoring.`
                 },
                 { role: 'user', content: prompt }
             ],
@@ -529,12 +526,12 @@ Be deterministic, consistent and evidence-based in all scoring.`
                 if (!aiResult.rankingSignals) aiResult.rankingSignals = {};
                 aiResult.rankingSignals.salaryWithinBudget = salaryResult.withinBudget;
             }
-            
+
             // ── Step D4: recompute educationMatch deterministically ──────────
             if (jobDescription) {
                 const candidateEdu = aiResult.candidateProfile?.education || [];
                 const eduResult = this._scoreEducation(candidateEdu, jobDescription);
-                
+
                 aiResult.scoring.educationMatch = eduResult.score;
 
                 if (!aiResult.screening) aiResult.screening = {};
@@ -545,7 +542,7 @@ Be deterministic, consistent and evidence-based in all scoring.`
                     } else if (jobDescription.educationRequirement) {
                         detailedRequired = jobDescription.educationRequirement;
                     }
-                    
+
                     if (Array.isArray(jobDescription.education.preferred) && jobDescription.education.preferred.length > 0) {
                         const filteredPref = jobDescription.education.preferred.filter(p => p && p.trim() !== '');
                         if (filteredPref.length > 0) {
@@ -569,18 +566,18 @@ Be deterministic, consistent and evidence-based in all scoring.`
             // ── Step D5: recompute locationMatch deterministically ──────────
             if (jobDescription) {
                 const candLoc = candidateFormData?.location || '';
-                const willingToRelocate = candidateFormData?.willingToRelocate !== undefined 
-                    ? candidateFormData.willingToRelocate 
+                const willingToRelocate = candidateFormData?.willingToRelocate !== undefined
+                    ? candidateFormData.willingToRelocate
                     : aiResult.candidateProfile?.willingToRelocate;
                 const preferredLocations = candidateFormData?.preferredLocations || aiResult.candidateProfile?.preferredLocations || [];
-                
+
                 const locResult = this._scoreLocation(
                     candLoc,
                     preferredLocations,
                     willingToRelocate,
                     jobDescription.location
                 );
-                
+
                 aiResult.scoring.locationMatch = locResult.score;
 
                 if (!aiResult.screening) aiResult.screening = {};
@@ -898,100 +895,100 @@ Be deterministic, consistent and evidence-based in all scoring.`
 
     _scoreEducation(education, job) {
         const candidateDegrees = (Array.isArray(education) ? education : [])
-          .map(e => e?.degree)
-          .filter(d => d && typeof d === 'string');
+            .map(e => e?.degree)
+            .filter(d => d && typeof d === 'string');
 
         const primaryDegree = candidateDegrees[0] || (typeof education === 'string' ? education : null);
         if (!primaryDegree && candidateDegrees.length === 0) {
-          return { score: 50, status: 'UNKNOWN', candidateEducation: 'Not provided' };
+            return { score: 50, status: 'UNKNOWN', candidateEducation: 'Not provided' };
         }
 
         const EDU_MAP = {
-          'btech': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
-          'bacheloroftechnology': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
-          'be': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
-          'bachelorofengineering': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
-          'mtech': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
-          'masteroftechnology': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
-          'me': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
-          'masterofengineering': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
-          'mca': ['mca', 'masterofcomputerapplications'],
-          'masterofcomputerapplications': ['mca', 'masterofcomputerapplications'],
-          'bca': ['bca', 'bachelorofcomputerapplications'],
-          'bachelorofcomputerapplications': ['bca', 'bachelorofcomputerapplications'],
-          'mba': ['mba', 'masterofbusinessadministration'],
-          'masterofbusinessadministration': ['mba', 'masterofbusinessadministration'],
-          'bsc': ['bsc', 'bachelorofscience'],
-          'bachelorofscience': ['bsc', 'bachelorofscience'],
-          'msc': ['msc', 'masterofscience'],
-          'masterofscience': ['msc', 'masterofscience'],
-          'bba': ['bba', 'bachelorofbusinessadministration'],
-          'bachelorofbusinessadministration': ['bba', 'bachelorofbusinessadministration'],
-          'bcom': ['bcom', 'bachelorofcommerce'],
-          'bachelorofcommerce': ['bcom', 'bachelorofcommerce'],
-          'mcom': ['mcom', 'masterofcommerce'],
-          'masterofcommerce': ['mcom', 'masterofcommerce'],
-          'phd': ['phd', 'doctorofphilosophy'],
-          'doctorofphilosophy': ['phd', 'doctorofphilosophy']
+            'btech': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
+            'bacheloroftechnology': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
+            'be': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
+            'bachelorofengineering': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
+            'mtech': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
+            'masteroftechnology': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
+            'me': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
+            'masterofengineering': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
+            'mca': ['mca', 'masterofcomputerapplications'],
+            'masterofcomputerapplications': ['mca', 'masterofcomputerapplications'],
+            'bca': ['bca', 'bachelorofcomputerapplications'],
+            'bachelorofcomputerapplications': ['bca', 'bachelorofcomputerapplications'],
+            'mba': ['mba', 'masterofbusinessadministration'],
+            'masterofbusinessadministration': ['mba', 'masterofbusinessadministration'],
+            'bsc': ['bsc', 'bachelorofscience'],
+            'bachelorofscience': ['bsc', 'bachelorofscience'],
+            'msc': ['msc', 'masterofscience'],
+            'masterofscience': ['msc', 'masterofscience'],
+            'bba': ['bba', 'bachelorofbusinessadministration'],
+            'bachelorofbusinessadministration': ['bba', 'bachelorofbusinessadministration'],
+            'bcom': ['bcom', 'bachelorofcommerce'],
+            'bachelorofcommerce': ['bcom', 'bachelorofcommerce'],
+            'mcom': ['mcom', 'masterofcommerce'],
+            'masterofcommerce': ['mcom', 'masterofcommerce'],
+            'phd': ['phd', 'doctorofphilosophy'],
+            'doctorofphilosophy': ['phd', 'doctorofphilosophy']
         };
 
         const normalizeEduString = (str) => {
-          if (!str || typeof str !== 'string') return '';
-          return str.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+            if (!str || typeof str !== 'string') return '';
+            return str.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
         };
 
         const degreesMatch = (candDegree, jobDegree) => {
-          if (!candDegree || !jobDegree) return false;
-          const normCand = normalizeEduString(candDegree);
-          const normJob = normalizeEduString(jobDegree);
-          if (normCand === normJob) return true;
-          const candEquivs = EDU_MAP[normCand] || [normCand];
-          const jobEquivs = EDU_MAP[normJob] || [normJob];
-          for (const c of candEquivs) {
-            if (jobEquivs.includes(c)) return true;
-          }
-          if (normCand.includes(normJob) || normJob.includes(normCand)) {
-            return true;
-          }
-          return false;
+            if (!candDegree || !jobDegree) return false;
+            const normCand = normalizeEduString(candDegree);
+            const normJob = normalizeEduString(jobDegree);
+            if (normCand === normJob) return true;
+            const candEquivs = EDU_MAP[normCand] || [normCand];
+            const jobEquivs = EDU_MAP[normJob] || [normJob];
+            for (const c of candEquivs) {
+                if (jobEquivs.includes(c)) return true;
+            }
+            if (normCand.includes(normJob) || normJob.includes(normCand)) {
+                return true;
+            }
+            return false;
         };
 
         const preferredList = (job?.education && Array.isArray(job.education.preferred))
-          ? job.education.preferred.filter(p => p && p.trim() !== '')
-          : [];
+            ? job.education.preferred.filter(p => p && p.trim() !== '')
+            : [];
         const minEdu = job?.education?.minimum || job?.educationRequirement || '';
 
         // Check candidate degrees against job requirements
         const degreesToCheck = candidateDegrees.length > 0 ? candidateDegrees : [primaryDegree];
 
         if (preferredList.length > 0) {
-          // Check if any candidate degree matches any preferred education
-          const matchesPreferred = degreesToCheck.some(candDeg => 
-            preferredList.some(prefDeg => degreesMatch(candDeg, prefDeg))
-          );
-          if (matchesPreferred) {
-            return { score: 100, status: 'EXCEEDS', candidateEducation: primaryDegree };
-          }
-
-          // Check if any candidate degree matches minimum education
-          if (minEdu) {
-            const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
-            if (matchesMin) {
-              return { score: 85, status: 'MEETS', candidateEducation: primaryDegree };
+            // Check if any candidate degree matches any preferred education
+            const matchesPreferred = degreesToCheck.some(candDeg =>
+                preferredList.some(prefDeg => degreesMatch(candDeg, prefDeg))
+            );
+            if (matchesPreferred) {
+                return { score: 100, status: 'EXCEEDS', candidateEducation: primaryDegree };
             }
-            return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
-          }
 
-          return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+            // Check if any candidate degree matches minimum education
+            if (minEdu) {
+                const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
+                if (matchesMin) {
+                    return { score: 85, status: 'MEETS', candidateEducation: primaryDegree };
+                }
+                return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+            }
+
+            return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
         }
 
         // No preferred education specified, check against minimum
         if (minEdu) {
-          const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
-          if (matchesMin) {
-            return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
-          }
-          return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+            const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
+            if (matchesMin) {
+                return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
+            }
+            return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
         }
 
         // Default fallback if no requirements specified
@@ -1001,24 +998,24 @@ Be deterministic, consistent and evidence-based in all scoring.`
     _scoreLocation(current, preferred, willingToRelocate, jobLoc) {
         if (!jobLoc?.city) return { score: 50, status: 'UNKNOWN', detail: 'Job location not specified' };
 
-        const cities = Array.isArray(jobLoc.city) 
-          ? jobLoc.city.map(c => c.toLowerCase()) 
-          : [jobLoc.city.toLowerCase()];
-        
+        const cities = Array.isArray(jobLoc.city)
+            ? jobLoc.city.map(c => c.toLowerCase())
+            : [jobLoc.city.toLowerCase()];
+
         const displayCities = Array.isArray(jobLoc.city) ? jobLoc.city.join(', ') : jobLoc.city;
 
         if (jobLoc.isRemote) return { score: 100, status: 'EXACT', detail: 'Remote — no location constraint' };
-        
+
         const currentLower = current?.toLowerCase();
         const isExact = currentLower && cities.some(c => currentLower.includes(c) || c.includes(currentLower));
         if (isExact) return { score: 100, status: 'EXACT', detail: `Already in ${displayCities}` };
-        
+
         const isPreferred = preferred?.some(pref => {
-          const prefLower = pref.toLowerCase();
-          return cities.some(c => prefLower.includes(c) || c.includes(prefLower));
+            const prefLower = pref.toLowerCase();
+            return cities.some(c => prefLower.includes(c) || c.includes(prefLower));
         });
         if (isPreferred) return { score: 80, status: 'NEARBY', detail: `${displayCities} is preferred` };
-        
+
         if (jobLoc.isHybrid && willingToRelocate) return { score: 60, status: 'NEARBY', detail: 'Hybrid + willing to relocate' };
         if (willingToRelocate) return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
         return { score: 20, status: 'DIFFERENT', detail: `In ${current || 'unknown city'} — relocation not confirmed` };
@@ -1074,4 +1071,4 @@ Be deterministic, consistent and evidence-based in all scoring.`
     }
 }
 
-module.exports = new AIService();
+module.exports = new AIService();   

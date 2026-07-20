@@ -240,21 +240,111 @@ class CandidateQueueService {
                     console.log(`   ⚠️  Risk Penalty: ${scoring.riskPenalty || 0}`);          // ✅ was scoreBreakdown?.summary?.riskPenalty
 
                 } else {
-                    throw new Error('AI returned no analysis results');
+                    console.warn('[QUEUE] ⚠️ AI returned success=false or no fullAnalysis, falling back to manual review.');
                 }
-
             } catch (aiError) {
-                console.error(`[QUEUE] ❌ AI Error:`);
+                console.error(`[QUEUE] ❌ AI Error during processing:`);
                 console.error('   Message:', aiError.message);
                 console.error('   Stack:', aiError.stack?.split('\n')[0]);
-                throw aiError;
             }
         } else {
             if (!aiEnabled) {
-                throw new Error('AI analysis is disabled (AI_ENABLED !== true)');
+                console.log('[QUEUE] AI analysis is disabled (AI_ENABLED !== true), using manual review fallback.');
             } else {
-                throw new Error('Candidate has no resume URL for AI analysis');
+                console.warn('[QUEUE] Candidate has no resume URL, using manual review fallback.');
             }
+        }
+
+        // Initialize default/fallback scoreBreakdown if AI was not parsed successfully
+        if (!aiParsed) {
+            scoreBreakdown = {
+                skills: {
+                    score: 0,
+                    weight: 0.30,
+                    matchedRequired: [],
+                    missingRequired: [],
+                    matchedPreferred: [],
+                    missingPreferred: [],
+                    coveragePercent: 0
+                },
+                experience: {
+                    score: 0,
+                    weight: 0.20,
+                    totalExperience: candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} years` : 'Not provided',
+                    relevantExperience: candidate.profile?.relevantExperience != null ? `${candidate.profile.relevantExperience} years` : 'Not provided',
+                    actualExperienceFromResume: 'Not provided',
+                    actual: '',
+                    required: '',
+                    status: '',
+                    detail: 'AI analysis failed/skipped — manual review required',
+                    relevancePercent: 100
+                },
+                domain: {
+                    score: 0,
+                    weight: 0.05,
+                    jobDomain: '',
+                    candidateDomain: '',
+                    status: ''
+                },
+                education: {
+                    score: 0,
+                    weight: 0.05,
+                    minimumRequired: '',
+                    candidateEducation: '',
+                    status: ''
+                },
+                salary: {
+                    score: 0,
+                    weight: 0.10,
+                    budget: '',
+                    expected: '',
+                    deltaPercent: 0,
+                    status: '',
+                    withinBudget: true
+                },
+                location: {
+                    score: 0,
+                    weight: 0.10,
+                    jobLocation: '',
+                    candidateLocation: '',
+                    status: '',
+                    detail: ''
+                },
+                noticePeriod: {
+                    score: 0,
+                    weight: 0.10,
+                    required: '',
+                    actual: '',
+                    days: 0,
+                    status: ''
+                },
+                stability: {
+                    score: 0,
+                    weight: 0.10,
+                    averageTenureYears: 0,
+                    last5YearAverageTenureYears: 0,
+                    totalAverageTenureYears: 0,
+                    isJobHopper: false,
+                    risk: '',
+                    detail: ''
+                },
+                summary: {
+                    weightedScore: 0,
+                    riskPenalty: 0,
+                    riskBreakdown: {
+                        careerGapPenalty: 0,
+                        jobHopperPenalty: 0,
+                        domainMismatchPenalty: 0,
+                        experienceDiscrepancyPenalty: 0,
+                        salaryOverBudgetPenalty: 0
+                    },
+                    finalAdjustedScore: 0,
+                    matchLevel: 'PENDING'
+                }
+            };
+            profileScore = 0;
+            matchLevel = 'PENDING';
+            recommendation = 'HOLD';
         }
 
         // ✅ SAVE COMPLETE RESUME ANALYSIS TO CANDIDATE

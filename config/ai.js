@@ -35,7 +35,7 @@ const getOpenAI = () => {
 };
 
 const getModel = () => {
-    return process.env.OPENAI_MODEL || 'gpt-5-mini';
+    return process.env.OPENAI_MODEL || 'gpt-4o';
 };
 
 module.exports = { initializeAI, getOpenAI, getModel };

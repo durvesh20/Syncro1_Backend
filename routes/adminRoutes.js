@@ -255,6 +255,68 @@ router.get(
   getCandidateDetail
 );
 
+// Revoke company rejection and resubmit candidate
+router.put(
+  '/candidates/:id/revoke-resubmit',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const candidate = await Candidate.findById(req.params.id);
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      const rejectedStatuses = ['REJECTED', 'ROUND_REJECTED', 'HR_REJECTED', 'OFFER_REJECTED', 'ASSESSMENT_FAILED'];
+      if (!rejectedStatuses.includes(candidate.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot revoke: candidate is currently in status "${candidate.status}" and is not rejected by company.`
+        });
+      }
+
+      const { notes } = req.body;
+      const prevStatus = candidate.status;
+
+      // Reset pipeline rejection outcomes to keep flowchart/details clean
+      if (candidate.status === 'ROUND_REJECTED') {
+        if (candidate.interviews && candidate.interviews.length > 0) {
+          const lastRound = candidate.interviews[candidate.interviews.length - 1];
+          if (lastRound.outcome && lastRound.outcome.decision === 'REJECTED') {
+            lastRound.outcome = undefined;
+          }
+        }
+      } else if (candidate.status === 'HR_REJECTED') {
+        if (candidate.hrRound) {
+          candidate.hrRound = undefined;
+        }
+      }
+
+      candidate.status = 'SUBMITTED';
+      candidate.statusHistory.push({
+        status: 'SUBMITTED',
+        changedBy: req.user._id,
+        changedAt: new Date(),
+        notes: notes?.trim() || `Rejection (previous status: ${prevStatus}) revoked and resubmitted to company by Admin`
+      });
+
+      await candidate.save();
+
+      res.json({
+        success: true,
+        message: 'Candidate rejection revoked and resubmitted successfully.',
+        data: candidate
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to revoke and resubmit candidate',
+        error: error.message
+      });
+    }
+  }
+);
+
 // Get all AI scoring logs for a candidate application
 router.get(
   '/scoring-logs/:applicationId',
@@ -562,7 +624,7 @@ router.get(
       const candidate = await Candidate.findById(req.params.id)
         .populate({
           path: 'job',
-          select: 'title uniqueId category location experienceLevel experienceRange salary skills education assignedTo',
+          select: 'title uniqueId category subCategory location experienceLevel experienceRange salary skills education assignedTo description requirements responsibilities commission vacancies applicationDeadline expectedJoiningDate employmentType',
           populate: { path: 'assignedTo', select: 'email role' }
         })
         .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')

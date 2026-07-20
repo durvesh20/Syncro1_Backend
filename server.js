@@ -28,6 +28,9 @@ require('./models/LimitExtensionRequest');
 require('./models/Payout');
 require('./models/Invoice');
 require('./models/ScoringLog');
+require('./models/Testimonial');
+require('./models/Award');
+require('./models/CompanyLogo');
 
 const app = express();
 
@@ -158,6 +161,7 @@ app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
 app.use('/api/agreements', require('./routes/agreementRoutes'));
 app.use('/api/ai', require('./routes/aiRoutes'));
 app.use('/api/reports', require('./routes/reportRoutes'));
+app.use('/api/landing', require('./routes/landingRoutes'));
 
 /* =========================================================
    ERROR HANDLER
