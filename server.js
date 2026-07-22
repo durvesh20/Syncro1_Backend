@@ -19,6 +19,7 @@ testCloudinary();
 const { initializeAI } = require('./config/ai');
 initializeAI();
 
+
 // ✅ Register ALL models BEFORE routes (prevents MissingSchemaError)
 require('./models/Notification');
 require('./models/AgreementQuery');
@@ -162,6 +163,7 @@ app.use('/api/agreements', require('./routes/agreementRoutes'));
 app.use('/api/ai', require('./routes/aiRoutes'));
 app.use('/api/reports', require('./routes/reportRoutes'));
 app.use('/api/landing', require('./routes/landingRoutes'));
+
 
 /* =========================================================
    ERROR HANDLER

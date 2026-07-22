@@ -22,6 +22,7 @@ class CandidateQueueService {
     async processAfterConsent(candidateId) {
         console.log(`[QUEUE] ── Processing candidate after consent: ${candidateId} ──`);
 
+
         const candidate = await Candidate.findById(candidateId)
             .populate('job')
             .populate('submittedBy', 'firmName firstName lastName user')
@@ -129,7 +130,13 @@ class CandidateQueueService {
                             actualExperienceFromResume: (() => {
                                 const a = fullAnalysis.candidateProfile || {};
                                 if (a.actualTotalExperience) return a.actualTotalExperience;
-                                if (a.actualTotalMonths != null) return `${Math.round((a.actualTotalMonths / 12) * 10) / 10} years`;
+                                if (a.actualTotalMonths != null) {
+                                    const y = Math.floor(a.actualTotalMonths / 12);
+                                    const m = a.actualTotalMonths % 12;
+                                    if (y === 0) return `${m} month${m === 1 ? '' : 's'}`;
+                                    if (m === 0) return `${y} year${y === 1 ? '' : 's'}`;
+                                    return `${y} year${y === 1 ? '' : 's'} ${m} month${m === 1 ? '' : 's'}`;
+                                }
                                 return 'Not provided';
                             })(),
                             actual: screening.experienceRange?.actual || '',
@@ -167,7 +174,7 @@ class CandidateQueueService {
                             jobLocation: screening.locationFit?.jobLocation || '',
                             candidateLocation: screening.locationFit?.candidateLocation || '',
                             status: screening.locationFit?.status || '',
-                            detail: ''
+                            willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? candidate.willingToRelocate ?? null
                         },
                         noticePeriod: {
                             score: scoring.noticePeriodFit || 0,
@@ -308,7 +315,8 @@ class CandidateQueueService {
                     jobLocation: '',
                     candidateLocation: '',
                     status: '',
-                    detail: ''
+                    detail: '',
+                    willingToRelocate: candidate.profile?.willingToRelocate ?? candidate.willingToRelocate ?? null
                 },
                 noticePeriod: {
                     score: 0,
@@ -363,6 +371,10 @@ class CandidateQueueService {
 
         // ✅ UPDATE PROFILE WITH EXTRACTED DATA
         if (parsedData?.profile) {
+            const parsedRelocate = parsedData.profile?.willingToRelocate !== undefined
+                ? (parsedData.profile.willingToRelocate === true || parsedData.profile.willingToRelocate === 'true')
+                : null;
+            const finalRelocate = candidate.profile?.willingToRelocate ?? candidate.willingToRelocate ?? parsedRelocate;
             candidate.profile = {
                 ...candidate.profile?.toObject?.() || {},
                 currentCompany: parsedData.profile?.currentCompany || candidate.profile?.currentCompany,
@@ -376,8 +388,12 @@ class CandidateQueueService {
                 languages: parsedData.profile?.languages?.length > 0 ? parsedData.profile.languages : candidate.profile?.languages || [],
                 certifications: parsedData.profile?.certifications?.length > 0 ? parsedData.profile.certifications : candidate.profile?.certifications || [],
                 location: candidate.profile?.location,
-                currentLocation: parsedData.profile?.currentLocation || candidate.profile?.currentLocation || candidate.profile?.location
+                currentLocation: parsedData.profile?.currentLocation || candidate.profile?.currentLocation || candidate.profile?.location,
+                willingToRelocate: finalRelocate
             };
+            if (candidate.willingToRelocate === undefined && finalRelocate !== null) {
+                candidate.willingToRelocate = finalRelocate;
+            }
         }
 
         candidate.status = 'ADMIN_REVIEW';

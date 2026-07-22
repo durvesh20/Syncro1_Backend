@@ -66,13 +66,12 @@ So calculate stability TWO ways and STORE both — but SCORE using the last-5-ye
 3. Output BOTH numbers in `candidateProfile.totalAverageTenureYears` and `candidateProfile.last5YearAverageTenureYears`, and again in `screening.stabilityAnalysis.totalAverageTenureYears` / `screening.stabilityAnalysis.last5YearAverageTenureYears`.
 4. stabilityScore (used in the weighted formula) is calculated using ONLY last5YearAverageTenureYears — see COMPONENT SCORING #6 below.
 ## COMPONENT SCORING (Each 0-100) — computed in this priority order:
-### 1. SKILLS MATCH (Weight: 30%) — Tier-weighted:
+### 1. SKILLS MATCH (Weight: 30%) — Required-based (100% required, 0% preferred, 0% optional):
 mustHaveMatched   = count of must-have skills found (alias rules apply)
 shouldHaveMatched = count of should-have skills found
 niceToHaveMatched = count of nice-to-have skills found
-skillsMatch = (mustHaveMatched/MAX(mustHaveTotal,1)*70) + (shouldHaveMatched/MAX(shouldHaveTotal,1)*25) + (niceToHaveMatched/MAX(niceToHaveTotal,1)*5)
-mustHaveCoverage = mustHaveMatched / MAX(mustHaveTotal,1)
-IF mustHaveCoverage < 0.70: cap skillsMatch at 50.
+skillsMatch = (mustHaveMatched / MAX(mustHaveTotal, 1) * 100)
+mustHaveCoverage = mustHaveMatched / MAX(mustHaveTotal, 1)
 IF mustHaveCoverage < 0.30: cap skillsMatch at 15 (skill gate — see above).
 skillCoveragePercent = (mustHaveMatched+shouldHaveMatched)/MAX(mustHaveTotal+shouldHaveTotal,1)*100
 ### 2. EXPERIENCE MATCH (Weight: 20%) — graduated both directions:
@@ -98,12 +97,13 @@ Always read the candidate's actual relocation answer from form data — do not g
 - 21-30% over: 40
 - more than 30% over: 0
 - missing data: 70 (neutral, cannot assess)
-### 5. NOTICE PERIOD FIT (Weight: 10%) — vs JD's expected notice period:
-- Candidate's notice period is AT or BELOW what the JD expects: 100
-- Slightly above JD expectation (within 15 days over): 80
-- 16-30 days above JD expectation: 60
-- 31-60 days above JD expectation: 40
-- 60+ days above JD expectation: 20
+### 5. NOTICE PERIOD FIT (Weight: 10%) — vs JD's expected notice period options:
+- Company selects "Any" (or no requirement): 100 points for any candidate notice period.
+- Company selects "Currently Serving" ONLY: 50 points for any valid candidate notice period.
+- Company selects specific options (e.g. 0-15 Days, 15-30 Days, 30-45 Days):
+  * Candidate notice is equal to or faster than company's max allowed range: 100
+  * Candidate notice exceeds company max allowed range AND company selected Currently Serving: 30
+  * Candidate notice exceeds company max allowed range without Currently Serving: 40 (if 1-15d over), 20 (if 16-30d over), 0 (if 30+d over).
 If JD does not specify a notice period requirement, use these general bands instead:
 0-15 days: 100 | 16-30 days: 90 | 31-45 days: 80 | 46-60 days: 70 | 61-90 days: 50 | 90+ days: 30
 ### 6. STABILITY SCORE (Weight: 10%) — scored on LAST 5 YEARS ONLY (see STABILITY VALIDATION above):
@@ -124,7 +124,7 @@ domainMismatchPenalty (max 10): UNRELATED domain = -10
 experienceDiscrepancyPenalty (max 7): MAJOR_DIFF detected = -7
 salaryOverBudgetPenalty (max 5): expected more than 30% over budget = -5
 riskPenalty = MIN(sum of all penalties, 25)   <- HARD CAP, never exceed 25
-finalAdjustedScore = MAX(0, weightedScore - riskPenalty)   <- FLOOR at 0
+finalAdjustedScore = MIN(100, MAX(0, weightedScore - riskPenalty) + (preferredSkillsMatched >= 50% ? 5 : 0))
 Then apply SKILL GATE:
 IF mustHaveMatched/mustHaveTotal < 0.30: finalAdjustedScore = MIN(finalAdjustedScore, 25)
 ## PRIORITY SCORE:

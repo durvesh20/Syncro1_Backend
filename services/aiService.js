@@ -3,9 +3,12 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { matchSkills, normalizeSkill, ALIAS_GROUPS, _ambiguousTokens } = require('./skillMatcher');
+const { matchCandidateCityToJobCities } = require('./cityNormalizer');
+const { EDU_LEVELS, getEduLevel } = require('./educationUtils');
+
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const AI_MAX_TOKENS = 8000;   // raised from 3000 to prevent truncation (D1: 4096 → 8000)
+const AI_MAX_TOKENS = 20000;   // raised from 8000 to 20000 to prevent truncation on GPT-5 reasoning
 
 // ── Caching for efficient AI use (Change E) ─────────────────────────────────
 const crypto = require('crypto');
@@ -35,9 +38,23 @@ const _cacheSweep = setInterval(() => {
 }, 30 * 60 * 1000);
 if (_cacheSweep && typeof _cacheSweep.unref === 'function') _cacheSweep.unref();
 
-function _scoreCacheKey(resumeUrl, jobId, formSkills) {
+function _scoreCacheKey(resumeUrl, candidateFormData = {}, jobDescription = {}) {
+    const candidateId = candidateFormData?.candidateId || candidateFormData?._id || candidateFormData?.email || '';
+    const rawJob = jobDescription?.toObject ? jobDescription.toObject() : (jobDescription || {});
+    const jobId = rawJob._id || rawJob.id || '';
+    const jobUpdatedAt = rawJob.updatedAt ? new Date(rawJob.updatedAt).getTime() : '';
+
+    const candidatePayload = JSON.stringify({
+        skills: candidateFormData?.skills || [],
+        exp: candidateFormData?.totalExperience ?? candidateFormData?.relevantExperience ?? '',
+        salary: candidateFormData?.expectedSalary ?? '',
+        loc: candidateFormData?.location ?? '',
+        notice: candidateFormData?.noticePeriod ?? '',
+        relocate: candidateFormData?.willingToRelocate ?? null
+    });
+
     return crypto.createHash('sha256')
-        .update(resumeUrl + '|' + jobId + '|' + JSON.stringify(formSkills || []) + '|v' + WEIGHTS_VERSION)
+        .update(`${resumeUrl}|${candidateId}|${jobId}|${jobUpdatedAt}|${candidatePayload}|v${WEIGHTS_VERSION}`)
         .digest('hex');
 }
 
@@ -81,21 +98,31 @@ class AIService {
         console.log('  - AI enabled:', this.enabled);
         console.log('========================================\n');
 
+        console.log(`🚀 [AI MATCHING ENGINE STARTED] Processing candidate: ${candidateFormData.firstName || ''} ${candidateFormData.lastName || ''}`);
+
         if (!this.enabled) {
-            console.log('[AI] Resume parsing disabled');
+            console.log('⏹️ [AI MATCHING ENGINE STOPPED] Resume parsing disabled');
+            return this._getEmptyResumeData();
+        }
+
+        const { validateResumeUrl } = require('../utils/validators');
+        const urlCheck = validateResumeUrl(resumeUrl);
+        if (!urlCheck.valid) {
+            console.error(`[AI] Invalid/unsafe resume URL (${resumeUrl}): ${urlCheck.reason}`);
+            console.log('⏹️ [AI MATCHING ENGINE STOPPED] Unsafe resume URL');
             return this._getEmptyResumeData();
         }
 
         const openai = getOpenAI();
         if (!openai) {
-            console.log('[AI] OpenAI not configured');
+            console.log('⏹️ [AI MATCHING ENGINE STOPPED] OpenAI not configured');
             return this._getEmptyResumeData();
         }
 
-        const ck = _scoreCacheKey(resumeUrl, jobDescription?._id, candidateFormData.skills);
+        const ck = _scoreCacheKey(resumeUrl, candidateFormData, jobDescription);
         const _cached = _scoreCache.get(ck);
         if (_cached && (Date.now() - _cached.ts) < CACHE_TTL_MS) {
-            console.log('[AI] Cache hit — returning prior scoring result');
+            console.log('⚡ [AI MATCHING ENGINE COMPLETED] Cache hit — returned prior score for:', candidateFormData.firstName, candidateFormData.lastName);
             return _cached.result;
         }
 
@@ -164,9 +191,22 @@ class AIService {
                             if (corrected) job.durationMonths = corrected.duration_months;
                         });
                     }
-                    if (aiResult.screening?.experienceRange) {
-                        aiResult.screening.experienceRange.actual = `${calc.yearsDecimal} years`;
+                    if (!aiResult.screening) aiResult.screening = {};
+                    if (!aiResult.screening.experienceRange) aiResult.screening.experienceRange = {};
+                    aiResult.screening.experienceRange.actual = `${calc.totalExperience}`;
+
+                    // Overwrite LLM's hallucinated discrepancy detail with clean exact deterministic text
+                    if (candidateFormData && candidateFormData.totalExperience != null) {
+                        const formExp = Number(candidateFormData.totalExperience);
+                        const diff = Math.abs(formExp - calc.yearsDecimal);
+                        if (!aiResult.validation) aiResult.validation = {};
+                        if (diff >= 1) {
+                            aiResult.validation.experienceDiscrepancyDetail = `Form reported ${formExp} years but resume calculation shows ${calc.totalExperience}.`;
+                        } else {
+                            aiResult.validation.experienceDiscrepancyDetail = `Form reported ${formExp} years matching resume calculation of ${calc.totalExperience}.`;
+                        }
                     }
+
                     console.log(`[AI] Deterministic experience: ${calc.totalExperience} (${calc.totalMonths}mo) from ${calc.roles.length} role(s)`);
                 }
             } catch (expErr) {
@@ -195,6 +235,7 @@ class AIService {
             console.log(`   Match Level: ${aiResult.matchLevel}`);
             console.log(`   Decision: ${aiResult.recommendation?.decision}`);
             console.log(`   Skills Coverage: ${aiResult.scoring?.skillCoveragePercent}%`);
+            console.log(`🏁 [AI MATCHING ENGINE COMPLETED & STOPPED] Candidate: ${candidateFormData.firstName} ${candidateFormData.lastName} | Score: ${aiResult.scoring?.finalAdjustedScore}/100`);
 
             const successResult = {
                 success: true,
@@ -297,42 +338,58 @@ class AIService {
 
     /**
      * Call OpenAI with truncation detection + one retry on truncation or parse failure.
-     * Returns { responseText, tokensUsed, model }.
+     * Returns { responseText, tokensUsed, model, promptTokens, completionTokens, reasoningTokens }.
      */
     async _callAI(prompt, attempt = 1) {
         const openai = getOpenAI();
         const model = getModel();
 
-        console.log(`[AI] Calling OpenAI (attempt ${attempt}), model: ${model}`);
+        const maxTokens = attempt === 1 ? AI_MAX_TOKENS : 24000;
+        console.log(`[AI] Calling OpenAI (attempt ${attempt}), model: ${model}, max_completion_tokens: ${maxTokens}`);
+
+        let actualPrompt = prompt;
+        if (attempt > 1 && prompt && prompt.length > 18000) {
+            console.warn(`[AI] Retry attempt ${attempt}: Trimming prompt (${prompt.length} -> 18000 chars) to free completion token budget`);
+            actualPrompt = prompt.slice(0, 18000) + '\n\n[Resume text summarized for retry execution]';
+        }
 
         const params = {
             model,
             messages: [
                 {
                     role: 'system',
-                    content: `You are Syncro1's advanced talent intelligence engine.Your job is to analyze resumes against job descriptions and output ONLY valid JSON.No explanations. No markdown. No text outside JSON.Be deterministic, consistent and evidence-based in all scoring.`
+                    content: `You are Syncro1's advanced talent intelligence engine. Your job is to analyze resumes against job descriptions and output ONLY valid JSON matching the scoring schema. No explanations. No markdown. Terse, deterministic, consistent and evidence-based.`
                 },
-                { role: 'user', content: prompt }
+                { role: 'user', content: actualPrompt }
             ],
-            max_completion_tokens: AI_MAX_TOKENS,
+            max_completion_tokens: maxTokens,
             response_format: { type: 'json_object' }
         };
-        if (!model.includes('gpt-5') && !model.includes('o1') && !model.includes('o3')) {
+
+        if (model.includes('gpt-5') || model.includes('gpt-5-mini') || model.includes('o1') || model.includes('o3')) {
+            params.reasoning_effort = "low";
+            params.verbosity = "low";
+        } else {
             params.temperature = 0.1;
         }
+
         const completion = await openai.chat.completions.create(params);
 
         const finishReason = completion.choices[0]?.finish_reason;
         const responseText = completion.choices[0]?.message?.content;
-        const tokensUsed = completion.usage?.total_tokens;
+        const usage = completion.usage || {};
+        const promptTokens = usage.prompt_tokens || 0;
+        const completionTokens = usage.completion_tokens || 0;
+        const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens || 0;
+        const totalTokens = usage.total_tokens || 0;
 
-        console.log(`[AI] finish_reason=${finishReason}, tokens=${tokensUsed}`);
+        console.log(`[AI] finish_reason=${finishReason} | prompt_tokens=${promptTokens} | completion_tokens=${completionTokens} | reasoning_tokens=${reasoningTokens} | total_tokens=${totalTokens}`);
 
         // Handle truncation
         if (finishReason === 'length') {
-            console.error('[AI] Response truncated, finish_reason=length');
+            console.error(`[AI] ⚠️ Response truncated (finish_reason=length, completion_tokens=${completionTokens}, reasoning_tokens=${reasoningTokens})`);
             if (attempt < 2) {
-                console.warn('[AI] Retrying once after truncation…');
+                console.warn('[AI] Retrying with expanded token budget (24000 max_completion_tokens) & trimmed prompt input…');
                 return this._callAI(prompt, 2);
             }
             // Write truncation failure to log
@@ -342,14 +399,14 @@ class AIService {
                 promptSent: prompt,
                 rawResponse: responseText,
                 success: false,
-                error: 'truncated_response'
+                error: `truncated_response (completion_tokens=${completionTokens}, reasoning_tokens=${reasoningTokens})`
             }).catch(() => { });
             throw new Error('AI response truncated after retry — falling back');
         }
 
         if (!responseText) throw new Error('Empty response from OpenAI');
 
-        return { responseText, tokensUsed, model };
+        return { responseText, tokensUsed: totalTokens, model, promptTokens, completionTokens, reasoningTokens };
     }
 
     /**
@@ -467,11 +524,8 @@ class AIService {
                 aiResult.rankingSignals.shouldHaveSkillsMissing = result.shouldHaveMissing;
                 aiResult.rankingSignals.niceToHaveSkillsMatched = result.niceToHaveMatched;
 
-                // ── Step C: recompute skillsMatch (same formula as scoring-prompt.txt) ──
-                skillsMatch = (result.mustHaveMatched.length / Math.max(mustTotal, 1) * 70)
-                    + (result.shouldHaveMatched.length / Math.max(shouldTotal, 1) * 25)
-                    + (result.niceToHaveMatched.length / Math.max(niceTotal, 1) * 5);
-                if (coverage < 70) skillsMatch = Math.min(skillsMatch, 50);
+                // ── Step C: recompute skillsMatch (100% required / 0% preferred / 0% optional) ──
+                skillsMatch = (result.mustHaveMatched.length / Math.max(mustTotal, 1)) * 100;
                 if (coverage < 30) skillsMatch = Math.min(skillsMatch, 15);
                 skillsMatch = Math.round(skillsMatch);
             } else {
@@ -581,11 +635,12 @@ class AIService {
                 aiResult.scoring.locationMatch = locResult.score;
 
                 if (!aiResult.screening) aiResult.screening = {};
+                const parsedRelocate = (willingToRelocate === true || willingToRelocate === 'true') ? true : (willingToRelocate === false || willingToRelocate === 'false') ? false : null;
                 aiResult.screening.locationFit = {
                     jobLocation: jobDescription.location?.city ? (Array.isArray(jobDescription.location.city) ? jobDescription.location.city.join(', ') : jobDescription.location.city) : 'Not specified',
                     candidateLocation: candLoc || 'Not specified',
                     status: locResult.status,
-                    relocationWilling: !!willingToRelocate
+                    willingToRelocate: parsedRelocate
                 };
 
                 if (!aiResult.validation) aiResult.validation = {};
@@ -595,22 +650,51 @@ class AIService {
             aiResult.scoring.skillsMatch = skillsMatch;
             aiResult.scoring.skillCoveragePercent = coverage;
 
+            // ── Step D6: deterministic stability recompute ──────────────────────
+            // Uses the AI-extracted jobHistory (reliable dates) rather than AI's
+            // hand-summed stability score, which is often wrong.
+            try {
+                const scoringService = require('./candidateScoringService');
+                const stabProfile = {
+                    jobHistory: aiResult.candidateProfile?.jobHistory || [],
+                    experience: aiResult.candidateProfile?.experience || [],
+                };
+                const stabResult = scoringService._scoreStability(stabProfile);
+                aiResult.scoring.stabilityScore = stabResult.score;
+                if (!aiResult.screening) aiResult.screening = {};
+                aiResult.screening.stabilityAnalysis = {
+                    totalAverageTenureYears: stabResult.totalAverageTenureYears,
+                    last5YearAverageTenureYears: stabResult.last5YearAverageTenureYears,
+                    isJobHopper: stabResult.isJobHopper,
+                    stabilityRisk: stabResult.risk,
+                    scoredOn: 'last5Years',
+                    detail: stabResult.detail,
+                };
+            } catch (stabErr) {
+                console.error('[AI] Stability recompute failed (non-fatal):', stabErr.message);
+            }
+
             const weightedScore = Math.round(
                 skillsMatch * 0.30 +
                 (s.experienceMatch || 0) * 0.20 +
                 (s.locationMatch || 0) * 0.10 +
                 (s.salaryFit || 0) * 0.10 +
                 (s.noticePeriodFit || 0) * 0.10 +
-                (s.stabilityScore || 0) * 0.10 +
-                (s.domainMatch || 0) * 0.05 +
+                (aiResult.scoring.stabilityScore ?? s.stabilityScore ?? 0) * 0.10 +
+                (aiResult.scoring.domainMatch ?? s.domainMatch ?? 0) * 0.05 +
                 (s.educationMatch || 0) * 0.05
             );
             aiResult.scoring.weightedScore = weightedScore;
 
-            // ── Step E: recompute finalAdjustedScore + skill gate ─────────
-            let finalAdjustedScore = Math.max(0, weightedScore - (s.riskPenalty || 0));
+            // ── Step E: recompute finalAdjustedScore + preferred bonus + skill gate ─────────
+            const prefTotal = (resolvedSkills?.shouldHave || jdSkills?.shouldHave || []).length;
+            const shouldMatchedCount = (shouldHaveMatched || []).length;
+            const preferredBonus = (prefTotal > 0 && (shouldMatchedCount / prefTotal) >= 0.5) ? 5 : 0;
+
+            let finalAdjustedScore = Math.min(100, Math.max(0, weightedScore - (s.riskPenalty || 0)) + preferredBonus);
             const skillGate = coverage < 30;
             if (skillGate) finalAdjustedScore = Math.min(finalAdjustedScore, 25);
+            aiResult.scoring.preferredBonus = preferredBonus;
             aiResult.scoring.finalAdjustedScore = finalAdjustedScore;
 
             // ── Step F: recompute matchLevel and decision ─────────────────
@@ -903,121 +987,71 @@ class AIService {
             return { score: 50, status: 'UNKNOWN', candidateEducation: 'Not provided' };
         }
 
-        const EDU_MAP = {
-            'btech': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
-            'bacheloroftechnology': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
-            'be': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
-            'bachelorofengineering': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
-            'mtech': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
-            'masteroftechnology': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
-            'me': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
-            'masterofengineering': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
-            'mca': ['mca', 'masterofcomputerapplications'],
-            'masterofcomputerapplications': ['mca', 'masterofcomputerapplications'],
-            'bca': ['bca', 'bachelorofcomputerapplications'],
-            'bachelorofcomputerapplications': ['bca', 'bachelorofcomputerapplications'],
-            'mba': ['mba', 'masterofbusinessadministration'],
-            'masterofbusinessadministration': ['mba', 'masterofbusinessadministration'],
-            'bsc': ['bsc', 'bachelorofscience'],
-            'bachelorofscience': ['bsc', 'bachelorofscience'],
-            'msc': ['msc', 'masterofscience'],
-            'masterofscience': ['msc', 'masterofscience'],
-            'bba': ['bba', 'bachelorofbusinessadministration'],
-            'bachelorofbusinessadministration': ['bba', 'bachelorofbusinessadministration'],
-            'bcom': ['bcom', 'bachelorofcommerce'],
-            'bachelorofcommerce': ['bcom', 'bachelorofcommerce'],
-            'mcom': ['mcom', 'masterofcommerce'],
-            'masterofcommerce': ['mcom', 'masterofcommerce'],
-            'phd': ['phd', 'doctorofphilosophy'],
-            'doctorofphilosophy': ['phd', 'doctorofphilosophy']
-        };
 
-        const normalizeEduString = (str) => {
-            if (!str || typeof str !== 'string') return '';
-            return str.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
-        };
-
-        const degreesMatch = (candDegree, jobDegree) => {
-            if (!candDegree || !jobDegree) return false;
-            const normCand = normalizeEduString(candDegree);
-            const normJob = normalizeEduString(jobDegree);
-            if (normCand === normJob) return true;
-            const candEquivs = EDU_MAP[normCand] || [normCand];
-            const jobEquivs = EDU_MAP[normJob] || [normJob];
-            for (const c of candEquivs) {
-                if (jobEquivs.includes(c)) return true;
-            }
-            if (normCand.includes(normJob) || normJob.includes(normCand)) {
-                return true;
-            }
-            return false;
-        };
 
         const preferredList = (job?.education && Array.isArray(job.education.preferred))
             ? job.education.preferred.filter(p => p && p.trim() !== '')
             : [];
         const minEdu = job?.education?.minimum || job?.educationRequirement || '';
 
-        // Check candidate degrees against job requirements
         const degreesToCheck = candidateDegrees.length > 0 ? candidateDegrees : [primaryDegree];
+        const candHighestLevel = Math.max(...degreesToCheck.map(d => getEduLevel(d)));
 
+        // Step 1 — Check preferred first
         if (preferredList.length > 0) {
-            // Check if any candidate degree matches any preferred education
-            const matchesPreferred = degreesToCheck.some(candDeg =>
-                preferredList.some(prefDeg => degreesMatch(candDeg, prefDeg))
-            );
-            if (matchesPreferred) {
+            const prefHighestLevel = Math.max(...preferredList.map(p => getEduLevel(p)));
+            if (prefHighestLevel !== -1 && candHighestLevel >= prefHighestLevel) {
                 return { score: 100, status: 'EXCEEDS', candidateEducation: primaryDegree };
             }
-
-            // Check if any candidate degree matches minimum education
-            if (minEdu) {
-                const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
-                if (matchesMin) {
-                    return { score: 85, status: 'MEETS', candidateEducation: primaryDegree };
-                }
-                return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
-            }
-
-            return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
         }
 
-        // No preferred education specified, check against minimum
+        // Step 2 — Check minimum
         if (minEdu) {
-            const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
-            if (matchesMin) {
+            const minLevel = getEduLevel(minEdu);
+            if (minLevel === -1) {
+                return { score: 75, status: 'MEETS', candidateEducation: primaryDegree };
+            }
+            if (candHighestLevel >= minLevel) {
                 return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
             }
-            return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+            const diff = minLevel - candHighestLevel;
+            if (diff === 1) return { score: 60, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+            if (diff === 2) return { score: 30, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+            return { score: 0, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
         }
 
-        // Default fallback if no requirements specified
+        // No requirements specified
         return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
     }
 
     _scoreLocation(current, preferred, willingToRelocate, jobLoc) {
         if (!jobLoc?.city) return { score: 50, status: 'UNKNOWN', detail: 'Job location not specified' };
 
-        const cities = Array.isArray(jobLoc.city)
-            ? jobLoc.city.map(c => c.toLowerCase())
-            : [jobLoc.city.toLowerCase()];
+        const jobCities = Array.isArray(jobLoc.city) ? jobLoc.city : [jobLoc.city];
+        const displayCities = jobCities.join(', ');
 
-        const displayCities = Array.isArray(jobLoc.city) ? jobLoc.city.join(', ') : jobLoc.city;
+        // Remote jobs — no location constraint
+        if (jobLoc.isRemote || matchCandidateCityToJobCities('remote', jobCities)) {
+            return { score: 100, status: 'EXACT', detail: 'Remote — no location constraint' };
+        }
 
-        if (jobLoc.isRemote) return { score: 100, status: 'EXACT', detail: 'Remote — no location constraint' };
+        // Exact city match with alias normalization (Bengaluru == Bangalore, Bombay == Mumbai…)
+        if (current && matchCandidateCityToJobCities(current, jobCities)) {
+            return { score: 100, status: 'EXACT', detail: `Already in ${displayCities}` };
+        }
 
-        const currentLower = current?.toLowerCase();
-        const isExact = currentLower && cities.some(c => currentLower.includes(c) || c.includes(currentLower));
-        if (isExact) return { score: 100, status: 'EXACT', detail: `Already in ${displayCities}` };
+        // Preferred locations match
+        const prefMatch = (preferred || []).some(pref => matchCandidateCityToJobCities(pref, jobCities));
+        if (prefMatch) {
+            return { score: 80, status: 'NEARBY', detail: `${displayCities} is a preferred location` };
+        }
 
-        const isPreferred = preferred?.some(pref => {
-            const prefLower = pref.toLowerCase();
-            return cities.some(c => prefLower.includes(c) || c.includes(prefLower));
-        });
-        if (isPreferred) return { score: 80, status: 'NEARBY', detail: `${displayCities} is preferred` };
-
-        if (jobLoc.isHybrid && willingToRelocate) return { score: 60, status: 'NEARBY', detail: 'Hybrid + willing to relocate' };
-        if (willingToRelocate) return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
+        if (jobLoc.isHybrid && willingToRelocate) {
+            return { score: 60, status: 'NEARBY', detail: 'Hybrid role — willing to relocate' };
+        }
+        if (willingToRelocate) {
+            return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
+        }
         return { score: 20, status: 'DIFFERENT', detail: `In ${current || 'unknown city'} — relocation not confirmed` };
     }
 
@@ -1071,4 +1105,4 @@ class AIService {
     }
 }
 
-module.exports = new AIService();   
+module.exports = new AIService();

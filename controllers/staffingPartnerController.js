@@ -1354,7 +1354,15 @@ exports.submitCandidate = async (req, res) => {
 
     // ✅ STEP 11: Validate notice period
     const validNoticePeriods = [
+      'Any',
       'Immediate',
+      '0-15 Days',
+      '15-30 Days',
+      '30-45 Days',
+      '45-60 Days',
+      '60-75 Days',
+      '75-90 Days',
+      'Currently Serving',
       '15 days',
       '30 days',
       '45 days',

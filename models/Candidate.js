@@ -93,7 +93,15 @@ const candidateSchema = new mongoose.Schema({
     noticePeriod: {
       type: String,
       enum: [
+        'Any',
         'Immediate',
+        '0-15 Days',
+        '15-30 Days',
+        '30-45 Days',
+        '45-60 Days',
+        '60-75 Days',
+        '75-90 Days',
+        'Currently Serving',
         '15 days',
         '30 days',
         '45 days',
