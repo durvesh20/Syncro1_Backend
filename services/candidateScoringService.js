@@ -1,5 +1,7 @@
 const Job = require('../models/Job');
 const { matchSkills } = require('./skillMatcher');
+const { matchCandidateCityToJobCities } = require('./cityNormalizer');
+const { EDU_LEVELS, getEduLevel } = require('./educationUtils');
 
 class CandidateScoringService {
 
@@ -32,34 +34,32 @@ class CandidateScoringService {
 
     // 1. Skills Match (30%) — deterministic via skillMatcher
     const jdSkills = {
-      mustHave:   job.skills?.required || job.skills?.mustHave || [],
+      mustHave: job.skills?.required || job.skills?.mustHave || [],
       shouldHave: job.skills?.preferred || job.skills?.shouldHave || [],
       niceToHave: job.skills?.niceToHave || [],
     };
     const skillMatch = matchSkills(profile.skills || [], jdSkills);
     const mustTotal = jdSkills.mustHave.length;
     const mustMatched = skillMatch.mustHaveMatched.length;
-    const shouldMatched = skillMatch.shouldHaveMatched.length;
-    const shouldTotal = jdSkills.shouldHave.length;
-    const niceMatched = skillMatch.niceToHaveMatched.length;
-    const niceTotal = jdSkills.niceToHave.length;
-    let skillsScore = (mustMatched / Math.max(mustTotal, 1) * 70)
-                    + (shouldMatched / Math.max(shouldTotal, 1) * 25)
-                    + (niceMatched  / Math.max(niceTotal, 1)  * 5);
-    const mustCoverage = mustTotal > 0 ? Math.round(mustMatched / mustTotal * 100) : 100;
-    // Apply skill caps
+    let skillsScore = (mustMatched / Math.max(mustTotal, 1)) * 100;
+    const mustCoverage = mustTotal > 0 ? Math.round((mustMatched / mustTotal) * 100) : 100;
+    // Apply skill gate cap if coverage < 30%
     if (mustCoverage < 30) skillsScore = Math.min(skillsScore, 15);
-    else if (mustCoverage < 70) skillsScore = Math.min(skillsScore, 50);
     skillsScore = Math.round(skillsScore);
+    const shouldTotal = jdSkills.shouldHave.length;
+    const shouldMatched = skillMatch.shouldHaveMatched.length;
+    const preferredBonus = (shouldTotal > 0 && (shouldMatched / shouldTotal) >= 0.5) ? 5 : 0;
+
     scores.skills = {
-      score:            skillsScore,
-      weight:           30,
-      matchedRequired:  skillMatch.mustHaveMatched,
-      missingRequired:  skillMatch.mustHaveMissing,
+      score: skillsScore,
+      weight: 30,
+      matchedRequired: skillMatch.mustHaveMatched,
+      missingRequired: skillMatch.mustHaveMissing,
       matchedPreferred: skillMatch.shouldHaveMatched,
       missingPreferred: skillMatch.shouldHaveMissing,
-      coveragePercent:  mustCoverage,
-      skillGate:        mustCoverage < 30,
+      coveragePercent: mustCoverage,
+      preferredBonus: preferredBonus,
+      skillGate: mustCoverage < 30,
     };
     totalScore += skillsScore * 0.30;
 
@@ -102,7 +102,7 @@ class CandidateScoringService {
       } else if (job.educationRequirement) {
         detailedRequired = job.educationRequirement;
       }
-      
+
       if (Array.isArray(job.education.preferred) && job.education.preferred.length > 0) {
         const filteredPref = job.education.preferred.filter(p => p && p.trim() !== '');
         if (filteredPref.length > 0) {
@@ -144,7 +144,7 @@ class CandidateScoringService {
     };
     totalScore += salaryScore.score * 0.10;
 
-        // 6. Location Match (10%)
+    // 6. Location Match (10%)
     const locScore = this._scoreLocation(
       profile.location,
       profile.preferredLocations,
@@ -157,12 +157,13 @@ class CandidateScoringService {
       jobLocation: job.location?.city || 'Not specified',
       candidateLocation: profile.location || 'Not specified',
       status: locScore.status,
-      detail: locScore.detail
+      detail: locScore.detail,
+      willingToRelocate: profile.willingToRelocate ?? null
     };
     totalScore += locScore.score * 0.10;
 
     // 7. Notice Period Fit (10%)
-    const npScore = this._scoreNoticePeriod(profile.noticePeriod);
+    const npScore = this._scoreNoticePeriod(profile.noticePeriod, job?.expectedJoiningDate);
     scores.noticePeriod = {
       score: npScore.score,
       weight: 10,
@@ -175,18 +176,18 @@ class CandidateScoringService {
     // 8. Stability Score (10%)
     const stabScore = this._scoreStability(profile);
     scores.stability = {
-      score:                      stabScore.score,
-      weight:                     10,
-      averageTenureYears:         stabScore.last5YearAverageTenureYears || 0,
-      totalAverageTenureYears:    stabScore.totalAverageTenureYears    || 0,
+      score: stabScore.score,
+      weight: 10,
+      averageTenureYears: stabScore.last5YearAverageTenureYears || 0,
+      totalAverageTenureYears: stabScore.totalAverageTenureYears || 0,
       last5YearAverageTenureYears: stabScore.last5YearAverageTenureYears || 0,
-      isJobHopper:                stabScore.isJobHopper || false,
-      risk:                       stabScore.risk,
-      detail:                     stabScore.detail
+      isJobHopper: stabScore.isJobHopper || false,
+      risk: stabScore.risk,
+      detail: stabScore.detail
     };
     totalScore += stabScore.score * 0.10;
 
-    let overall = Math.round(totalScore);
+    let overall = Math.min(100, Math.round(totalScore) + preferredBonus);
     // Apply skillGate hard-cutoff
     const skillGateTriggered = scores.skills.skillGate;
     if (skillGateTriggered) overall = Math.min(overall, 25);
@@ -260,16 +261,16 @@ class CandidateScoringService {
     // Below minimum
     if (expUsed < min) {
       const gap = min - expUsed;
-      if (gap <= 1)  return { score: 70, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — ${gap} year(s) below min`, usedForScoring: expUsed, usedLabel };
-      if (gap <= 3)  return { score: 40, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — ${gap} year(s) below min`, usedForScoring: expUsed, usedLabel };
-                     return { score: 20, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — significant gap (${gap} years below min)`, usedForScoring: expUsed, usedLabel };
+      if (gap <= 1) return { score: 70, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — ${gap} year(s) below min`, usedForScoring: expUsed, usedLabel };
+      if (gap <= 3) return { score: 40, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — ${gap} year(s) below min`, usedForScoring: expUsed, usedLabel };
+      return { score: 20, status: 'BELOW', detail: `${expUsed} years (${usedLabel}) — significant gap (${gap} years below min)`, usedForScoring: expUsed, usedLabel };
     }
 
     // Above maximum (overqualified)
     const excess = expUsed - max;
     if (excess <= 2) return { score: 70, status: 'EXCEEDS', detail: `${expUsed} years (${usedLabel}) — ${excess} year(s) above max`, usedForScoring: expUsed, usedLabel };
     if (excess <= 4) return { score: 50, status: 'EXCEEDS', detail: `${expUsed} years (${usedLabel}) — ${excess} years above max, moderately overqualified`, usedForScoring: expUsed, usedLabel };
-                     return { score: 30, status: 'EXCEEDS', detail: `${expUsed} years (${usedLabel}) — overqualified by ${excess} years`, usedForScoring: expUsed, usedLabel };
+    return { score: 30, status: 'EXCEEDS', detail: `${expUsed} years (${usedLabel}) — overqualified by ${excess} years`, usedForScoring: expUsed, usedLabel };
   }
 
 
@@ -313,64 +314,204 @@ class CandidateScoringService {
   _scoreLocation(current, preferred, willingToRelocate, jobLoc) {
     if (!jobLoc?.city) return { score: 50, status: 'UNKNOWN', detail: 'Job location not specified' };
 
-    const cities = Array.isArray(jobLoc.city) 
-      ? jobLoc.city.map(c => c.toLowerCase()) 
-      : [jobLoc.city.toLowerCase()];
-    
-    const displayCities = Array.isArray(jobLoc.city) ? jobLoc.city.join(', ') : jobLoc.city;
+    const jobCities = Array.isArray(jobLoc.city) ? jobLoc.city : [jobLoc.city];
+    const displayCities = jobCities.join(', ');
 
-    if (jobLoc.isRemote) return { score: 100, status: 'EXACT', detail: 'Remote — no location constraint' };
-    
-    const currentLower = current?.toLowerCase();
-    const isExact = currentLower && cities.some(c => currentLower.includes(c) || c.includes(currentLower));
-    if (isExact) return { score: 100, status: 'EXACT', detail: `Already in ${displayCities}` };
-    
-    const isPreferred = preferred?.some(pref => {
-      const prefLower = pref.toLowerCase();
-      return cities.some(c => prefLower.includes(c) || c.includes(prefLower));
-    });
-    if (isPreferred) return { score: 80, status: 'NEARBY', detail: `${displayCities} is preferred` };
-    
-    if (jobLoc.isHybrid && willingToRelocate) return { score: 60, status: 'NEARBY', detail: 'Hybrid + willing to relocate' };
-    if (willingToRelocate) return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
+    // Remote jobs — no location constraint
+    if (jobLoc.isRemote || matchCandidateCityToJobCities('remote', jobCities)) {
+      return { score: 100, status: 'EXACT', detail: 'Remote — no location constraint' };
+    }
+
+    // Exact city match with alias normalization (Bengaluru == Bangalore, Bombay == Mumbai…)
+    if (current && matchCandidateCityToJobCities(current, jobCities)) {
+      return { score: 100, status: 'EXACT', detail: `Already in ${displayCities}` };
+    }
+
+    // Preferred locations match
+    const prefMatch = (preferred || []).some(pref => matchCandidateCityToJobCities(pref, jobCities));
+    if (prefMatch) {
+      return { score: 80, status: 'NEARBY', detail: `${displayCities} is a preferred location` };
+    }
+
+    if (jobLoc.isHybrid && willingToRelocate) {
+      return { score: 60, status: 'NEARBY', detail: 'Hybrid role — willing to relocate' };
+    }
+    if (willingToRelocate) {
+      return { score: 60, status: 'DIFFERENT', detail: 'Different city — willing to relocate' };
+    }
     return { score: 20, status: 'DIFFERENT', detail: `In ${current || 'unknown city'} — relocation not confirmed` };
   }
 
-  _scoreNoticePeriod(np) {
-    if (!np) return { score: 50, status: 'UNKNOWN', detail: 'Not specified', days: 0 };
+  _scoreNoticePeriod(candNp, companyNoticeInput) {
+    let companyList = [];
+    if (Array.isArray(companyNoticeInput)) {
+      companyList = companyNoticeInput;
+    } else if (typeof companyNoticeInput === 'string' && companyNoticeInput.trim() !== '') {
+      companyList = [companyNoticeInput];
+    } else {
+      companyList = ['Any'];
+    }
 
-    const p = np.toLowerCase();
-    if (p.includes('immediate') || p.includes('0')) return { score: 100, status: 'IMMEDIATE', detail: 'Immediately available', days: 0 };
-    if (p.includes('15') || p.includes('2 week')) return { score: 100, status: 'WITHIN', detail: '2 weeks', days: 15 };
-    if (p.includes('30') || p.includes('1 month')) return { score: 90, status: 'ACCEPTABLE', detail: '1 month', days: 30 };
-    if (p.includes('45')) return { score: 80, status: 'ACCEPTABLE', detail: '45 days', days: 45 };
-    if (p.includes('60') || p.includes('2 month')) return { score: 70, status: 'ACCEPTABLE', detail: '2 months', days: 60 };
-    if (p.includes('90') || p.includes('3 month')) return { score: 50, status: 'LONG', detail: '3 months — may delay joining', days: 90 };
-    return { score: 30, status: 'LONG', detail: np, days: 120 };
+    const candStr = (candNp || 'Immediate').toString().trim();
+
+    const daysMap = {
+      'immediate': { label: 'Immediate', days: 0 },
+      '0-15 days': { label: '0-15 Days', days: 15 },
+      '15 days': { label: '0-15 Days', days: 15 },
+      '2 week': { label: '0-15 Days', days: 15 },
+      '15-30 days': { label: '15-30 Days', days: 30 },
+      '30 days': { label: '15-30 Days', days: 30 },
+      '1 month': { label: '15-30 Days', days: 30 },
+      '30-45 days': { label: '30-45 Days', days: 45 },
+      '45 days': { label: '30-45 Days', days: 45 },
+      '45-60 days': { label: '45-60 Days', days: 60 },
+      '60 days': { label: '45-60 Days', days: 60 },
+      '2 month': { label: '45-60 Days', days: 60 },
+      '60-75 days': { label: '60-75 Days', days: 75 },
+      '75 days': { label: '60-75 Days', days: 75 },
+      '75-90 days': { label: '75-90 Days', days: 90 },
+      '90 days': { label: '75-90 Days', days: 90 },
+      '3 month': { label: '75-90 Days', days: 90 },
+      'more than 90 days': { label: '75-90 Days', days: 90 }
+    };
+
+    const candLower = candStr.toLowerCase();
+    let matchedCand = null;
+    for (const key of Object.keys(daysMap)) {
+      if (candLower.includes(key)) {
+        matchedCand = daysMap[key];
+        break;
+      }
+    }
+    if (!matchedCand) {
+      if (candLower.includes('serving')) matchedCand = { label: 'Currently Serving', days: 15 };
+      else matchedCand = { label: candStr, days: 30 };
+    }
+
+    const candDays = matchedCand.days;
+
+    if (companyList.includes('Any') || companyList.length === 0) {
+      return { score: 100, status: 'IMMEDIATE', detail: 'Company accepts any notice period', days: candDays, actual: candStr };
+    }
+
+    const hasCurrentlyServing = companyList.some(o => o.toLowerCase().includes('serving'));
+    const specificOptions = companyList.filter(o => o !== 'Any' && !o.toLowerCase().includes('serving'));
+
+    if (specificOptions.length === 0 && hasCurrentlyServing) {
+      return {
+        score: 50,
+        status: 'ACCEPTABLE',
+        detail: `Company requested currently serving candidates — candidate assigned 50 points (${candStr})`,
+        days: candDays,
+        actual: candStr
+      };
+    }
+
+    const getOptionDays = (optStr) => {
+      const ol = optStr.toLowerCase();
+      for (const k of Object.keys(daysMap)) {
+        if (ol.includes(k)) return daysMap[k].days;
+      }
+      return 30;
+    };
+
+    const maxAllowedDays = specificOptions.length > 0 ? Math.max(...specificOptions.map(getOptionDays)) : 30;
+
+    const isExactMatch = specificOptions.some(o => {
+      const oDays = getOptionDays(o);
+      return oDays === candDays;
+    });
+
+    if (isExactMatch || candDays <= maxAllowedDays) {
+      return {
+        score: 100,
+        status: 'IMMEDIATE',
+        detail: `Candidate notice (${candStr}) meets company requirement`,
+        days: candDays,
+        actual: candStr
+      };
+    }
+
+    const diffDays = candDays - maxAllowedDays;
+
+    if (hasCurrentlyServing) {
+      if (diffDays <= 30) {
+        return {
+          score: 30,
+          status: 'LONG',
+          detail: `Notice period (${candStr}) exceeds company range (${maxAllowedDays}d max), adjusted to 30 due to Currently Serving option`,
+          days: candDays,
+          actual: candStr
+        };
+      }
+      return {
+        score: 15,
+        status: 'LONG',
+        detail: `Notice period (${candStr}) exceeds company limit (${maxAllowedDays}d max)`,
+        days: candDays,
+        actual: candStr
+      };
+    } else {
+      if (diffDays <= 15) {
+        return {
+          score: 40,
+          status: 'ACCEPTABLE',
+          detail: `Notice period (${candStr}) slightly exceeds company range (${maxAllowedDays}d max)`,
+          days: candDays,
+          actual: candStr
+        };
+      } else if (diffDays <= 30) {
+        return {
+          score: 20,
+          status: 'LONG',
+          detail: `Notice period (${candStr}) exceeds company range (${maxAllowedDays}d max)`,
+          days: candDays,
+          actual: candStr
+        };
+      }
+      return {
+        score: 0,
+        status: 'LONG',
+        detail: `Notice period (${candStr}) far exceeds requirement`,
+        days: candDays,
+        actual: candStr
+      };
+    }
   }
 
   _scoreDomain(profile, job) {
-    // Basic domain matching without AI
-    const jobCategory = (job.category || '').toLowerCase();
-    const candidateTitle = (profile.currentDesignation || '').toLowerCase();
-    const candidateDomain = (profile.domain || '').toLowerCase();
+    const jobCategory = (job.category || '').toLowerCase().trim();
+    const jobSubCategory = (job.subCategory || '').toLowerCase().trim();
+    const candidateDomain = (profile.domain || '').toLowerCase().trim();
+    const candidateDesignation = (profile.currentDesignation || '').toLowerCase().trim();
 
-    if (!jobCategory) return { score: 50, status: 'UNKNOWN' };
+    const jobDomainLabel = job.category || 'Unknown';
+    const candDomainLabel = profile.domain || profile.currentDesignation || 'Unknown';
 
-    // Check for exact or strong overlap
-    if (candidateTitle.includes(jobCategory) || candidateDomain.includes(jobCategory) ||
-        jobCategory.includes(candidateTitle) || jobCategory.includes(candidateDomain)) {
-      return { score: 100, status: 'EXACT' };
+    if (!jobCategory && !jobSubCategory) {
+      return { score: 50, status: 'UNKNOWN', jobDomain: jobDomainLabel, candidateDomain: candDomainLabel };
+    }
+    if (!candidateDomain && !candidateDesignation) {
+      return { score: 50, status: 'UNKNOWN', jobDomain: jobDomainLabel, candidateDomain: candDomainLabel };
     }
 
-    // Related tech domains
-    const techDomains = ['software', 'developer', 'engineer', 'frontend', 'backend', 'fullstack', 'mern', 'web', 'mobile', 'devops', 'cloud', 'data', 'ai', 'ml'];
-    const isCandidateTech = techDomains.some(d => candidateTitle.includes(d) || candidateDomain.includes(d));
-    const isJobTech = techDomains.some(d => jobCategory.includes(d));
+    // Exact match on category
+    if (candidateDomain && (candidateDomain === jobCategory || candidateDomain === jobSubCategory)) {
+      return { score: 100, status: 'EXACT', jobDomain: jobDomainLabel, candidateDomain: candDomainLabel };
+    }
 
-    if (isCandidateTech && isJobTech) return { score: 70, status: 'RELATED' };
+    // Partial overlap — candidate domain appears in job text or vice versa
+    const jobText = `${jobCategory} ${jobSubCategory}`;
+    const candText = `${candidateDomain} ${candidateDesignation}`;
+    if (
+      (candidateDomain && jobText.includes(candidateDomain)) ||
+      (jobCategory && candText.includes(jobCategory)) ||
+      (jobSubCategory && candText.includes(jobSubCategory))
+    ) {
+      return { score: 80, status: 'RELATED', jobDomain: jobDomainLabel, candidateDomain: candDomainLabel };
+    }
 
-    return { score: 20, status: 'UNRELATED' };
+    return { score: 50, status: 'UNKNOWN', jobDomain: jobDomainLabel, candidateDomain: candDomainLabel };
   }
 
   _scoreEducation(education, job) {
@@ -383,214 +524,170 @@ class CandidateScoringService {
       return { score: 50, status: 'UNKNOWN', candidateEducation: 'Not provided' };
     }
 
-    const EDU_MAP = {
-      'btech': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
-      'bacheloroftechnology': ['btech', 'bacheloroftechnology', 'be', 'bachelorofengineering'],
-      'be': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
-      'bachelorofengineering': ['be', 'bachelorofengineering', 'btech', 'bacheloroftechnology'],
-      'mtech': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
-      'masteroftechnology': ['mtech', 'masteroftechnology', 'me', 'masterofengineering'],
-      'me': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
-      'masterofengineering': ['me', 'masterofengineering', 'mtech', 'masteroftechnology'],
-      'mca': ['mca', 'masterofcomputerapplications'],
-      'masterofcomputerapplications': ['mca', 'masterofcomputerapplications'],
-      'bca': ['bca', 'bachelorofcomputerapplications'],
-      'bachelorofcomputerapplications': ['bca', 'bachelorofcomputerapplications'],
-      'mba': ['mba', 'masterofbusinessadministration'],
-      'masterofbusinessadministration': ['mba', 'masterofbusinessadministration'],
-      'bsc': ['bsc', 'bachelorofscience'],
-      'bachelorofscience': ['bsc', 'bachelorofscience'],
-      'msc': ['msc', 'masterofscience'],
-      'masterofscience': ['msc', 'masterofscience'],
-      'bba': ['bba', 'bachelorofbusinessadministration'],
-      'bachelorofbusinessadministration': ['bba', 'bachelorofbusinessadministration'],
-      'bcom': ['bcom', 'bachelorofcommerce'],
-      'bachelorofcommerce': ['bcom', 'bachelorofcommerce'],
-      'mcom': ['mcom', 'masterofcommerce'],
-      'masterofcommerce': ['mcom', 'masterofcommerce'],
-      'phd': ['phd', 'doctorofphilosophy'],
-      'doctorofphilosophy': ['phd', 'doctorofphilosophy']
-    };
-
-    const normalizeEduString = (str) => {
-      if (!str || typeof str !== 'string') return '';
-      return str.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
-    };
-
-    const degreesMatch = (candDegree, jobDegree) => {
-      if (!candDegree || !jobDegree) return false;
-      const normCand = normalizeEduString(candDegree);
-      const normJob = normalizeEduString(jobDegree);
-      if (normCand === normJob) return true;
-      const candEquivs = EDU_MAP[normCand] || [normCand];
-      const jobEquivs = EDU_MAP[normJob] || [normJob];
-      for (const c of candEquivs) {
-        if (jobEquivs.includes(c)) return true;
-      }
-      if (normCand.includes(normJob) || normJob.includes(normCand)) {
-        return true;
-      }
-      return false;
-    };
-
     const preferredList = (job?.education && Array.isArray(job.education.preferred))
       ? job.education.preferred.filter(p => p && p.trim() !== '')
       : [];
     const minEdu = job?.education?.minimum || job?.educationRequirement || '';
 
-    // Check candidate degrees against job requirements
     const degreesToCheck = candidateDegrees.length > 0 ? candidateDegrees : [primaryDegree];
+    const candHighestLevel = Math.max(...degreesToCheck.map(d => getEduLevel(d)));
 
+    // Step 1 — Match preferred first (any candidate degree >= any preferred degree level)
     if (preferredList.length > 0) {
-      // Check if any candidate degree matches any preferred education
-      const matchesPreferred = degreesToCheck.some(candDeg => 
-        preferredList.some(prefDeg => degreesMatch(candDeg, prefDeg))
-      );
-      if (matchesPreferred) {
+      const prefHighestLevel = Math.max(...preferredList.map(p => getEduLevel(p)));
+      if (prefHighestLevel !== -1 && candHighestLevel >= prefHighestLevel) {
         return { score: 100, status: 'EXCEEDS', candidateEducation: primaryDegree };
       }
-
-      // Check if any candidate degree matches minimum education
-      if (minEdu) {
-        const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
-        if (matchesMin) {
-          return { score: 85, status: 'MEETS', candidateEducation: primaryDegree };
-        }
-        return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
-      }
-
-      return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
     }
 
-    // No preferred education specified, check against minimum
+    // Step 2 — Match against minimum requirement
     if (minEdu) {
-      const matchesMin = degreesToCheck.some(candDeg => degreesMatch(candDeg, minEdu));
-      if (matchesMin) {
-        return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
+      const minLevel = getEduLevel(minEdu);
+      if (minLevel === -1) {
+        // Cannot parse minimum requirement string → give neutral pass
+        return { score: 75, status: 'MEETS', candidateEducation: primaryDegree };
       }
-      return { score: 50, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+        // Meets minimum requirement
+        return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
+      // Below minimum — grade by distance
+      const diff = minLevel - candHighestLevel;
+      if (diff === 1) return { score: 60, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+      if (diff === 2) return { score: 30, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
+      return { score: 0, status: 'BELOW_MINIMUM', candidateEducation: primaryDegree };
     }
 
-    // Default fallback if no requirements specified
+    // No education requirements specified → any degree is fine
     return { score: 100, status: 'MEETS', candidateEducation: primaryDegree };
   }
 
+
+
   _scoreStability(profile) {
-    let rawHistory = profile.jobHistory || profile.experience;
-    if (!Array.isArray(rawHistory)) {
-      rawHistory = [];
-    }
+    let rawHistory = (Array.isArray(profile.jobHistory) && profile.jobHistory.length > 0)
+      ? profile.jobHistory
+      : (Array.isArray(profile.experience) ? profile.experience : []);
 
-    const jobHistory = rawHistory.map(job => {
-      if (job.fromYear !== undefined || job.toYear !== undefined) {
-        return job;
-      }
-      
-      let fromYear = null;
-      let fromMonth = null;
-      if (job.startDate) {
-        const parts = String(job.startDate).split('-');
-        fromYear = parseInt(parts[0], 10);
-        if (parts[1]) {
-          fromMonth = parseInt(parts[1], 10);
-        }
-      }
-      
-      let toYear = null;
-      let toMonth = null;
-      let ongoing = !!job.isCurrent;
-      if (job.endDate) {
-        const parts = String(job.endDate).split('-');
-        toYear = parseInt(parts[0], 10);
-        if (parts[1]) {
-          toMonth = parseInt(parts[1], 10);
-        }
-      }
+    if (!Array.isArray(rawHistory)) rawHistory = [];
 
-      return {
-        fromYear,
-        fromMonth: fromMonth != null ? fromMonth : 0,
-        toYear,
-        toMonth: toMonth != null ? toMonth : 11,
-        ongoing,
-        durationMonths: job.durationMonths
-      };
-    });
-
-    if (jobHistory.length === 0) {
-      // No job history available yet (resume not parsed at pre-submission stage) — neutral fallback
+    if (rawHistory.length === 0) {
       return {
         score: 60,
         totalAverageTenureYears: 0,
         last5YearAverageTenureYears: 0,
+        averageTenureYears: 0,
         isJobHopper: false,
         risk: 'UNKNOWN',
         detail: 'Requires resume analysis for accurate stability scoring'
       };
     }
 
-    // ── Total career average (informational only, not scored) ─────────
-    const totalMonths = jobHistory.reduce((sum, j) => sum + (j.durationMonths || 0), 0);
-    const totalAvgTenureYears = jobHistory.length > 0 ? (totalMonths / jobHistory.length) / 12 : 0;
-
-    // ── Last 5 years window ───────────────────────────────────
     const now = new Date();
-    const windowStart = new Date(now.getFullYear() - 5, now.getMonth(), now.getDate());
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth() + 1;
 
-    let last5Months = 0;
-    let last5JobCount = 0;
+    // Helper to calculate job duration in months cleanly
+    const computeDuration = (j) => {
+      if (typeof j.durationMonths === 'number' && j.durationMonths > 0) {
+        return j.durationMonths;
+      }
+      let sy = j.fromYear || (j.startDate ? parseInt(String(j.startDate).split('-')[0], 10) : null);
+      let sm = j.fromMonth || (j.startDate && String(j.startDate).includes('-') ? parseInt(String(j.startDate).split('-')[1], 10) : 1);
+      if (!sy || isNaN(sy)) return 12;
+      if (!sm || isNaN(sm)) sm = 1;
 
-    jobHistory.forEach(job => {
-      const jobEnd   = job.toYear   ? new Date(job.toYear,   (job.toMonth   || 11), 1) : now;
-      const jobStart = job.fromYear ? new Date(job.fromYear, (job.fromMonth || 0),  1) : jobEnd;
+      let isCurrent = !!(j.ongoing || j.isCurrent);
+      let ey = isCurrent ? currentYear : (j.toYear || (j.endDate ? parseInt(String(j.endDate).split('-')[0], 10) : null));
+      let em = isCurrent ? currentMonth : (j.toMonth || (j.endDate && String(j.endDate).includes('-') ? parseInt(String(j.endDate).split('-')[1], 10) : 12));
+      if (!ey || isNaN(ey)) ey = currentYear;
+      if (!em || isNaN(em)) em = 12;
 
-      // Skip jobs that ended entirely before the 5-year window
-      if (jobEnd < windowStart) return;
+      return Math.max(1, (ey - sy) * 12 + (em - sm) + 1);
+    };
 
-      const clippedStart  = jobStart < windowStart ? windowStart : jobStart;
-      const clippedMonths = Math.max(
-        0,
-        (jobEnd.getFullYear()  - clippedStart.getFullYear())  * 12 +
-        (jobEnd.getMonth()     - clippedStart.getMonth())
-      );
+    const jobs = rawHistory.map(j => {
+      let fromYear = j.fromYear || (j.startDate ? parseInt(String(j.startDate).split('-')[0], 10) : null);
+      let fromMonth = j.fromMonth || (j.startDate && String(j.startDate).includes('-') ? parseInt(String(j.startDate).split('-')[1], 10) : 1);
+      let ongoing = !!(j.ongoing || j.isCurrent);
+      let toYear = ongoing ? currentYear : (j.toYear || (j.endDate ? parseInt(String(j.endDate).split('-')[0], 10) : null));
+      let toMonth = ongoing ? currentMonth : (j.toMonth || (j.endDate && String(j.endDate).includes('-') ? parseInt(String(j.endDate).split('-')[1], 10) : 12));
 
-      // Fall back to durationMonths when date fields are absent
-      last5Months   += clippedMonths || job.durationMonths || 0;
-      last5JobCount += 1;
+      return {
+        ...j,
+        fromYear,
+        fromMonth: fromMonth || 1,
+        toYear: toYear || currentYear,
+        toMonth: toMonth || 12,
+        ongoing,
+        durMonths: computeDuration(j)
+      };
     });
 
-    const last5AvgTenureYears  = last5JobCount > 0 ? (last5Months / last5JobCount) / 12 : totalAvgTenureYears;
-    const last5AvgTenureMonths = last5AvgTenureYears * 12;
+    const totalDurationMonths = jobs.reduce((sum, j) => sum + j.durMonths, 0);
+    const totalJobsCount = jobs.length;
+    const totalCareerYears = totalDurationMonths / 12;
+    const totalAvgTenureYears = Math.round((totalCareerYears / totalJobsCount) * 10) / 10;
 
-    const hasOnlyOneJob = jobHistory.length === 1 || last5JobCount === 1;
-
-    // ── Score on last-5-year average tenure ───────────────────────
-    let score;
-    if (hasOnlyOneJob) {
-      score = 100;
-    } else if (last5AvgTenureMonths >= 36) {
-      score = 100;
-    } else if (last5AvgTenureMonths >= 24) {
-      score = 80;
-    } else if (last5AvgTenureMonths >= 18) {
-      score = 60;
-    } else if (last5AvgTenureMonths >= 12) {
-      score = 40;
-    } else if (last5AvgTenureMonths >= 6) {
-      score = 20;
-    } else {
-      score = 0;
+    // Rule 3: Single company in career (0 job hops) -> 100 score, LOW risk
+    if (totalJobsCount === 1) {
+      const last5Avg = totalCareerYears <= 5.0 ? totalAvgTenureYears : 5.0;
+      return {
+        score: 100,
+        totalAverageTenureYears: Math.round(totalCareerYears * 10) / 10,
+        last5YearAverageTenureYears: Math.round(last5Avg * 10) / 10,
+        averageTenureYears: Math.round(last5Avg * 10) / 10,
+        isJobHopper: false,
+        risk: 'LOW',
+        detail: 'Single company in career (0 job hops) — maximum stability'
+      };
     }
+
+    let last5AvgTenureYears;
+
+    // Rule 1: Candidate total exp <= 5 years -> last 5 yr avg MUST EQUAL total career avg
+    if (totalCareerYears <= 5.0) {
+      last5AvgTenureYears = totalAvgTenureYears;
+    } else {
+      // Rule 2: Candidate total exp > 5 years -> compute 5-year window average
+      const windowStartYear = currentYear - 5;
+      let last5Months = 0;
+      let last5JobsCount = 0;
+
+      jobs.forEach(job => {
+        if (job.toYear && job.toYear < windowStartYear) return; // ended prior to 5-year window
+
+        const effectiveStartYear = Math.max(windowStartYear, job.fromYear || windowStartYear);
+        const effectiveStartMonth = (effectiveStartYear === windowStartYear && (job.fromYear || 0) < windowStartYear) ? currentMonth : (job.fromMonth || 1);
+
+        const endY = job.ongoing ? currentYear : (job.toYear || currentYear);
+        const endM = job.ongoing ? currentMonth : (job.toMonth || 12);
+
+        const durationInWindow = Math.max(1, (endY - effectiveStartYear) * 12 + (endM - effectiveStartMonth) + 1);
+        last5Months += Math.min(60, durationInWindow);
+        last5JobsCount += 1;
+      });
+
+      const calculatedLast5 = last5JobsCount > 0 ? (last5Months / last5JobsCount) / 12 : totalAvgTenureYears;
+      last5AvgTenureYears = Math.min(5.0, Math.round(calculatedLast5 * 10) / 10);
+    }
+
+    let score;
+    if (last5AvgTenureYears >= 3.0) score = 100;
+    else if (last5AvgTenureYears >= 2.0) score = 80;
+    else if (last5AvgTenureYears >= 1.5) score = 60;
+    else if (last5AvgTenureYears >= 1.0) score = 40;
+    else score = 20;
+
+    const isJobHopper = last5AvgTenureYears < 1.0;
+    const risk = isJobHopper ? 'HIGH' : (last5AvgTenureYears < 2.0 ? 'MEDIUM' : 'LOW');
 
     return {
       score,
-      totalAverageTenureYears:     Math.round(totalAvgTenureYears  * 10) / 10,
-      last5YearAverageTenureYears: Math.round(last5AvgTenureYears  * 10) / 10,
-      isJobHopper:  hasOnlyOneJob ? false : last5AvgTenureMonths < 12,
-      risk: hasOnlyOneJob ? 'LOW' : (last5AvgTenureMonths < 12 ? 'HIGH' : last5AvgTenureMonths < 24 ? 'MEDIUM' : 'LOW'),
-      detail: hasOnlyOneJob 
-        ? `Only 1 job held in recent career — stable tenure`
-        : `Total career avg ${totalAvgTenureYears.toFixed(1)}yrs, last 5 years avg ${last5AvgTenureYears.toFixed(1)}yrs — scored on recent stability`
+      totalAverageTenureYears: totalAvgTenureYears,
+      last5YearAverageTenureYears: last5AvgTenureYears,
+      averageTenureYears: last5AvgTenureYears,
+      isJobHopper,
+      risk,
+      detail: `Full career avg ${totalAvgTenureYears.toFixed(1)}y, last 5 years avg ${last5AvgTenureYears.toFixed(1)}y`
     };
   }
 
@@ -651,4 +748,5 @@ class CandidateScoringService {
   }
 }
 
-module.exports = new CandidateScoringService();
+const _instance = new CandidateScoringService();
+module.exports = _instance;

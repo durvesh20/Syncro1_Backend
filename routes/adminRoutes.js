@@ -656,6 +656,39 @@ router.get(
       }
       */
 
+      const rawBreakdown = candidate.resumeAnalysis?.scoreBreakdown ? (candidate.resumeAnalysis.scoreBreakdown.toObject ? candidate.resumeAnalysis.scoreBreakdown.toObject() : JSON.parse(JSON.stringify(candidate.resumeAnalysis.scoreBreakdown))) : {};
+      const computedRelocate = candidate.willingToRelocate ?? candidate.profile?.willingToRelocate ?? candidate.resumeAnalysis?.aiData?.profile?.willingToRelocate ?? candidate.resumeAnalysis?.fullAnalysis?.screening?.locationFit?.willingToRelocate ?? candidate.resumeAnalysis?.fullAnalysis?.screening?.locationFit?.relocationWilling ?? null;
+
+      if (rawBreakdown && rawBreakdown.location) {
+        rawBreakdown.location.willingToRelocate = rawBreakdown.location.willingToRelocate ?? computedRelocate;
+      }
+
+      // Dynamic stability backfill for legacy records
+      if (rawBreakdown && candidate.profile) {
+        try {
+          const candidateScoringService = require('../services/candidateScoringService');
+          const computedStab = candidateScoringService._scoreStability({
+            jobHistory: candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
+            experience: candidate.profile?.experience || []
+          });
+
+          if (!rawBreakdown.stability || rawBreakdown.stability.last5YearAverageTenureYears === undefined || rawBreakdown.stability.last5YearAverageTenureYears === 0) {
+            rawBreakdown.stability = {
+              score: candidate.resumeAnalysis?.scoreBreakdown?.stability?.score ?? computedStab.score,
+              weight: 0.10,
+              totalAverageTenureYears: computedStab.totalAverageTenureYears,
+              last5YearAverageTenureYears: computedStab.last5YearAverageTenureYears,
+              averageTenureYears: computedStab.last5YearAverageTenureYears,
+              isJobHopper: computedStab.isJobHopper,
+              risk: computedStab.risk,
+              detail: computedStab.detail
+            };
+          }
+        } catch (stabErr) {
+          console.error('[ADMIN] Stability backfill failed:', stabErr.message);
+        }
+      }
+
       res.json({
         success: true,
         data: {
@@ -665,10 +698,11 @@ router.get(
             score: candidate.resumeAnalysis?.profileScore || 0,
             matchLevel: candidate.resumeAnalysis?.matchLevel || 'UNKNOWN',
             recommendation: candidate.resumeAnalysis?.recommendation,
-            breakdown: candidate.resumeAnalysis?.scoreBreakdown,
+            breakdown: rawBreakdown,
             flags: candidate.resumeAnalysis?.flags || [],
             advice: candidate.resumeAnalysis?.advice || [],
             aiParsedData: candidate.resumeAnalysis?.aiData,
+            parsed: candidate.resumeAnalysis?.parsed || false,
             resumeParsed: candidate.resumeAnalysis?.parsed || false
           }
         }

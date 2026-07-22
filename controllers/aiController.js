@@ -15,10 +15,12 @@ exports.parseResume = async (req, res) => {
             });
         }
 
-        if (!resumeUrl.startsWith('http')) {
+        const { validateResumeUrl } = require('../utils/validators');
+        const urlCheck = validateResumeUrl(resumeUrl);
+        if (!urlCheck.valid) {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid resume URL'
+                message: `Invalid resume URL: ${urlCheck.reason}`
             });
         }
 
