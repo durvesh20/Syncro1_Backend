@@ -570,14 +570,38 @@ class CandidateScoringService {
     if (!Array.isArray(rawHistory)) rawHistory = [];
 
     if (rawHistory.length === 0) {
+      if (profile.isParsed || profile.parsed) {
+        const exp = Number(profile.totalExperience || profile.experienceYears || 0);
+        if (exp === 0) {
+          return {
+            score: 100,
+            totalAverageTenureYears: 0,
+            last5YearAverageTenureYears: 0,
+            averageTenureYears: 0,
+            isJobHopper: false,
+            risk: 'LOW',
+            detail: 'Fresh graduate / Entry level candidate (0 job hops)'
+          };
+        }
+        return {
+          score: 100,
+          totalAverageTenureYears: exp,
+          last5YearAverageTenureYears: Math.min(5, exp),
+          averageTenureYears: Math.min(5, exp),
+          isJobHopper: false,
+          risk: 'LOW',
+          detail: 'Single continuous role reported'
+        };
+      }
+
       return {
-        score: 60,
+        score: 0,
         totalAverageTenureYears: 0,
         last5YearAverageTenureYears: 0,
         averageTenureYears: 0,
         isJobHopper: false,
-        risk: 'UNKNOWN',
-        detail: 'Requires resume analysis for accurate stability scoring'
+        risk: 'PENDING',
+        detail: 'Analyzing resume stability...'
       };
     }
 

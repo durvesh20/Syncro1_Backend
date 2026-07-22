@@ -655,9 +655,17 @@ class AIService {
             // hand-summed stability score, which is often wrong.
             try {
                 const scoringService = require('./candidateScoringService');
+                const rawJobHistory = (Array.isArray(aiResult.candidateProfile?.jobHistory) && aiResult.candidateProfile.jobHistory.length > 0)
+                    ? aiResult.candidateProfile.jobHistory
+                    : ((Array.isArray(aiResult.aiData?.profile?.jobHistory) && aiResult.aiData.profile.jobHistory.length > 0)
+                        ? aiResult.aiData.profile.jobHistory
+                        : ((Array.isArray(candidateFormData?.jobHistory) && candidateFormData.jobHistory.length > 0)
+                            ? candidateFormData.jobHistory
+                            : (Array.isArray(candidateFormData?.experience) ? candidateFormData.experience : (Array.isArray(aiResult.candidateProfile?.experience) ? aiResult.candidateProfile.experience : []))));
+
                 const stabProfile = {
-                    jobHistory: aiResult.candidateProfile?.jobHistory || [],
-                    experience: aiResult.candidateProfile?.experience || [],
+                    jobHistory: rawJobHistory,
+                    experience: aiResult.candidateProfile?.experience || candidateFormData?.experience || [],
                 };
                 const stabResult = scoringService._scoreStability(stabProfile);
                 aiResult.scoring.stabilityScore = stabResult.score;
@@ -854,6 +862,7 @@ class AIService {
                 totalExperienceMonths: profile.actualTotalMonths || null,
                 experienceYears: profile.actualTotalMonths ? Math.round((profile.actualTotalMonths / 12) * 10) / 10 : null,
                 experience: Array.isArray(profile.experience) ? profile.experience : [],
+                jobHistory: Array.isArray(profile.jobHistory) && profile.jobHistory.length > 0 ? profile.jobHistory : (Array.isArray(profile.experience) ? profile.experience : []),
                 languages: Array.isArray(profile.languages) ? profile.languages : [],
                 certifications: Array.isArray(profile.certifications) ? profile.certifications : [],
                 noticePeriod: formData.noticePeriod || null,

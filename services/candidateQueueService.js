@@ -85,6 +85,8 @@ class CandidateQueueService {
                     education: candidate.profile?.education || [],
                     certifications: candidate.profile?.certifications || [],
                     languages: candidate.profile?.languages || [],
+                    jobHistory: candidate.profile?.jobHistory || candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
+                    experience: candidate.profile?.experience || candidate.profile?.jobHistory || [],
                     // relocation willingness
                     willingToRelocate: candidate.profile?.willingToRelocate ?? null,
                 };
@@ -382,6 +384,7 @@ class CandidateQueueService {
                 skills: parsedData.profile?.skills?.length > 0 ? parsedData.profile.skills : candidate.profile?.skills || [],
                 education: parsedData.profile?.education?.length > 0 ? parsedData.profile.education : candidate.profile?.education || [],
                 experience: parsedData.profile?.experience?.length > 0 ? parsedData.profile.experience : candidate.profile?.experience || [],
+                jobHistory: parsedData.profile?.jobHistory?.length > 0 ? parsedData.profile.jobHistory : (parsedData.profile?.experience?.length > 0 ? parsedData.profile.experience : candidate.profile?.jobHistory || []),
                 // Preserve AI-calculated experience months for scoring
                 totalExperienceMonths: parsedData.profile?.totalExperienceMonths || candidate.profile?.totalExperienceMonths || null,
                 experienceYears: parsedData.profile?.experienceYears || candidate.profile?.experienceYears || null,

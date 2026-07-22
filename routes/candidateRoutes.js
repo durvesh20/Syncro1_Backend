@@ -558,8 +558,54 @@ router.get('/offer/review/:token', pipelineGetOfferDetails);
 // @route   POST /api/candidates/offer/accept/:token
 router.post('/offer/accept/:token', pipelineCandidateAcceptOffer);
 
-// @desc    Candidate rejects offer via token
-// @route   POST /api/candidates/offer/reject/:token
-router.post('/offer/reject/:token', pipelineCandidateRejectOffer);
+// ================================================================
+// RESUME PROXY ENDPOINT FOR PREVIEW & DOWNLOAD
+// Resolves cross-origin CORS, auto-download forced headers, & PDF iframe errors across all browsers
+// GET /api/candidates/resume-proxy?url=...&filename=...&mode=inline|download
+// ================================================================
+const axios = require('axios');
+
+router.get('/resume-proxy', async (req, res) => {
+  try {
+    let { url, filename = 'Candidate_Resume.pdf', mode = 'inline' } = req.query;
+
+    if (!url) {
+      return res.status(400).json({ success: false, message: 'URL is required' });
+    }
+
+    // Clean Cloudinary attachment flag if mode is inline to prevent forced auto-downloads in browser iframe
+    let fetchUrl = url;
+    if (mode === 'inline' && fetchUrl.includes('cloudinary.com') && fetchUrl.includes('/fl_attachment/')) {
+      fetchUrl = fetchUrl.replace('/fl_attachment/', '/');
+    }
+
+    // Fetch original file stream
+    const response = await axios.get(fetchUrl, {
+      responseType: 'stream',
+      timeout: 20000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    const contentType = response.headers['content-type'] || 'application/pdf';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+
+    if (mode === 'download') {
+      const safeFilename = (filename || 'Candidate_Resume.pdf').replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    } else {
+      res.setHeader('Content-Disposition', `inline; filename="resume.pdf"`);
+    }
+
+    response.data.pipe(res);
+  } catch (error) {
+    console.error('[RESUME PROXY] Error streaming file:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to proxy resume file' });
+  }
+});
 
 module.exports = router;

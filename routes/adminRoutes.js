@@ -668,14 +668,19 @@ router.get(
         try {
           const candidateScoringService = require('../services/candidateScoringService');
           const computedStab = candidateScoringService._scoreStability({
-            jobHistory: candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
+            jobHistory: candidate.profile?.jobHistory || candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
             experience: candidate.profile?.experience || []
           });
 
-          if (!rawBreakdown.stability || rawBreakdown.stability.last5YearAverageTenureYears === undefined || rawBreakdown.stability.last5YearAverageTenureYears === 0) {
+          const needsBackfill = !rawBreakdown.stability || 
+            rawBreakdown.stability.last5YearAverageTenureYears === undefined || 
+            rawBreakdown.stability.detail === 'Requires resume analysis for accurate stability scoring' ||
+            (computedStab.detail !== 'Requires resume analysis for accurate stability scoring' && rawBreakdown.stability.detail?.includes('Requires resume analysis'));
+
+          if (needsBackfill) {
             rawBreakdown.stability = {
-              score: candidate.resumeAnalysis?.scoreBreakdown?.stability?.score ?? computedStab.score,
-              weight: 0.10,
+              score: (candidate.resumeAnalysis?.scoreBreakdown?.stability?.score && candidate.resumeAnalysis.scoreBreakdown.stability.score !== 60) ? candidate.resumeAnalysis.scoreBreakdown.stability.score : computedStab.score,
+              weight: 0.05,
               totalAverageTenureYears: computedStab.totalAverageTenureYears,
               last5YearAverageTenureYears: computedStab.last5YearAverageTenureYears,
               averageTenureYears: computedStab.last5YearAverageTenureYears,
@@ -764,7 +769,9 @@ router.post(
         skills: candidate.profile?.skills || [],
         education: candidate.profile?.education || [],
         certifications: candidate.profile?.certifications || [],
-        languages: candidate.profile?.languages || []
+        languages: candidate.profile?.languages || [],
+        jobHistory: candidate.profile?.jobHistory || candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
+        experience: candidate.profile?.experience || candidate.profile?.jobHistory || []
       };
 
       const jobData = candidate.job?.toObject ? candidate.job.toObject() : candidate.job;
@@ -917,9 +924,27 @@ router.post(
         candidate.profile.education = result.data.profile.education || candidate.profile.education;
         candidate.profile.languages = result.data.profile.languages || candidate.profile.languages;
         candidate.profile.certifications = result.data.profile.certifications || candidate.profile.certifications;
+        candidate.profile.jobHistory = result.data.profile.jobHistory || candidate.profile.jobHistory;
+        candidate.profile.experience = result.data.profile.experience || candidate.profile.experience;
       }
 
       await candidate.save();
+
+      // Job history & analysis logging for manual re-score
+      const candidateProfile = result.data?.profile || {};
+      const jobHistory = candidateProfile.jobHistory || candidate.profile?.jobHistory || [];
+      console.log(`[RE-SCORE] 📋 Job History: ${jobHistory.length} job(s) found`);
+      jobHistory.forEach((jobItem, idx) => {
+        console.log(`   Job ${idx + 1}: ${jobItem.company || 'Unknown'} | ${jobItem.designation || 'Role'} | ${jobItem.fromYear || ''}-${jobItem.toYear || ''} (${jobItem.durationMonths || 0}mo)`);
+      });
+
+      console.log(`[RE-SCORE] ✅ AI Re-Scoring Complete:`);
+      console.log(`   📊 Final Score: ${scoring.finalAdjustedScore || 0}/100`);
+      console.log(`   🎯 Match Level: ${fullAnalysis.matchLevel || 'UNKNOWN'}`);
+      console.log(`   💡 Decision: ${rec.decision || 'HOLD'}`);
+      console.log(`   🔧 Skills Coverage: ${scoring.skillCoveragePercent || 0}%`);
+      console.log(`   ⚠️  Risk Penalty: ${scoring.riskPenalty || 0}`);
+      console.log(`[RE-SCORE] ✅ Candidate ${candidate._id} updated with new score`);
 
       // Return fully populated candidate details
       const updatedCandidate = await Candidate.findById(candidate._id)
