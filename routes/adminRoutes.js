@@ -317,6 +317,56 @@ router.put(
   }
 );
 
+// Revoke admin pre-screening rejection and reset candidate status to ADMIN_REVIEW
+router.put(
+  '/candidates/:id/revoke-admin-rejection',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const candidate = await Candidate.findById(req.params.id);
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      if (candidate.status !== 'ADMIN_REJECTED') {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot revoke admin rejection: candidate is currently in status "${candidate.status}", not ADMIN_REJECTED.`
+        });
+      }
+
+      const { notes } = req.body;
+
+      candidate.status = 'ADMIN_REVIEW';
+      candidate.rejectionReason = undefined;
+      candidate.rejectedBy = undefined;
+      candidate.rejectedAt = undefined;
+
+      candidate.statusHistory.push({
+        status: 'ADMIN_REVIEW',
+        changedBy: req.user?._id,
+        changedAt: new Date(),
+        notes: notes?.trim() || 'Admin pre-screening rejection revoked. Candidate reset to Screening Review.'
+      });
+
+      await candidate.save();
+
+      res.json({
+        success: true,
+        message: 'Admin rejection revoked successfully. Candidate reset to Pre-Screening Review.',
+        data: candidate
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to revoke admin rejection',
+        error: error.message
+      });
+    }
+  }
+);
+
 // Get all AI scoring logs for a candidate application
 router.get(
   '/scoring-logs/:applicationId',

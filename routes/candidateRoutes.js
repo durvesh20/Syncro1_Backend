@@ -593,6 +593,8 @@ router.get('/resume-proxy', async (req, res) => {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Content-Security-Policy', "frame-ancestors *");
+    res.removeHeader('X-Frame-Options');
 
     if (mode === 'download') {
       const safeFilename = (filename || 'Candidate_Resume.pdf').replace(/[^a-zA-Z0-9_\-\.]/g, '_');

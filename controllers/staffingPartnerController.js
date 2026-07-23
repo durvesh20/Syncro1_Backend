@@ -2465,14 +2465,21 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status, search, isManual, isInterview } = req.query;
+    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all' } = req.query;
     const parsedPage = parseInt(page, 10) || 1;
     const parsedLimit = parseInt(limit, 10) || 10;
     const skip = (parsedPage - 1) * parsedLimit;
 
     const query = { submittedBy: partner._id };
-    if (isInterview === 'true') {
-      query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] };
+
+    if (tab === 'consent_pending' || status === 'CONSENT_PENDING') {
+      query.status = 'CONSENT_PENDING';
+    } else if (tab === 'interview' || isInterview === 'true' || status === 'ACTIVE_INTERVIEWS') {
+      query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED'] };
+    } else if (tab === 'offer' || status === 'OFFERED') {
+      query.status = { $in: ['OFFERED', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'OFFER_REJECTED'] };
+    } else if (tab === 'joined' || status === 'JOINED') {
+      query.status = { $in: ['JOINED', 'HIRED'] };
     } else if (status) {
       query.status = status;
     }
@@ -2519,7 +2526,7 @@ exports.getMySubmissions = async (req, res) => {
       query.$and = andConditions;
     }
 
-    const [rawSubmissions, total] = await Promise.all([
+    const [rawSubmissions, total, countAll, countConsentPending, countInterview, countOffer, countJoined] = await Promise.all([
       Candidate.find(query)
         .populate('job', 'title company commission')
         .populate('company', 'companyName')
@@ -2536,7 +2543,12 @@ exports.getMySubmissions = async (req, res) => {
         )
         .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName')
         .lean(),
-      Candidate.countDocuments(query)
+      Candidate.countDocuments(query),
+      Candidate.countDocuments({ submittedBy: partner._id }),
+      Candidate.countDocuments({ submittedBy: partner._id, status: 'CONSENT_PENDING' }),
+      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED'] } }),
+      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['OFFERED', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'OFFER_REJECTED'] } }),
+      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['JOINED', 'HIRED'] } })
     ]);
 
     const submissions = rawSubmissions.map(sub => {
@@ -2558,6 +2570,13 @@ exports.getMySubmissions = async (req, res) => {
           current: parsedPage,
           limit: parsedLimit,
           pages: Math.ceil(total / parsedLimit)
+        },
+        counts: {
+          all: countAll,
+          consent_pending: countConsentPending,
+          interview: countInterview,
+          offer: countOffer,
+          joined: countJoined
         }
       }
     });

@@ -1177,16 +1177,68 @@ exports.checkPayoutEligibility = async (req, res) => {
 // @route   GET /api/admin/users
 exports.getUsers = async (req, res) => {
   try {
-    const { role, status, page = 1, limit = 20, search } = req.query;
+    const { role, status, emailVerified, mobileVerified, verified, page = 1, limit = 20, search } = req.query;
 
     const query = {};
     if (role) query.role = role;
     if (status) query.status = status;
+    if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
+    if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
+
+    if (verified === 'true') {
+      let verifiedUserIds = [];
+      if (role === 'staffing_partner') {
+        const partners = await StaffingPartner.find({ verificationStatus: 'APPROVED' }).select('user');
+        verifiedUserIds = partners.map(p => p.user).filter(Boolean);
+      } else if (role === 'company') {
+        const companies = await Company.find({ verificationStatus: 'APPROVED' }).select('user');
+        verifiedUserIds = companies.map(c => c.user).filter(Boolean);
+      } else {
+        const partners = await StaffingPartner.find({ verificationStatus: 'APPROVED' }).select('user');
+        const companies = await Company.find({ verificationStatus: 'APPROVED' }).select('user');
+        verifiedUserIds = [...partners, ...companies].map(x => x.user).filter(Boolean);
+      }
+      query._id = { $in: verifiedUserIds };
+    }
+
     if (search) {
-      query.$or = [
-        { email: new RegExp(search, 'i') },
-        { mobile: new RegExp(search, 'i') }
+      const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      let matchedUserIdsFromProfiles = [];
+
+      if (!role || role === 'company') {
+        const matchingCompanies = await Company.find({ companyName: searchRegex }).select('user');
+        matchingCompanies.forEach(c => {
+          if (c.user) matchedUserIdsFromProfiles.push(c.user);
+        });
+      }
+
+      if (!role || role === 'staffing_partner') {
+        const matchingPartners = await StaffingPartner.find({ firmName: searchRegex }).select('user');
+        matchingPartners.forEach(p => {
+          if (p.user) matchedUserIdsFromProfiles.push(p.user);
+        });
+      }
+
+      const searchConditions = [
+        { email: searchRegex },
+        { mobile: searchRegex },
+        { firstName: searchRegex },
+        { lastName: searchRegex }
       ];
+
+      if (matchedUserIdsFromProfiles.length > 0) {
+        searchConditions.push({ _id: { $in: matchedUserIdsFromProfiles } });
+      }
+
+      if (query._id) {
+        query.$and = [
+          { _id: query._id },
+          { $or: searchConditions }
+        ];
+        delete query._id;
+      } else {
+        query.$or = searchConditions;
+      }
     }
 
     let allowedUserIds = null;
@@ -1747,13 +1799,15 @@ exports.rejectJob = async (req, res) => {
 exports.getPendingEditRequests = async (req, res) => {
   try {
     const JobEditRequest = require('../models/JobEditRequest');
-    const { page = 1, limit = 20, priority, sortBy = 'priority' } = req.query;
+    const { page = 1, limit = 20, priority, status = 'PENDING', sortBy = 'priority' } = req.query;
 
-    const query = { status: 'PENDING' };
-    if (priority) query.priority = priority;
-
-    // Restrict sub-admins
-    // Sub-admins can see all pending edit requests
+    const query = {};
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    if (priority && priority !== 'all') {
+      query.priority = priority;
+    }
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -1793,9 +1847,20 @@ exports.getPendingEditRequests = async (req, res) => {
     }
 
     const priorityStats = await JobEditRequest.aggregate([
-      { $match: query },
+      { $match: { status: 'PENDING' } },
       { $group: { _id: '$priority', count: { $sum: 1 } } }
     ]);
+
+    const statusStats = await JobEditRequest.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    const byStatusMap = { PENDING: 0, APPROVED: 0, REJECTED: 0 };
+    statusStats.forEach(curr => {
+      if (curr._id && byStatusMap.hasOwnProperty(curr._id)) {
+        byStatusMap[curr._id] = curr.count;
+      }
+    });
 
     res.json({
       success: true,
@@ -1812,7 +1877,8 @@ exports.getPendingEditRequests = async (req, res) => {
           byPriority: priorityStats.reduce((acc, curr) => {
             acc[curr._id] = curr.count;
             return acc;
-          }, {})
+          }, {}),
+          byStatus: byStatusMap
         }
       }
     });
@@ -2515,6 +2581,7 @@ exports.getJobDetail = async (req, res) => {
       success: true,
       data: {
         job: jobData,
+        jobPosition,
         candidates: {
           total: candidates.length,
           list: candidates
@@ -2667,7 +2734,14 @@ exports.getCandidateDetail = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
       .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
-      .populate({ path: 'job', select: 'title uniqueId company education assignedTo', populate: { path: 'assignedTo', select: 'email role' } })
+      .populate({ 
+        path: 'job', 
+        select: 'title uniqueId company education assignedTo', 
+        populate: [
+          { path: 'assignedTo', select: 'email role' },
+          { path: 'company', select: 'companyName uniqueId' }
+        ] 
+      })
       .populate('company', 'companyName uniqueId')
       .populate('statusHistory.changedBy', 'email role')
       .populate('notes.addedBy', 'email role');
@@ -3012,7 +3086,8 @@ exports.getAllJobsWithCandidates = async (req, res) => {
       page = 1,
       limit = 20,
       search,
-      needsAdminReview
+      needsAdminReview,
+      stage
     } = req.query;
 
     const query = {};
@@ -3045,6 +3120,18 @@ exports.getAllJobsWithCandidates = async (req, res) => {
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
     const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    // ✅ Pre-HR interview statuses & HR+ statuses
+    const PRE_HR_STATUSES = [
+      'INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED',
+      'INTERVIEW_CONFIRMED', 'RESCHEDULE_REQUESTED', 'INTERVIEW_CONDUCTED', 'INTERVIEWED',
+      'ROUND_SELECTED_NEXT', 'ROUND_ON_HOLD', 'ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'SLOTS_NOT_PUBLISHED'
+    ];
+
+    const HR_AND_ABOVE_STATUSES = [
+      'ROUND_SELECTED_DIRECT_HR', 'HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED',
+      'HR_ON_HOLD', 'OFFERED', 'OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'JOINED', 'ONBOARDING'
+    ];
 
     // ✅ Aggregate jobs with candidate counts and details
     const jobs = await Job.aggregate([
@@ -3156,7 +3243,9 @@ exports.getAllJobsWithCandidates = async (req, res) => {
             adminReview: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'ADMIN_REVIEW'] } } } },
             submitted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SUBMITTED'] } } } },
             shortlisted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SHORTLISTED'] } } } },
-            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', ['INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED']] } } } },
+            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', PRE_HR_STATUSES] } } } },
+            interviewRounds: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', PRE_HR_STATUSES] } } } },
+            hrRounds: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', HR_AND_ABOVE_STATUSES] } } } },
             interviewed: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'INTERVIEWED'] } } } },
             offered: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFERED'] } } } },
             offerAccepted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFER_ACCEPTED'] } } } },
@@ -3196,8 +3285,10 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         }
       },
 
-      // Filter if needsAdminReview is requested
+      // Filter if needsAdminReview or stage is requested
       ...(needsAdminReview === 'true' ? [{ $match: { 'candidateStatusBreakdown.adminReview': { $gt: 0 } } }] : []),
+      ...(stage === 'interviews' ? [{ $match: { 'candidateStatusBreakdown.interviewRounds': { $gt: 0 } } }] : []),
+      ...(stage === 'hr_round' ? [{ $match: { 'candidateStatusBreakdown.hrRounds': { $gt: 0 } } }] : []),
 
       // Pagination
       { $skip: skip },
@@ -3312,8 +3403,6 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         slotsRemaining: job.slotsRemaining
       };
 
-      // Sub-admins can see all candidates metrics
-
       return {
         ...job,
         candidates: jobCandidates,
@@ -3349,6 +3438,60 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         { $count: 'count' }
       ]);
       total = countResult[0]?.count || 0;
+    } else if (stage === 'interviews') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            count: {
+              $size: {
+                $filter: {
+                  input: '$candidates',
+                  cond: { $in: ['$$this.status', PRE_HR_STATUSES] }
+                }
+              }
+            }
+          }
+        },
+        { $match: { count: { $gt: 0 } } },
+        { $count: 'total' }
+      ]);
+      total = countResult[0]?.total || 0;
+    } else if (stage === 'hr_round') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            count: {
+              $size: {
+                $filter: {
+                  input: '$candidates',
+                  cond: { $in: ['$$this.status', HR_AND_ABOVE_STATUSES] }
+                }
+              }
+            }
+          }
+        },
+        { $match: { count: { $gt: 0 } } },
+        { $count: 'total' }
+      ]);
+      total = countResult[0]?.total || 0;
     } else {
       total = await Job.countDocuments(query);
     }

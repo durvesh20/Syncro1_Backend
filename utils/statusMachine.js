@@ -16,7 +16,7 @@ const CANDIDATE_TRANSITIONS = {
   'CONSENT_CONFIRMED': ['ADMIN_REVIEW', 'WITHDRAWN'],
   'CONSENT_DENIED': [],                             // terminal
   'ADMIN_REVIEW': ['SUBMITTED', 'ADMIN_REJECTED'],
-  'ADMIN_REJECTED': [],                             // terminal
+  'ADMIN_REJECTED': ['ADMIN_REVIEW', 'SUBMITTED'],                             // can be revoked back to review
 
   // ✅ EXISTING STATES (unchanged)
   'SUBMITTED': ['UNDER_REVIEW', 'SHORTLISTED', 'REJECTED', 'WITHDRAWN'],
