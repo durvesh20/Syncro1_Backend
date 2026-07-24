@@ -1189,4 +1189,8 @@ router.get('/pipeline/audit-log', adminGetPipelineAuditLog);
 const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
 router.post('/candidates/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
 
+// Screening Questions Admin endpoint
+const { getJobScreeningQuestionsForAdmin } = require('../controllers/adminController');
+router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForAdmin);
+
 module.exports = router;

@@ -39,7 +39,8 @@ const {
   removeCandidateFromSlot,
   getWorkedJobs,
   resendConsent,
-  updateSubmission
+  updateSubmission,
+  getJobScreeningQuestionsForPartner
 } = require('../controllers/staffingPartnerController');
 
 const {
@@ -374,5 +375,10 @@ router.put(
 
 // DELETE /api/staffing-partners/my-candidates/:id     — delete
 router.delete('/my-candidates/:id', deletePoolCandidate);
+
+// ==================== SCREENING QUESTION ROUTES ====================
+// @desc  Get screening questions for a job (before submitting a candidate)
+// @route GET /api/staffing-partners/jobs/:jobId/screening-questions
+router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForPartner);
 
 module.exports = router;

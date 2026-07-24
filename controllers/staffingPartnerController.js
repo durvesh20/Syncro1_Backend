@@ -3,6 +3,7 @@ const StaffingPartner = require('../models/StaffingPartner');
 const User = require('../models/User');
 const Job = require('../models/Job');
 const Candidate = require('../models/Candidate');
+const ScreeningQuestion = require('../models/ScreeningQuestion');
 const Company = require('../models/Company');
 const duplicateDetection = require('../services/duplicateDetectionService');
 const notificationEngine = require('../services/notificationEngine');
@@ -1433,6 +1434,46 @@ exports.submitCandidate = async (req, res) => {
       }
     }
 
+    // ✅ STEP 14b: Parse screening answers from FormData
+    let parsedScreeningAnswers = [];
+    const rawScreeningAnswers = req.body.screeningAnswers;
+    if (rawScreeningAnswers) {
+      try {
+        parsedScreeningAnswers = typeof rawScreeningAnswers === 'string'
+          ? JSON.parse(rawScreeningAnswers)
+          : rawScreeningAnswers;
+      } catch {
+        parsedScreeningAnswers = [];
+      }
+    }
+
+    // Fetch job's screening questions to compute isMatch
+    const screeningQuestions = await ScreeningQuestion.find({ job: job._id }).sort({ order: 1 });
+
+    // Build screeningAnswers with match evaluation
+    const builtScreeningAnswers = screeningQuestions.map(q => {
+      const provided = parsedScreeningAnswers.find(a => String(a.questionId) === String(q._id));
+      const candidateAnswer = provided?.candidateAnswer !== undefined ? String(provided.candidateAnswer) : '';
+
+      let isMatch = false;
+      if (candidateAnswer !== '') {
+        if (q.answerType === 'yes_no') {
+          isMatch = candidateAnswer.toLowerCase() === q.idealAnswer.toLowerCase();
+        } else if (q.answerType === 'numeric') {
+          isMatch = Number(candidateAnswer) >= Number(q.idealAnswer);
+        }
+      }
+
+      return {
+        question: q._id,
+        questionText: q.questionText,
+        answerType: q.answerType,
+        candidateAnswer,
+        idealAnswer: q.idealAnswer,
+        isMatch
+      };
+    });
+
     // ✅ STEP 15: Create candidate in DRAFT status with resume from Cloudinary
     const candidate = await Candidate.create({
       submittedBy: partner._id,
@@ -1497,7 +1538,9 @@ exports.submitCandidate = async (req, res) => {
         status: 'DRAFT',
         changedBy: req.user._id,
         notes: 'Candidate profile created by partner'
-      }]
+      }],
+
+      screeningAnswers: builtScreeningAnswers
     });
 
     // ✅ STEP 16: Increment interest submission count
@@ -3731,5 +3774,35 @@ exports.getWorkedJobs = async (req, res) => {
       message: 'Failed to fetch worked jobs',
       error: error.message
     });
+  }
+};
+// ==================== SCREENING QUESTIONS (Partner side) ====================
+
+/**
+ * @desc   Get screening questions for a job (partner fetches before submitting)
+ * @route  GET /api/staffing-partners/jobs/:jobId/screening-questions
+ * @access StaffingPartner
+ */
+exports.getJobScreeningQuestionsForPartner = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+
+    // Verify job is active
+    const job = await Job.findById(jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const questions = await ScreeningQuestion.find({ job: jobId })
+      .select('_id questionText answerType idealAnswer isRequired order')
+      .sort({ order: 1 });
+
+    return res.json({
+      success: true,
+      data: { questions, hasQuestions: questions.length > 0 }
+    });
+  } catch (error) {
+    console.error('getJobScreeningQuestionsForPartner error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
   }
 };

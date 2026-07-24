@@ -67,7 +67,7 @@ const jobSchema = new mongoose.Schema({
     min: {
       type: Number,
       min: 0,
-      set: function(val) {
+      set: function (val) {
         if (val == null || val === '') return val;
         const num = Number(val);
         if (isNaN(num)) return val;
@@ -78,7 +78,7 @@ const jobSchema = new mongoose.Schema({
     max: {
       type: Number,
       min: 0,
-      set: function(val) {
+      set: function (val) {
         if (val == null || val === '') return val;
         const num = Number(val);
         if (isNaN(num)) return val;
@@ -279,7 +279,7 @@ const jobSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  
+
   // Ordered list of rounds defined for this job position
   pipelineTemplate: [
     {
@@ -344,11 +344,11 @@ jobSchema.pre('save', async function (next) {
       const companyDoc = await mongoose.model('Company').findById(this.company);
       const name = companyDoc?.companyName || 'JOB';
       const prefix = name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 3).padEnd(3, 'x');
-      
+
       const jobs = await mongoose.model('Job').find({ company: this.company });
       let maxNum = 0;
       const prefixPattern = new RegExp(`^${prefix}(\\d+)$`, 'i');
-      
+
       jobs.forEach(j => {
         if (j.uniqueId) {
           const match = j.uniqueId.match(prefixPattern);
@@ -360,7 +360,7 @@ jobSchema.pre('save', async function (next) {
           }
         }
       });
-      
+
       const nextNum = maxNum + 1;
       const formattedNum = String(nextNum).padStart(3, '0');
       this.uniqueId = `${prefix}${formattedNum}`;

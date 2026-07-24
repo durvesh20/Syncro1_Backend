@@ -6,6 +6,7 @@ const PartnerCandidate = require('../models/PartnerCandidate');
 const StaffingPartner = require('../models/StaffingPartner');
 const Candidate = require('../models/Candidate');
 const Job = require('../models/Job');
+const ScreeningQuestion = require('../models/ScreeningQuestion');
 const jobAccessService = require('../services/jobAccessService');
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -397,7 +398,7 @@ exports.applyFromPool = async (req, res) => {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
     if (!partner) return res.status(404).json({ success: false, message: 'Partner profile not found' });
 
-    const { poolCandidateId, writeup: submissionWriteup } = req.body;
+    const { poolCandidateId, writeup: submissionWriteup, screeningAnswers: rawScreeningAnswers } = req.body;
 
     if (!poolCandidateId) {
       return res.status(400).json({ success: false, message: 'poolCandidateId is required' });
@@ -516,6 +517,56 @@ exports.applyFromPool = async (req, res) => {
     const consentToken = crypto.randomBytes(32).toString('hex');
     const consentExpiry = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
+    // ── Parse and validate screening answers (mandatory if questions exist) ──
+    const screeningQuestions = await ScreeningQuestion.find({ job: job._id }).sort({ order: 1 });
+
+    let parsedScreeningAnswers = [];
+    if (rawScreeningAnswers) {
+      try {
+        parsedScreeningAnswers = typeof rawScreeningAnswers === 'string'
+          ? JSON.parse(rawScreeningAnswers)
+          : rawScreeningAnswers;
+      } catch {
+        parsedScreeningAnswers = [];
+      }
+    }
+
+    // Enforce required answers for pool submissions
+    if (screeningQuestions.length > 0) {
+      const unanswered = screeningQuestions.filter(q => {
+        const provided = parsedScreeningAnswers.find(a => String(a.questionId) === String(q._id));
+        return !provided || provided.candidateAnswer === undefined || provided.candidateAnswer === '';
+      });
+      if (unanswered.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please answer all screening questions before submitting',
+          unansweredQuestions: unanswered.map(q => ({ id: q._id, questionText: q.questionText }))
+        });
+      }
+    }
+
+    const builtScreeningAnswers = screeningQuestions.map(q => {
+      const provided = parsedScreeningAnswers.find(a => String(a.questionId) === String(q._id));
+      const candidateAnswer = provided?.candidateAnswer !== undefined ? String(provided.candidateAnswer) : '';
+      let isMatch = false;
+      if (candidateAnswer !== '') {
+        if (q.answerType === 'yes_no') {
+          isMatch = candidateAnswer.toLowerCase() === q.idealAnswer.toLowerCase();
+        } else if (q.answerType === 'numeric') {
+          isMatch = Number(candidateAnswer) >= Number(q.idealAnswer);
+        }
+      }
+      return {
+        question: q._id,
+        questionText: q.questionText,
+        answerType: q.answerType,
+        candidateAnswer,
+        idealAnswer: q.idealAnswer,
+        isMatch
+      };
+    });
+
     const snapshot = await Candidate.create({
       submittedBy: partner._id,
       job: job._id,
@@ -578,7 +629,9 @@ exports.applyFromPool = async (req, res) => {
         changedBy: req.user._id,
         changedAt: new Date(),
         notes: 'Submitted via candidate pool'
-      }]
+      }],
+
+      screeningAnswers: builtScreeningAnswers
     });
 
     // ── 9. Update submission count ──

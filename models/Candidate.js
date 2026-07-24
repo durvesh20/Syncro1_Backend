@@ -744,6 +744,25 @@ const candidateSchema = new mongoose.Schema({
     }
   ],
 
+  // ── Screening Question Answers ──────────────────────────────────────────────
+  // Populated during candidate submission if the job has screening questions
+  screeningAnswers: [
+    {
+      question: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'ScreeningQuestion'
+      },
+      questionText: String,   // Snapshot of question text at time of submission
+      answerType: {
+        type: String,
+        enum: ['yes_no', 'numeric']
+      },
+      candidateAnswer: String,  // "yes"/"no" or numeric string e.g. "7"
+      idealAnswer: String,      // Snapshot of the ideal answer for comparison
+      isMatch: Boolean          // Computed: candidateAnswer === idealAnswer (numeric: >=)
+    }
+  ],
+
 }, {
   timestamps: true
 });

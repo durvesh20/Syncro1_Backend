@@ -1065,7 +1065,7 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
-    
+
     if (job.pipelineTemplate && job.pipelineTemplate.length > 0) {
       if (!roundType) {
         return res.status(400).json({ success: false, message: 'Please specify the roundType for these interview slots.' });
@@ -1086,7 +1086,7 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
       if (!slot.endTime) errors.push('End time is required');
       if (!slot.maxCandidates || slot.maxCandidates < 1) errors.push('Max candidates must be at least 1');
       if (!slot.interviewMode) errors.push('Interview mode is required');
-      
+
       if (errors.length > 0) {
         invalidSlots.push({ index, errors });
       } else {
@@ -1099,7 +1099,7 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
     }
 
     const createdSlots = await Promise.all(
-      validSlots.map(slot => 
+      validSlots.map(slot =>
         InterviewSlot.create({
           job: job._id,
           company: job.company,
@@ -1134,18 +1134,18 @@ exports.adminCancelJobInterviewSlot = async (req, res) => {
     if (!slot) {
       return res.status(404).json({ success: false, message: 'Interview slot not found' });
     }
-    
+
     if (slot.job.toString() !== req.params.jobId) {
       return res.status(400).json({ success: false, message: 'Slot does not belong to this job' });
     }
-    
+
     if (slot.assignedCandidates && slot.assignedCandidates.length > 0) {
       return res.status(400).json({ success: false, message: 'Cannot cancel slot with assigned candidates. Remove candidates first.' });
     }
-    
+
     slot.status = 'CANCELLED';
     await slot.save();
-    
+
     res.status(200).json({ success: true, message: 'Interview slot cancelled successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to cancel interview slot' });
@@ -1977,12 +1977,27 @@ exports.approveEditRequest = async (req, res) => {
         const oldValue = job.get(field);
         const parsedOldValue = JSON.parse(JSON.stringify(oldValue ?? null));
 
-        // ✅ Use Mongoose's built-in setter to apply and natively track exactly what changed
-        job.set(field, change.new);
+        let newValue = change.new;
+        const pathType = job.schema.path(field);
+        if (pathType) {
+          if (pathType.instance === 'Boolean') {
+            if (newValue === '' || newValue === null || newValue === undefined) {
+              newValue = false;
+            } else if (typeof newValue === 'string') {
+              newValue = newValue.toLowerCase() === 'true' || newValue === '1';
+            } else {
+              newValue = Boolean(newValue);
+            }
+          } else if (pathType.instance === 'Number' && (newValue === '' || newValue === null)) {
+            newValue = null;
+          }
+        }
+
+        job.set(field, newValue);
 
         appliedChanges[field] = {
           old: parsedOldValue,
-          new: change.new
+          new: newValue
         };
 
         // ✅ Tell Mongoose directly that this specific path was modified (fixes Array staleness)
@@ -1994,6 +2009,29 @@ exports.approveEditRequest = async (req, res) => {
     }
 
     // ✅ REMOVED: topLevelKeys loop (was causing double-mark issues)
+
+    // If screeningQuestions were requested to change, update ScreeningQuestion model
+    if (changes.screeningQuestions && Array.isArray(changes.screeningQuestions.new)) {
+      try {
+        const ScreeningQuestion = require('../models/ScreeningQuestion');
+        await ScreeningQuestion.deleteMany({ job: job._id });
+        if (changes.screeningQuestions.new.length > 0) {
+          await ScreeningQuestion.insertMany(
+            changes.screeningQuestions.new.map((q, idx) => ({
+              job: job._id,
+              questionText: q.questionText?.trim() || '',
+              answerType: q.answerType,
+              idealAnswer: String(q.idealAnswer ?? ''),
+              isRequired: q.isRequired !== false,
+              createdBy: req.user._id,
+              order: idx
+            }))
+          );
+        }
+      } catch (sqErr) {
+        console.error('Failed to apply screeningQuestions on edit approval:', sqErr);
+      }
+    }
 
     job.applyEditChanges(appliedChanges);
     job.approvalStatus = 'ACTIVE';
@@ -2488,7 +2526,7 @@ exports.getAllJobs = async (req, res) => {
         .populate('company', 'companyName kyc.industry uniqueId')
         .populate('postedBy', 'email')
         .populate('assignedTo', 'email role')
-        .sort({ createdAt: -1 })
+        .sort({ updatedAt: -1 })
         .skip(skip)
         .limit(sanitizedLimit),
       Job.countDocuments(query)
@@ -2561,7 +2599,7 @@ exports.getJobDetail = async (req, res) => {
     const candidates = await Candidate.find({ job: job._id })
       .populate('submittedBy', 'firmName firstName lastName')
       .sort({ createdAt: -1 })
-      .select('firstName lastName status createdAt submittedBy');
+      .select('firstName lastName email phone status createdAt submittedBy screeningAnswers screeningScore');
 
     const editRequests = await JobEditRequest.find({ job: job._id })
       .populate('requestedBy', 'email')
@@ -2680,7 +2718,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
   if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
     return;
   }
-  
+
   const InterviewSlot = require('../models/InterviewSlot');
   const getActiveRoundInfoLocal = (c) => {
     for (let i = 0; i < c.rounds.length; i++) {
@@ -2711,7 +2749,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
       changedAt: new Date(),
       notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
     });
-    
+
     candidate.auditTrail = candidate.auditTrail || [];
     candidate.auditTrail.push({
       actorId: userId || candidate._id,
@@ -2734,13 +2772,13 @@ exports.getCandidateDetail = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
       .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
-      .populate({ 
-        path: 'job', 
-        select: 'title uniqueId company education assignedTo', 
+      .populate({
+        path: 'job',
+        select: 'title uniqueId company education assignedTo',
         populate: [
           { path: 'assignedTo', select: 'email role' },
           { path: 'company', select: 'companyName uniqueId' }
-        ] 
+        ]
       })
       .populate('company', 'companyName uniqueId')
       .populate('statusHistory.changedBy', 'email role')
@@ -4620,7 +4658,7 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
       if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
       for (let i = 0; i < cand.rounds.length; i++) {
         const r = cand.rounds[i];
-        const L_STATES = [ 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED', 'RESCHEDULE_REQUESTED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONDUCTED', 'ROUND_ON_HOLD' ];
+        const L_STATES = ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED', 'RESCHEDULE_REQUESTED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONDUCTED', 'ROUND_ON_HOLD'];
         if (L_STATES.includes(r.status)) return { index: i, round: r };
       }
       return null;
@@ -4679,5 +4717,22 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
   } catch (error) {
     console.error('Admin assign candidate to slot error:', error);
     res.status(500).json({ success: false, message: 'Failed to assign candidate to slot', error: error.message });
+  }
+};
+// @desc   Get screening questions for a job (admin side)
+// @route  GET /api/admin/jobs/:jobId/screening-questions
+// @access Admin / SubAdmin
+exports.getJobScreeningQuestionsForAdmin = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const ScreeningQuestion = require('../models/ScreeningQuestion');
+    const questions = await ScreeningQuestion.find({ job: jobId }).sort({ order: 1 });
+    return res.json({
+      success: true,
+      data: { questions, hasQuestions: questions.length > 0 }
+    });
+  } catch (error) {
+    console.error('getJobScreeningQuestionsForAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
   }
 };

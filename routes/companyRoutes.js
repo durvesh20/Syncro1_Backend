@@ -54,7 +54,12 @@ const {
   getSubAdminById,
   updateSubAdmin,
   updateSubAdminStatus,
-  getPermissionsMeta
+  getPermissionsMeta,
+
+  // Screening Questions
+  saveJobScreeningQuestions,
+  getJobScreeningQuestions,
+  deleteJobScreeningQuestion
 } = require('../controllers/companyController');
 
 const {
@@ -423,5 +428,10 @@ router.post('/candidates/:id/pipeline/mark-not-joined',      ...PIPELINE_MW, pip
 // Resend interview consent (WhatsApp + Email) – for SLOT_DETAILS_SHARED round
 const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
 router.post('/candidates/:id/pipeline/resend-interview-consent', ...PIPELINE_MW, pipelineResendInterviewConsent);
+
+// ==================== SCREENING QUESTION ROUTES ====================
+router.post('/jobs/:jobId/screening-questions', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('POST_JOB'), saveJobScreeningQuestions);
+router.get('/jobs/:jobId/screening-questions', checkCompanyPermission('VIEW_JOBS'), getJobScreeningQuestions);
+router.delete('/jobs/:jobId/screening-questions/:qId', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('POST_JOB'), deleteJobScreeningQuestion);
 
 module.exports = router;

@@ -4,6 +4,7 @@ const Company = require("../models/Company");
 const User = require("../models/User");
 const Job = require("../models/Job");
 const Candidate = require("../models/Candidate");
+const ScreeningQuestion = require("../models/ScreeningQuestion");
 const { parseJobPosition } = require("../services/jobPositionParser");
 const candidateLifecycleService = require("../services/candidateLifecycleService");
 const StatusMachine = require("../utils/statusMachine");
@@ -1148,7 +1149,13 @@ exports.getJobs = async (req, res) => {
 
     const query = { company: company._id };
     if (status) query.status = status;
-    if (approvalStatus) query.approvalStatus = approvalStatus;
+    if (approvalStatus) {
+      if (approvalStatus === 'ACTIVE') {
+        query.approvalStatus = { $in: ['ACTIVE', 'APPROVED', 'EDIT_REQUESTED'] };
+      } else {
+        query.approvalStatus = approvalStatus;
+      }
+    }
 
     if (search && search.trim()) {
       const rx = new RegExp(search.trim(), 'i');
@@ -1162,16 +1169,36 @@ exports.getJobs = async (req, res) => {
 
     const skip = (page - 1) * limit;
 
-    const jobs = await Job.find(query)
-      .populate(
-        'company',
-        'companyName kyc.industry kyc.logo kyc.companyType kyc.employeeCount city state verificationStatus'
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
+    const [jobs, total, totalAll, totalActive, totalPending, totalEditReq, totalDraft, totalClosed, totalOnHold, totalRejected] = await Promise.all([
+      Job.find(query)
+        .populate(
+          'company',
+          'companyName kyc.industry kyc.logo kyc.companyType kyc.employeeCount city state verificationStatus'
+        )
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Job.countDocuments(query),
+      Job.countDocuments({ company: company._id }),
+      Job.countDocuments({ company: company._id, approvalStatus: { $in: ['ACTIVE', 'APPROVED'] }, status: { $ne: 'CLOSED' } }),
+      Job.countDocuments({ company: company._id, approvalStatus: 'PENDING_APPROVAL' }),
+      Job.countDocuments({ company: company._id, approvalStatus: 'EDIT_REQUESTED' }),
+      Job.countDocuments({ company: company._id, approvalStatus: 'DRAFT' }),
+      Job.countDocuments({ company: company._id, status: 'CLOSED' }),
+      Job.countDocuments({ company: company._id, status: 'ON_HOLD' }),
+      Job.countDocuments({ company: company._id, approvalStatus: 'REJECTED' }),
+    ]);
 
-    const total = await Job.countDocuments(query);
+    const summary = {
+      TOTAL: totalAll,
+      ACTIVE: totalActive,
+      PENDING_APPROVAL: totalPending,
+      EDIT_REQUESTED: totalEditReq,
+      DRAFT: totalDraft,
+      CLOSED: totalClosed,
+      ON_HOLD: totalOnHold,
+      REJECTED: totalRejected
+    };
 
     // ✅ Enrich each job with safe company snapshot and active candidates count
     const enrichedJobs = await Promise.all(jobs.map(async (job) => {
@@ -1180,8 +1207,8 @@ exports.getJobs = async (req, res) => {
 
       const activeCandidatesCount = await Candidate.countDocuments({
         job: job._id,
-        status: { 
-          $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED'] 
+        status: {
+          $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED']
         }
       });
 
@@ -1207,6 +1234,7 @@ exports.getJobs = async (req, res) => {
       success: true,
       data: {
         jobs: enrichedJobs,
+        summary,
         pagination: {
           current: page,
           pages: Math.ceil(total / limit),
@@ -1317,8 +1345,8 @@ exports.getJob = async (req, res) => {
 
     const activeCandidatesCount = await Candidate.countDocuments({
       job: job._id,
-      status: { 
-        $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED'] 
+      status: {
+        $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED']
       }
     });
 
@@ -1546,7 +1574,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
   if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
     return;
   }
-  
+
   const InterviewSlot = require('../models/InterviewSlot');
   const getActiveRoundInfoLocal = (c) => {
     for (let i = 0; i < c.rounds.length; i++) {
@@ -1562,12 +1590,12 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
   if (!activeRoundInfo) return;
 
   const jobId = candidate.job?._id || candidate.job;
-  
+
   const rt = (activeRoundInfo.round.roundType || '').trim().toUpperCase();
   const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
   const isHr = hrNames.includes(rt);
-  
-  const roundTypeQuery = isHr 
+
+  const roundTypeQuery = isHr
     ? { $in: [activeRoundInfo.round.roundType, ...hrNames.map(n => new RegExp(`^${n}$`, 'i')), /HR_ROUND/i, /HR Round/i] }
     : activeRoundInfo.round.roundType;
 
@@ -1586,7 +1614,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
       changedAt: new Date(),
       notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
     });
-    
+
     candidate.auditTrail = candidate.auditTrail || [];
     candidate.auditTrail.push({
       actorId: userId || candidate._id,
@@ -2762,12 +2790,21 @@ exports.requestJobEdit = async (req, res) => {
         continue;
       }
 
-      // Check if field exists in the Job schema
-      const pathExists = Job.schema.path(field) !== undefined || 
-                         Object.keys(Job.schema.paths).some(p => p.startsWith(field + '.'));
+      // Check if field exists in the Job schema or is screeningQuestions
+      const pathExists = field === 'screeningQuestions' ||
+        Job.schema.path(field) !== undefined ||
+        Object.keys(Job.schema.paths).some(p => p.startsWith(field + '.'));
 
       if (!pathExists) {
         invalidFields.push(`${field}: Field does not exist in job`);
+        continue;
+      }
+
+      // Special handling for screeningQuestions (decoupled from Job schema paths)
+      if (field === 'screeningQuestions') {
+        if (!valuesAreEqual(change.old, change.new)) {
+          validatedChanges[field] = change;
+        }
         continue;
       }
 
@@ -3422,5 +3459,132 @@ exports.getPermissionsMeta = async (req, res) => {
       message: 'Failed to fetch permissions metadata',
       error: error.message
     });
+  }
+};
+
+// ==================== SCREENING QUESTIONS ====================
+
+/**
+ * @desc   Add/replace all screening questions for a job
+ * @route  POST /api/companies/jobs/:jobId/screening-questions
+ * @access Company
+ */
+exports.saveJobScreeningQuestions = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const companyId = req.user.company;
+    const { questions } = req.body; // Array of { questionText, answerType, idealAnswer, isRequired }
+
+    // Verify job belongs to this company
+    const job = await Job.findOne({ _id: jobId, company: companyId });
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    // For active jobs, screening questions follow the edit request flow only internally
+    // (questions themselves can be changed freely since they are not part of the job edit workflow)
+
+    if (!Array.isArray(questions)) {
+      return res.status(400).json({ success: false, message: 'questions must be an array' });
+    }
+
+    // Validate each question
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      if (!q.questionText?.trim()) {
+        return res.status(400).json({ success: false, message: `Question ${i + 1}: text is required` });
+      }
+      if (!['yes_no', 'numeric'].includes(q.answerType)) {
+        return res.status(400).json({ success: false, message: `Question ${i + 1}: answerType must be yes_no or numeric` });
+      }
+      if (q.answerType === 'yes_no' && !['yes', 'no'].includes(q.idealAnswer)) {
+        return res.status(400).json({ success: false, message: `Question ${i + 1}: idealAnswer for yes_no must be "yes" or "no"` });
+      }
+      if (q.answerType === 'numeric' && (isNaN(Number(q.idealAnswer)) || q.idealAnswer === '')) {
+        return res.status(400).json({ success: false, message: `Question ${i + 1}: idealAnswer for numeric must be a valid number` });
+      }
+    }
+
+    // Delete existing questions for this job and re-create
+    await ScreeningQuestion.deleteMany({ job: jobId });
+
+    const created = await ScreeningQuestion.insertMany(
+      questions.map((q, idx) => ({
+        job: jobId,
+        questionText: q.questionText.trim(),
+        answerType: q.answerType,
+        idealAnswer: String(q.idealAnswer),
+        isRequired: q.isRequired !== false, // default true
+        createdBy: req.user._id,
+        order: idx
+      }))
+    );
+
+    return res.json({
+      success: true,
+      message: 'Screening questions saved successfully',
+      data: { questions: created }
+    });
+  } catch (error) {
+    console.error('saveJobScreeningQuestions error:', error);
+    res.status(500).json({ success: false, message: 'Failed to save screening questions', error: error.message });
+  }
+};
+
+/**
+ * @desc   Get screening questions for a job (company side)
+ * @route  GET /api/companies/jobs/:jobId/screening-questions
+ * @access Company
+ */
+exports.getJobScreeningQuestions = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    let company = await Company.findOne({ user: req.user._id });
+    if (!company && req.user.company) {
+      company = await Company.findById(req.user.company);
+    }
+
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const job = await Job.findOne({ _id: jobId, company: company._id });
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const questions = await ScreeningQuestion.find({ job: jobId }).sort({ order: 1 });
+
+    return res.json({
+      success: true,
+      data: { questions }
+    });
+  } catch (error) {
+    console.error('getJobScreeningQuestions error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
+  }
+};
+
+/**
+ * @desc   Delete a single screening question
+ * @route  DELETE /api/companies/jobs/:jobId/screening-questions/:qId
+ * @access Company
+ */
+exports.deleteJobScreeningQuestion = async (req, res) => {
+  try {
+    const { jobId, qId } = req.params;
+    const companyId = req.user.company;
+
+    const job = await Job.findOne({ _id: jobId, company: companyId });
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    await ScreeningQuestion.deleteOne({ _id: qId, job: jobId });
+
+    return res.json({ success: true, message: 'Question deleted' });
+  } catch (error) {
+    console.error('deleteJobScreeningQuestion error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete screening question', error: error.message });
   }
 };
