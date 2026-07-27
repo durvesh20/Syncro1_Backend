@@ -40,6 +40,8 @@ const CANDIDATE_DETAILS_SECTION = {
     { key: 'cand_lastName', label: 'Last Name', path: 'lastName', type: 'string', default: true },
     { key: 'cand_email', label: 'Email', path: 'email', type: 'string', default: true },
     { key: 'cand_mobile', label: 'Mobile', path: 'mobile', type: 'string', default: false },
+    { key: 'cand_currentSalary', label: 'Current CTC', path: 'profile.currentSalary', type: 'number', default: true },
+    { key: 'cand_expectedSalary', label: 'Expected CTC', path: 'profile.expectedSalary', type: 'number', default: true },
     { key: 'cand_consentStatus', label: 'Consent Status', path: 'consent.consentStatus', type: 'string', default: false }
   ]
 };
@@ -52,6 +54,8 @@ const CANDIDATE_PROFILE_SECTION = {
     { key: 'cand_totalExp', label: 'Total Experience (yrs)', path: 'profile.totalExperience', type: 'number', default: true },
     { key: 'cand_relExp', label: 'Relevant Experience (yrs)', path: 'profile.relevantExperience', type: 'number', default: false },
     { key: 'cand_notice', label: 'Notice Period', path: 'profile.noticePeriod', type: 'string', default: false },
+    { key: 'cand_profCurrentSalary', label: 'Current CTC', path: 'profile.currentSalary', type: 'number', default: false },
+    { key: 'cand_profExpectedSalary', label: 'Expected CTC', path: 'profile.expectedSalary', type: 'number', default: false },
     { key: 'cand_currentCompany', label: 'Current Company', path: 'profile.currentCompany', type: 'string', default: false },
     { key: 'cand_currentDesignation', label: 'Current Designation', path: 'profile.currentDesignation', type: 'string', default: false },
     { key: 'cand_skills', label: 'Skills', path: 'profile.skills', type: 'array', default: true },

@@ -243,7 +243,7 @@ exports.updateKYC = async (req, res) => {
       ...company.kyc,
       registeredName,
       tradeName,
-      logo,
+      logo: logo !== undefined ? logo : company.kyc?.logo,
       description,
       website,
       companyType,
@@ -2541,23 +2541,22 @@ exports.submitJobForApproval = async (req, res) => {
       });
     }
 
-    // Validate required fields are complete
-    const requiredFields = ['title', 'description', 'category', 'employmentType', 'experienceLevel', 'location.city'];
+    // Validate required fields are complete before approval submit
     const missingFields = [];
-
-    requiredFields.forEach(field => {
-      const keys = field.split('.');
-      let value = job;
-      for (const key of keys) {
-        value = value?.[key];
-      }
-      if (!value) missingFields.push(field);
-    });
+    if (!job.title || !job.title.trim() || job.title === 'Untitled Job') missingFields.push('Title');
+    if (!job.description || !job.description.trim()) missingFields.push('Description');
+    if (!job.category || !job.category.trim()) missingFields.push('Category');
+    if (!job.subCategory && !job.subcategory) missingFields.push('Sub Category');
+    if (!job.location?.city || (Array.isArray(job.location.city) && job.location.city.length === 0)) missingFields.push('City');
+    if (!job.location?.isRemote && !job.location?.isHybrid && !job.location?.isOnSite) missingFields.push('Job Type');
+    if (!job.skills?.required || job.skills.required.length === 0) missingFields.push('Mandatory Skills');
+    if (!job.education?.minimum || (Array.isArray(job.education.minimum) && job.education.minimum.length === 0)) missingFields.push('Qualification');
+    if (!job.applicationDeadline) missingFields.push('Application Deadline');
 
     if (missingFields.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Please complete all required fields before submitting',
+        message: `Cannot submit for approval. Please complete mandatory fields: ${missingFields.join(', ')}`,
         missingFields
       });
     }
@@ -3472,11 +3471,18 @@ exports.getPermissionsMeta = async (req, res) => {
 exports.saveJobScreeningQuestions = async (req, res) => {
   try {
     const { jobId } = req.params;
-    const companyId = req.user.company;
+    let company = await Company.findOne({ user: req.user._id });
+    if (!company && req.user.company) {
+      company = await Company.findById(req.user.company);
+    }
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
     const { questions } = req.body; // Array of { questionText, answerType, idealAnswer, isRequired }
 
     // Verify job belongs to this company
-    const job = await Job.findOne({ _id: jobId, company: companyId });
+    const job = await Job.findOne({ _id: jobId, company: company._id });
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
@@ -3573,9 +3579,15 @@ exports.getJobScreeningQuestions = async (req, res) => {
 exports.deleteJobScreeningQuestion = async (req, res) => {
   try {
     const { jobId, qId } = req.params;
-    const companyId = req.user.company;
+    let company = await Company.findOne({ user: req.user._id });
+    if (!company && req.user.company) {
+      company = await Company.findById(req.user.company);
+    }
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
 
-    const job = await Job.findOne({ _id: jobId, company: companyId });
+    const job = await Job.findOne({ _id: jobId, company: company._id });
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
