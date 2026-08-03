@@ -9,6 +9,13 @@ const aiService = require('./aiService');
 // Minimum score to auto-forward to client
 const MIN_SCORE_TO_FORWARD = 40;
 
+// Lazy-loaded to avoid circular dependency at module load time
+let _aiQueue;
+function getAIQueue() {
+    if (!_aiQueue) _aiQueue = require('../queues/aiQueue');
+    return _aiQueue;
+}
+
 class CandidateQueueService {
 
     /**
@@ -61,6 +68,7 @@ class CandidateQueueService {
         let parsedData = null;
         let aiParsed = false;
         let fullAnalysis = null;
+        let tokensUsed = null;  // ← track OpenAI token usage
 
         const aiEnabled = process.env.AI_ENABLED === 'true';
 
@@ -102,9 +110,10 @@ class CandidateQueueService {
                 );
 
                 if (result.success && result.fullAnalysis) {
-                    parsedData = result.data;                          // ✅ was result.candidateData
+                    parsedData = result.data;
                     fullAnalysis = result.fullAnalysis;
                     aiParsed = true;
+                    tokensUsed = result.tokensUsed ?? null;  // ← capture from aiService
 
                     const screening = fullAnalysis.screening || {};
                     const scoring = fullAnalysis.scoring || {};        // ✅ was fullAnalysis.scoreBreakdown
@@ -428,6 +437,7 @@ class CandidateQueueService {
             scoreBreakdown,
             flags,
             advice,
+            tokensUsed,   // ← now surfaced to Worker
             status: 'ADMIN_REVIEW'
         };
     }
@@ -763,6 +773,28 @@ class CandidateQueueService {
             }
         }));
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC — enqueueAIJob
+    // Instead of calling processAfterConsent() directly (which blocks the
+    // HTTP request for 30-60s), callers should call enqueueAIJob() so the
+    // AI processing happens in the background Worker.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Add an AI resume-parse job to the BullMQ queue.
+     * Returns immediately with a job ID — the Worker handles the rest.
+     *
+     * @param {string|import('mongoose').Types.ObjectId} candidateId
+     * @param {{ priority?: number }} [opts]
+     * @returns {Promise<{ jobId: string }>}
+     */
+    async enqueueAIJob(candidateId, opts = {}) {
+        const { enqueueAIJob } = getAIQueue();
+        const result = await enqueueAIJob(candidateId, opts);
+        console.log(`[QUEUE] 📬 AI job enqueued: ${result.jobId} for candidate ${candidateId}`);
+        return result;
+    }
 }
 
-module.exports = new CandidateQueueService();   
+module.exports = new CandidateQueueService();

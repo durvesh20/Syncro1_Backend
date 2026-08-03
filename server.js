@@ -19,6 +19,17 @@ testCloudinary();
 const { initializeAI } = require('./config/ai');
 initializeAI();
 
+/* =========================================================
+   BULLMQ AI WORKER STARTUP
+========================================================= */
+
+const { startAIWorker, stopAIWorker } = require('./queues/aiWorker');
+startAIWorker();
+
+
+/* =========================================================
+   REGISTER ALL MODELS
+========================================================= */
 
 // ✅ Register ALL models BEFORE routes (prevents MissingSchemaError)
 require('./models/Notification');
@@ -32,6 +43,7 @@ require('./models/ScoringLog');
 require('./models/Testimonial');
 require('./models/Award');
 require('./models/CompanyLogo');
+require('./models/AiJobLog');  // AI job queue log
 
 const app = express();
 
@@ -142,6 +154,17 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Queue stats health check (public — no auth needed for monitoring)
+app.get('/api/health/queue', async (req, res) => {
+  try {
+    const { getQueueStats } = require('./queues/aiQueue');
+    const stats = await getQueueStats();
+    res.json({ success: true, queue: 'ai-processing', stats });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 /* =========================================================
    API ROUTES — MOUNTED ONCE ONLY
 ========================================================= */
@@ -164,6 +187,14 @@ app.use('/api/ai', require('./routes/aiRoutes'));
 app.use('/api/reports', require('./routes/reportRoutes'));
 app.use('/api/landing', require('./routes/landingRoutes'));
 
+/* =========================================================
+   BULL BOARD — Queue Dashboard (admin only)
+========================================================= */
+
+const { getBullBoardRouter } = require('./queues/bullBoardSetup');
+const { protect, authorize } = require('./middleware/auth');
+// Protect the Bull Board dashboard with admin-only auth
+app.use('/admin/queues', protect, authorize('admin'), getBullBoardRouter());
 
 /* =========================================================
    ERROR HANDLER
@@ -261,6 +292,17 @@ const server = app.listen(PORT, () => {
   console.log('');
 });
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n❌ Port ${PORT} is already in use.`);
+    console.error(`   Fix: run this command then restart → kill -9 $(lsof -ti :${PORT})\n`);
+    process.exit(1);
+  } else {
+    throw err;
+  }
+});
+
+
 /* =========================================================
    PROCESS ERROR HANDLING
 ========================================================= */
@@ -280,6 +322,18 @@ process.on('unhandledRejection', (err, promise) => {
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err.message);
   process.exit(1);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('[Server] SIGTERM received — shutting down gracefully...');
+  await stopAIWorker();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('[Server] SIGINT received — shutting down gracefully...');
+  await stopAIWorker();
+  process.exit(0);
 });
 
 module.exports = app;

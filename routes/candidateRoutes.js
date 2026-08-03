@@ -194,19 +194,15 @@ router.get('/consent/agree/:token', async (req, res) => {
       `[CONSENT] ✅ AGREED: ${candidate.firstName} ${candidate.lastName}`
     );
 
-    // ✅ Trigger AI parse + score + admin queue (fire and forget)
-    const processCandidate = async () => {
-      try {
-        const candidateQueueService = require('../services/candidateQueueService');
-        await candidateQueueService.processAfterConsent(candidate._id);
-      } catch (err) {
-        console.error('[QUEUE] Processing failed:', err.message);
-      }
-    };
-
-    processCandidate().catch(err =>
-      console.error('[QUEUE] Unhandled error in processCandidate:', err?.message || err)
-    );
+    // ✅ Enqueue AI parse + score via BullMQ (returns immediately — Worker does the heavy lifting)
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+      const { jobId } = await candidateQueueService.enqueueAIJob(candidate._id);
+      console.log(`[CONSENT] 📬 AI job enqueued: ${jobId} for candidate ${candidate._id}`);
+    } catch (err) {
+      // Enqueue failure is non-fatal — candidate is already saved as CONSENT_CONFIRMED
+      console.error('[CONSENT] Failed to enqueue AI job:', err.message);
+    }
 
     res.json({
       success: true,
