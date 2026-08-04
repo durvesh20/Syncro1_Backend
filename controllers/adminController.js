@@ -2482,6 +2482,7 @@ exports.getAllJobs = async (req, res) => {
       status,
       approvalStatus,
       company,
+      partner,
       page = 1,
       limit = 20,
       search
@@ -2504,7 +2505,20 @@ exports.getAllJobs = async (req, res) => {
       } else if (mongoose.Types.ObjectId.isValid(company)) {
         query.company = new mongoose.Types.ObjectId(company);
       }
-      console.log("getAllJobs company query:", query.company);
+      console.log('getAllJobs company query:', query.company);
+    }
+    // When filtering by partner, find distinct job IDs from candidates submitted by that partner
+    if (partner) {
+      const Candidate = require('../models/Candidate');
+      const partnerIds = (typeof partner === 'string' && partner.includes(','))
+        ? partner.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id))
+        : (Array.isArray(partner)
+          ? partner.map(id => String(id).trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id))
+          : (mongoose.Types.ObjectId.isValid(partner) ? [new mongoose.Types.ObjectId(partner)] : []));
+      if (partnerIds.length > 0) {
+        const partnerJobIds = await Candidate.distinct('job', { submittedBy: { $in: partnerIds } });
+        query._id = { $in: partnerJobIds };
+      }
     }
     // Sub-admins can see all jobs
     if (search) {

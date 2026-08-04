@@ -317,7 +317,60 @@ router.put(
   }
 );
 
-// Revoke admin pre-screening rejection and reset candidate status to ADMIN_REVIEW
+// Candidate Withdraw: Revoke admin shortlist (sent to company) and reset candidate status to ADMIN_REVIEW
+router.put(
+  '/candidates/:id/candidate-withdraw',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const candidate = await Candidate.findById(req.params.id);
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      if (candidate.status !== 'SUBMITTED' && candidate.status !== 'ADMIN_REJECTED') {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot withdraw action: candidate is currently in status "${candidate.status}".`
+        });
+      }
+
+      const { notes } = req.body;
+      const prevStatus = candidate.status;
+
+      candidate.status = 'ADMIN_REVIEW';
+      
+      // If it was a rejection, clean up rejection flags
+      if (prevStatus === 'ADMIN_REJECTED') {
+        candidate.rejectionReason = undefined;
+        candidate.rejectedBy = undefined;
+        candidate.rejectedAt = undefined;
+      }
+
+      candidate.statusHistory.push({
+        status: 'ADMIN_REVIEW',
+        changedBy: req.user?._id,
+        changedAt: new Date(),
+        notes: notes?.trim() || `Candidate withdrawn (from ${prevStatus}). Reset to Admin Review.`
+      });
+
+      await candidate.save();
+
+      res.json({
+        success: true,
+        message: 'Admin shortlist revoked successfully. Candidate reset to Pre-Screening Review.',
+        data: candidate
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to revoke admin shortlist',
+        error: error.message
+      });
+    }
+  }
+);
 router.put(
   '/candidates/:id/revoke-admin-rejection',
   async (req, res) => {

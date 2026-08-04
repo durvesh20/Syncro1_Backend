@@ -86,17 +86,19 @@ function buildFilterMatch(def, filters = {}) {
 
   for (const f of registryFilters) {
     const val = filters[f.key];
-    if (val === undefined || val === null || val === '') continue;
+    if (val === undefined || val === null || val === '' || val === 'ALL') continue;
+    if (Array.isArray(val) && (val.length === 0 || val.includes('ALL'))) continue;
 
     if (f.type === 'dateRange') {
       const range = {};
       if (val.from) range.$gte = new Date(val.from);
       if (val.to) range.$lte = endOfDay(val.to);
       if (Object.keys(range).length) match[f.appliesTo] = range;
-    } else if (['multiselect', 'jobSelect', 'companySelect'].includes(f.type)) {
+    } else if (['multiselect', 'jobSelect', 'companySelect', 'partnerSelect'].includes(f.type)) {
       const arr = (Array.isArray(val) ? val : [val])
         .map(toObjectId)
         .filter(Boolean);
+      // If filter is marked optional and no valid IDs are provided, skip it
       if (arr.length) match[f.appliesTo] = { $in: arr };
     } else {
       // select
@@ -115,6 +117,11 @@ function computeValue(doc, fieldDef) {
       const placed = getPath(doc, 'metrics.totalPlacements') || 0;
       if (!submitted) return 0;
       return Math.round((placed / submitted) * 100) / 100;
+    }
+    case 'cand_fullName': {
+      const first = getPath(doc, 'firstName') || '';
+      const last = getPath(doc, 'lastName') || '';
+      return [first, last].filter(Boolean).join(' ') || 'N/A';
     }
     default:
       return '';

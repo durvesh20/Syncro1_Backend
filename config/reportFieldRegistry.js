@@ -16,9 +16,10 @@
 // `compute` (optional) names a special computation handled in reportService.
 //
 // Filters:
-//   type: 'dateRange' | 'select' | 'multiselect' | 'jobSelect' | 'companySelect'
+//   type: 'dateRange' | 'select' | 'multiselect' | 'jobSelect' | 'companySelect' | 'partnerSelect'
 //   appliesTo: the BASE collection field the filter is applied to (after scope)
 //   roles: (optional) restrict filter visibility to these roles only
+//   optional: (boolean) if true, the filter is not required for generation (e.g., job in partner report)
 // ---------------------------------------------------------------------------
 
 // ---- Shared section builders (reused across report types) ----------------
@@ -36,30 +37,24 @@ const CANDIDATE_DETAILS_SECTION = {
   label: 'Candidate Details',
   fields: [
     { key: 'cand_uniqueId', label: 'Candidate ID', path: 'uniqueId', type: 'string', default: false },
-    { key: 'cand_firstName', label: 'First Name', path: 'firstName', type: 'string', default: true },
-    { key: 'cand_lastName', label: 'Last Name', path: 'lastName', type: 'string', default: true },
+    { key: 'cand_fullName', label: 'Full Name', type: 'string', compute: 'cand_fullName', default: true },
+    { key: 'cand_firstName', label: 'First Name', path: 'firstName', type: 'string', default: false },
+    { key: 'cand_lastName', label: 'Last Name', path: 'lastName', type: 'string', default: false },
     { key: 'cand_email', label: 'Email', path: 'email', type: 'string', default: true },
     { key: 'cand_mobile', label: 'Mobile', path: 'mobile', type: 'string', default: false },
-    { key: 'cand_currentSalary', label: 'Current CTC', path: 'profile.currentSalary', type: 'number', default: true },
-    { key: 'cand_expectedSalary', label: 'Expected CTC', path: 'profile.expectedSalary', type: 'number', default: true },
-    { key: 'cand_consentStatus', label: 'Consent Status', path: 'consent.consentStatus', type: 'string', default: false }
-  ]
-};
-
-const CANDIDATE_PROFILE_SECTION = {
-  sectionKey: 'candidateProfile',
-  label: 'Candidate Profile',
-  fields: [
+    { key: 'cand_status', label: 'Current Status', path: 'status', type: 'string', default: true },
     { key: 'cand_location', label: 'Location', path: 'profile.location', type: 'string', default: false },
     { key: 'cand_totalExp', label: 'Total Experience (yrs)', path: 'profile.totalExperience', type: 'number', default: true },
     { key: 'cand_relExp', label: 'Relevant Experience (yrs)', path: 'profile.relevantExperience', type: 'number', default: false },
     { key: 'cand_notice', label: 'Notice Period', path: 'profile.noticePeriod', type: 'string', default: false },
-    { key: 'cand_profCurrentSalary', label: 'Current CTC', path: 'profile.currentSalary', type: 'number', default: false },
-    { key: 'cand_profExpectedSalary', label: 'Expected CTC', path: 'profile.expectedSalary', type: 'number', default: false },
+    { key: 'cand_currentSalary', label: 'Current CTC', path: 'profile.currentSalary', type: 'number', default: false },
+    { key: 'cand_expectedSalary', label: 'Expected CTC', path: 'profile.expectedSalary', type: 'number', default: false },
     { key: 'cand_currentCompany', label: 'Current Company', path: 'profile.currentCompany', type: 'string', default: false },
     { key: 'cand_currentDesignation', label: 'Current Designation', path: 'profile.currentDesignation', type: 'string', default: false },
-    { key: 'cand_skills', label: 'Skills', path: 'profile.skills', type: 'array', default: true },
-    { key: 'cand_linkedin', label: 'LinkedIn', path: 'profile.linkedinProfile', type: 'string', default: false }
+    { key: 'cand_skills', label: 'Skills', path: 'profile.skills', type: 'array', default: false },
+    { key: 'cand_linkedin', label: 'LinkedIn', path: 'profile.linkedinProfile', type: 'string', default: false },
+    { key: 'cand_consentStatus', label: 'Consent Status', path: 'consent.consentStatus', type: 'string', default: false },
+    { key: 'cand_submittedAt', label: 'Submitted At', path: 'createdAt', type: 'date', default: true }
   ]
 };
 
@@ -67,7 +62,7 @@ const CANDIDATE_SCORING_SECTION = {
   sectionKey: 'candidateScoring',
   label: 'AI Scoring',
   fields: [
-    { key: 'score_match', label: 'Match Score %', path: 'submissionMetadata.matchScore', type: 'number', default: true },
+    { key: 'score_match', label: 'Match Score %', path: 'submissionMetadata.matchScore', type: 'number', default: false },
     { key: 'score_matchLevel', label: 'Match Level', path: 'resumeAnalysis.matchLevel', type: 'string', default: false },
     { key: 'score_profileScore', label: 'Profile Score', path: 'resumeAnalysis.profileScore', type: 'number', default: false },
     { key: 'score_skillCoverage', label: 'Skill Coverage %', path: 'resumeAnalysis.scoreBreakdown.skills.coveragePercent', type: 'number', default: false },
@@ -76,14 +71,7 @@ const CANDIDATE_SCORING_SECTION = {
   ]
 };
 
-const CANDIDATE_PIPELINE_SECTION = {
-  sectionKey: 'candidatePipeline',
-  label: 'Pipeline',
-  fields: [
-    { key: 'cand_status', label: 'Current Stage', path: 'status', type: 'string', default: true },
-    { key: 'cand_submittedAt', label: 'Submitted At', path: 'createdAt', type: 'date', default: true }
-  ]
-};
+
 
 const CANDIDATE_JOB_CONTEXT_SECTION = {
   sectionKey: 'jobContext',
@@ -96,6 +84,26 @@ const CANDIDATE_JOB_CONTEXT_SECTION = {
     { key: 'job_company', label: 'Owning Company', path: 'companyInfo.companyName', type: 'string', default: true },
     { key: 'job_sourcePartner', label: 'Submitted By (Partner)', path: 'partnerInfo.firmName', type: 'string', default: false },
     { key: 'job_requiredSkills', label: 'Job Required Skills', path: 'jobPositionInfo.parsedRequirements.skills.mustHave', type: 'array', default: false }
+  ]
+};
+
+// Partner context section (used in TALENT_PARTNER_WITH_CANDIDATES — partnerInfo already joined via CANDIDATE_LOOKUPS)
+const PARTNER_CONTEXT_SECTION = {
+  sectionKey: 'partnerContext',
+  label: 'Talent Partner Details',
+  fields: [
+    { key: 'tp_firmName', label: 'Firm Name', path: 'partnerInfo.firmName', type: 'string', default: true },
+    { key: 'tp_uniqueId', label: 'ID', path: 'partnerInfo.uniqueId', type: 'string', default: false },
+    { key: 'tp_firstName', label: 'First Name', path: 'partnerInfo.firstName', type: 'string', default: false },
+    { key: 'tp_lastName', label: 'Last Name', path: 'partnerInfo.lastName', type: 'string', default: false },
+    { key: 'tp_designation', label: 'Designation', path: 'partnerInfo.designation', type: 'string', default: false },
+    { key: 'tp_city', label: 'City', path: 'partnerInfo.city', type: 'string', default: false },
+    { key: 'tp_state', label: 'State', path: 'partnerInfo.state', type: 'string', default: false },
+    { key: 'tp_entityType', label: 'Entity Type', path: 'partnerInfo.firmDetails.entityType', type: 'string', default: false },
+    { key: 'tp_sectors', label: 'Hiring Sectors', path: 'partnerInfo.Syncro1Competency.primaryHiringSectors', type: 'array', default: false },
+    { key: 'tp_verificationStatus', label: 'Verification Status', path: 'partnerInfo.verificationStatus', type: 'string', default: false },
+    { key: 'tp_totalSubmissions', label: 'Total Submissions', path: 'partnerInfo.metrics.totalSubmissions', type: 'number', default: false },
+    { key: 'tp_totalPlacements', label: 'Total Placements', path: 'partnerInfo.metrics.totalPlacements', type: 'number', default: false }
   ]
 };
 
@@ -147,7 +155,7 @@ const JOB_METRICS_SECTION = {
   label: 'Job Metrics',
   fields: [
     { key: 'job_views', label: 'Views', path: 'metrics.views', type: 'number', default: false },
-    { key: 'job_applications', label: 'Applications', path: 'metrics.applications', type: 'number', default: true },
+    { key: 'job_applications', label: 'Applications', path: 'metrics.applications', type: 'number', default: false },
     { key: 'job_shortlisted', label: 'Shortlisted', path: 'metrics.shortlisted', type: 'number', default: false },
     { key: 'job_interviewed', label: 'Interviewed', path: 'metrics.interviewed', type: 'number', default: false },
     { key: 'job_offered', label: 'Offered', path: 'metrics.offered', type: 'number', default: false },
@@ -286,14 +294,34 @@ const reportFieldRegistry = {
     lookups: CANDIDATE_LOOKUPS,
     sections: [
       CANDIDATE_DETAILS_SECTION,
-      CANDIDATE_PROFILE_SECTION,
       CANDIDATE_SCORING_SECTION,
-      CANDIDATE_PIPELINE_SECTION,
       CANDIDATE_JOB_CONTEXT_SECTION
     ],
     filters: [
       { key: 'job', label: 'Job', type: 'jobSelect', appliesTo: 'job' },
       { key: 'company', label: 'Company', type: 'companySelect', appliesTo: 'company', roles: ['admin', 'sub_admin'] },
+      { key: 'dateRange', label: 'Submitted Between', type: 'dateRange', appliesTo: 'createdAt' },
+      { key: 'status', label: 'Candidate Stage', type: 'select', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
+    ]
+  },
+
+  TALENT_PARTNER_WITH_CANDIDATES: {
+    label: 'Talent Partner + Candidate Report',
+    description: 'Candidates submitted by a selected talent partner. Optionally filter by specific job(s).',
+    allowedRoles: ['admin', 'sub_admin'],
+    base: 'candidates',
+    scope: null,
+    lookups: CANDIDATE_LOOKUPS,
+    sections: [
+      CANDIDATE_DETAILS_SECTION,
+      CANDIDATE_SCORING_SECTION,
+      CANDIDATE_JOB_CONTEXT_SECTION,
+      PARTNER_CONTEXT_SECTION
+    ],
+    filters: [
+      { key: 'partner', label: 'Talent Partner', type: 'partnerSelect', appliesTo: 'submittedBy', roles: ['admin', 'sub_admin'] },
+      { key: 'company', label: 'Company (Optional)', type: 'companySelect', appliesTo: 'company', roles: ['admin', 'sub_admin'], optional: true },
+      { key: 'job', label: 'Job (Optional)', type: 'jobSelect', appliesTo: 'job', optional: true },
       { key: 'dateRange', label: 'Submitted Between', type: 'dateRange', appliesTo: 'createdAt' },
       { key: 'status', label: 'Candidate Stage', type: 'select', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
     ]
@@ -309,9 +337,7 @@ const reportFieldRegistry = {
     lookups: CANDIDATE_LOOKUPS,
     sections: [
       CANDIDATE_DETAILS_SECTION,
-      CANDIDATE_PROFILE_SECTION,
       CANDIDATE_SCORING_SECTION,
-      CANDIDATE_PIPELINE_SECTION,
       CANDIDATE_JOB_CONTEXT_SECTION
     ],
     filters: [
@@ -329,9 +355,7 @@ const reportFieldRegistry = {
     lookups: CANDIDATE_LOOKUPS,
     sections: [
       CANDIDATE_DETAILS_SECTION,
-      CANDIDATE_PROFILE_SECTION,
       CANDIDATE_SCORING_SECTION,
-      CANDIDATE_PIPELINE_SECTION,
       CANDIDATE_JOB_CONTEXT_SECTION
     ],
     filters: [
@@ -351,9 +375,7 @@ const reportFieldRegistry = {
     lookups: CANDIDATE_LOOKUPS,
     sections: [
       CANDIDATE_DETAILS_SECTION,
-      CANDIDATE_PROFILE_SECTION,
       CANDIDATE_SCORING_SECTION,
-      CANDIDATE_PIPELINE_SECTION,
       CANDIDATE_JOB_CONTEXT_SECTION
     ],
     filters: [
@@ -378,7 +400,7 @@ function getFieldMap(reportType, role) {
   if (role === 'staffing_partner' || role === 'company') {
     sections = sections.filter((s) => s.sectionKey !== 'candidateScoring');
     sections = sections.map((s) => {
-      if (s.sectionKey === 'candidateProfile') {
+      if (s.sectionKey === 'candidateDetails') {
         return {
           ...s,
           fields: s.fields.filter((f) => f.key !== 'cand_linkedin')
@@ -424,7 +446,7 @@ function getConfigForRole(reportType, role) {
   if (role === 'staffing_partner' || role === 'company') {
     sections = sections.filter((s) => s.sectionKey !== 'candidateScoring');
     sections = sections.map((s) => {
-      if (s.sectionKey === 'candidateProfile') {
+      if (s.sectionKey === 'candidateDetails') {
         return {
           ...s,
           fields: s.fields.filter((f) => f.key !== 'cand_linkedin')

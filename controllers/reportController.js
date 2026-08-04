@@ -156,11 +156,33 @@ exports.getAdminReportDownloadLogs = async (req, res) => {
 
     const total = await ReportDownloadLog.countDocuments(query);
     const logs = await ReportDownloadLog.find(query)
-      .populate('userId', 'email name')
+      .populate('userId', 'email firstName lastName role')
       .sort({ generatedAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit))
       .lean();
+
+    // Dynamically fetch names from specific role profiles if root User name is missing
+    const StaffingPartner = require('../models/StaffingPartner');
+    const Company = require('../models/Company');
+    
+    for (let log of logs) {
+      if (log.userId && !log.userId.firstName && !log.userId.lastName) {
+        if (log.userId.role === 'staffing_partner') {
+          const profile = await StaffingPartner.findOne({ user: log.userId._id }).select('firstName lastName').lean();
+          if (profile) {
+            log.userId.firstName = profile.firstName;
+            log.userId.lastName = profile.lastName;
+          }
+        } else if (log.userId.role === 'company') {
+          const profile = await Company.findOne({ user: log.userId._id }).select('firstName lastName').lean();
+          if (profile) {
+            log.userId.firstName = profile.firstName;
+            log.userId.lastName = profile.lastName;
+          }
+        }
+      }
+    }
 
     res.json({
       success: true,
@@ -204,7 +226,7 @@ exports.previewReport = async (req, res) => {
 // Runs the scoped query, streams the .xlsx file, and writes an audit log.
 exports.generateReport = async (req, res) => {
   try {
-    const { reportType, selectedFields = [], filters = {} } = req.body || {};
+    const { reportType, selectedFields = [], filters = {}, readableFilters, format = 'excel' } = req.body || {};
     const def = assertAllowed(req, res, reportType);
     if (!def) return;
 
@@ -244,7 +266,7 @@ exports.generateReport = async (req, res) => {
         fileName,
         role: req.user.role
       });
-      await writeAuditLog(req, reportType, filters, validFields, rowCount, fileName);
+      await writeAuditLog(req, reportType, readableFilters || filters, validFields, rowCount, fileName);
       return;
     }
 
@@ -259,7 +281,7 @@ exports.generateReport = async (req, res) => {
     });
 
     // Best-effort audit (response already streamed, so never throw)
-    await writeAuditLog(req, reportType, filters, validFields, rowCount, fileName);
+    await writeAuditLog(req, reportType, readableFilters || filters, validFields, rowCount, fileName);
   } catch (err) {
     console.error('[reports] generateReport error:', err);
     if (!res.headersSent) {
