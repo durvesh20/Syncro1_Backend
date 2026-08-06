@@ -3805,7 +3805,7 @@ exports.withdrawCandidateByAdmin = async (req, res) => {
 
     // Notify the staffing partner (fire-and-forget)
     try {
-      const notificationEngine = require('./notificationEngine');
+      const notificationEngine = require('../services/notificationEngine');
       // Resolve partner user ID
       let partnerUserId;
       if (candidate.submittedBy?.user?._id) {
@@ -3820,7 +3820,6 @@ exports.withdrawCandidateByAdmin = async (req, res) => {
       }
 
       if (partnerUserId) {
-        const notificationEngine = require('./notificationEngine');
         await notificationEngine.send({
           recipientId: partnerUserId,
           type: 'CANDIDATE_WITHDRAWN',

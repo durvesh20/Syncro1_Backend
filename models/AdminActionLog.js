@@ -80,7 +80,17 @@ const adminActionLogSchema = new mongoose.Schema({
             'AGREEMENT_QUERY_RESPONDED',
 
             // Report downloads
-            'REPORT_DOWNLOAD'
+            'REPORT_DOWNLOAD',
+
+            // Pipeline actions (company-side candidate pipeline)
+            'PIPELINE_SHORTLIST',
+            'PIPELINE_REJECT',
+            'PIPELINE_RE_SHORTLIST',
+            'PIPELINE_TEMPLATE_DEFINED',
+            'PIPELINE_MARK_JOINED',
+
+            // Admin candidate actions
+            'CANDIDATE_WITHDRAWN_BY_ADMIN'
         ]
     },
 
@@ -97,7 +107,9 @@ const adminActionLogSchema = new mongoose.Schema({
             'User',
             'LimitExtensionRequest',
             'AgreementQuery',
-            'Report'
+            'Report',
+            'CandidateApplication',
+            'Candidate'        // pipeline controller uses this directly
         ],
         required: true
     },

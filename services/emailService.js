@@ -18,6 +18,12 @@ class EmailService {
   }
 
   async sendEmail(options) {
+    // Guard: never send to a missing/invalid email — prevents Brevo 400 "email is missing in to"
+    if (!options.to || typeof options.to !== 'string' || !options.to.includes('@')) {
+      console.warn(`[EMAIL] Skipped — invalid or missing recipient address: "${options.to}" (subject: "${options.subject}")`);
+      return { success: false, skipped: true, reason: 'invalid_recipient' };
+    }
+
     console.log('=================================================');
     console.log('📧 Email Notification (Brevo)');
     console.log(`   To: ${options.to}`);

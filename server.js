@@ -204,17 +204,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-/* =========================================================
-   SERVE FRONTEND BUILD
-========================================================= */
-
-app.use(express.static(path.join(__dirname, '../Syncro1_Frontend/build')));
-
-app.get('*', (req, res) => {
-  res.sendFile(
-    path.resolve(__dirname, '../Syncro1_Frontend/build', 'index.html')
-  );
-});
 
 /* =========================================================
    START SERVER

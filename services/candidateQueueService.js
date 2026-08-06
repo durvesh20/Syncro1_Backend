@@ -389,7 +389,14 @@ class CandidateQueueService {
                 totalExperienceMonths: parsedData.profile?.totalExperienceMonths || candidate.profile?.totalExperienceMonths || null,
                 experienceYears: parsedData.profile?.experienceYears || candidate.profile?.experienceYears || null,
                 languages: parsedData.profile?.languages?.length > 0 ? parsedData.profile.languages : candidate.profile?.languages || [],
-                certifications: parsedData.profile?.certifications?.length > 0 ? parsedData.profile.certifications : candidate.profile?.certifications || [],
+                // Normalize certifications: AI may return objects ({name, certificateId, validTill}), schema expects [String]
+                certifications: (() => {
+                    const raw = parsedData.profile?.certifications;
+                    if (Array.isArray(raw) && raw.length > 0) {
+                        return raw.map(c => typeof c === 'string' ? c : (c.name || c.title || c.certification || JSON.stringify(c)));
+                    }
+                    return candidate.profile?.certifications || [];
+                })(),
                 location: candidate.profile?.location,
                 currentLocation: parsedData.profile?.currentLocation || candidate.profile?.currentLocation || candidate.profile?.location,
                 willingToRelocate: finalRelocate

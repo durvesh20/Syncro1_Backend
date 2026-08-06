@@ -138,7 +138,7 @@ exports.pipelineShortlist = async (req, res) => {
     writeAudit(candidate, { actorId: req.user._id, actorRole: role, action: ACTIONS.SHORTLIST, fromState, toState, reason: req.body.notes });
     await candidate.save();
 
-    await auditService.log({ actor: req.user._id, actorRole: req.user.role, action: 'PIPELINE_SHORTLIST', entityType: 'Candidate', entityId: candidate._id, description: `Candidate shortlisted`, ipAddress: req.ip });
+    await auditService.log({ actor: req.user._id, actorRole: req.user.role, actorEmail: req.user.email, action: 'PIPELINE_SHORTLIST', entityType: 'CandidateApplication', entityId: candidate._id, description: `Candidate shortlisted`, ipAddress: req.ip });
 
     await sendPipelineEmail('partner', candidate._id, `🎉 Candidate Shortlisted - ${candidate.job?.title}`, 
       `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
@@ -189,7 +189,7 @@ exports.pipelineReject = async (req, res) => {
     writeAudit(candidate, { actorId: req.user._id, actorRole: role, action: ACTIONS.REJECT, fromState, toState, reason });
     await candidate.save();
 
-    await auditService.log({ actor: req.user._id, actorRole: req.user.role, action: 'PIPELINE_REJECT', entityType: 'Candidate', entityId: candidate._id, description: `Candidate rejected. Reason: ${reason}`, ipAddress: req.ip });
+    await auditService.log({ actor: req.user._id, actorRole: req.user.role, actorEmail: req.user.email, action: 'PIPELINE_REJECT', entityType: 'CandidateApplication', entityId: candidate._id, description: `Candidate rejected. Reason: ${reason}`, ipAddress: req.ip });
 
     await sendPipelineEmail('partner', candidate._id, `❌ Candidate Status Update - ${candidate.job?.title}`, 
       `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
@@ -227,7 +227,7 @@ exports.pipelineReShortlist = async (req, res) => {
     writeAudit(candidate, { actorId: req.user._id, actorRole: role, action: ACTIONS.RE_SHORTLIST, fromState, toState: fsm.nextState, reason: req.body.notes });
     await candidate.save();
 
-    await auditService.log({ actor: req.user._id, actorRole: req.user.role, action: 'PIPELINE_RE_SHORTLIST', entityType: 'Candidate', entityId: candidate._id, description: 'Candidate re-shortlisted after rejection', ipAddress: req.ip });
+    await auditService.log({ actor: req.user._id, actorRole: req.user.role, actorEmail: req.user.email, action: 'PIPELINE_RE_SHORTLIST', entityType: 'Candidate', entityId: candidate._id, description: 'Candidate re-shortlisted after rejection', ipAddress: req.ip });
 
     res.json({ success: true, message: 'Candidate re-shortlisted', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
@@ -292,7 +292,7 @@ exports.definePipelineTemplate = async (req, res) => {
 
     await candidate.save();
 
-    await auditService.log({ actor: req.user._id, actorRole: req.user.role, action: 'PIPELINE_TEMPLATE_DEFINED', entityType: 'Candidate', entityId: candidate._id, description: `Pipeline template defined: ${normalized.map(r => r.roundType).join(' → ')}`, ipAddress: req.ip });
+    await auditService.log({ actor: req.user._id, actorRole: req.user.role, actorEmail: req.user.email, action: 'PIPELINE_TEMPLATE_DEFINED', entityType: 'Candidate', entityId: candidate._id, description: `Pipeline template defined: ${normalized.map(r => r.roundType).join(' → ')}`, ipAddress: req.ip });
 
     res.status(201).json({
       success: true,
@@ -2855,6 +2855,7 @@ exports.pipelineMarkJoined = async (req, res) => {
     await auditService.log({
       actor: req.user._id,
       actorRole: 'company',
+      actorEmail: req.user.email,
       action: 'PIPELINE_MARK_JOINED',
       entityType: 'Candidate',
       entityId: candidate._id,

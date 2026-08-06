@@ -1026,7 +1026,13 @@ router.post(
         candidate.profile.skills = result.data.profile.skills || candidate.profile.skills;
         candidate.profile.education = result.data.profile.education || candidate.profile.education;
         candidate.profile.languages = result.data.profile.languages || candidate.profile.languages;
-        candidate.profile.certifications = result.data.profile.certifications || candidate.profile.certifications;
+        // Normalize certifications: AI may return objects ({name, certificateId, validTill}), schema expects [String]
+        const rawCerts = result.data.profile.certifications;
+        if (Array.isArray(rawCerts) && rawCerts.length > 0) {
+          candidate.profile.certifications = rawCerts.map(c =>
+            typeof c === 'string' ? c : (c.name || c.title || c.certification || JSON.stringify(c))
+          );
+        }
         candidate.profile.jobHistory = result.data.profile.jobHistory || candidate.profile.jobHistory;
         candidate.profile.experience = result.data.profile.experience || candidate.profile.experience;
       }
