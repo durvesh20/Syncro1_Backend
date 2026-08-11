@@ -9,6 +9,7 @@ const whatsappService = require('../services/whatsappService');
 const otpService = require('../services/otpService');
 const sendTokenResponse = require('../utils/sendTokenResponse');
 const { validateEmail, validateMobile } = require('../utils/validators');
+const notifyCRM = require('../utils/notifyCRM')
 
 // Check if we should skip mobile OTP (for development)
 const skipMobileOTP = process.env.WHATSAPP_ENABLED !== 'true';
@@ -216,7 +217,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       isPasswordChanged: true
     });
 
-    await StaffingPartner.create({
+    const partner = await StaffingPartner.create({
       user: user._id,
       firstName,
       lastName,
@@ -227,6 +228,50 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       state,
       profileCompletion: { basicInfo: true }
     });
+
+    // ── CRM: Partner Registered ───────────────────────────────
+    notifyCRM({
+      name: `${firstName} ${lastName}`,
+      email: normalizedEmail,
+      phone: normalizedMobile,
+      whatsapp: normalizedMobile,
+      company: firmName,
+      designation,
+      city,
+      state,
+      type: 'STAFFING_PARTNER',
+      channel: 'PLATFORM_REGISTRATION',
+      crmStatus: 'NEW',
+      crmSubStatus: 'JUST_REGISTERED',
+      profileCompletion: {
+        basicInfo: true,
+        firmDetails: false,
+        Syncro1Competency: false,
+        geographicReach: false,
+        compliance: false,
+        commercialDetails: false,
+        documents: false
+      },
+      profilePercent: 14,
+      journeyEvent: {
+        type: 'PLATFORM_REGISTERED',
+        channel: 'PLATFORM_REGISTRATION',
+        description: `Talent Partner registered: ${firmName}`,
+        data: {
+          partnerId: partner._id.toString(),
+          userId: user._id.toString(),
+          firmName,
+          plan: 'FREE'
+        }
+      },
+      platformRef: {
+        type: 'StaffingPartner',
+        entityId: partner._id.toString(),
+        userId: user._id.toString(),
+        registeredAt: new Date()
+      }
+    });
+    // ─────────────────────────────────────────────────────────
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
     await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
@@ -355,7 +400,7 @@ exports.initCompanyRegistration = async (req, res) => {
       mobileVerified: false,
       isPasswordChanged: true
     });
-    await Company.create({
+    const company = await Company.create({
       user: user._id,
       companyName,
       decisionMakerName: `${firstName} ${lastName}`,
@@ -366,6 +411,48 @@ exports.initCompanyRegistration = async (req, res) => {
       state,
       profileCompletion: { basicInfo: true }
     });
+
+    // ── CRM: Company Registered ───────────────────────────────
+    notifyCRM({
+      name: `${firstName} ${lastName}`,
+      email: normalizedEmail,
+      phone: normalizedMobile,
+      whatsapp: normalizedMobile,
+      company: companyName,
+      designation,
+      city,
+      state,
+      type: 'COMPANY',
+      channel: 'PLATFORM_REGISTRATION',
+      crmStatus: 'NEW',
+      crmSubStatus: 'JUST_REGISTERED',
+      profileCompletion: {
+        basicInfo: true,
+        kyc: false,
+        hiringPreferences: false,
+        billing: false,
+        legalConsents: false,
+        documents: false
+      },
+      profilePercent: 17,
+      journeyEvent: {
+        type: 'PLATFORM_REGISTERED',
+        channel: 'PLATFORM_REGISTRATION',
+        description: `Company registered: ${companyName}`,
+        data: {
+          companyId: company._id.toString(),
+          userId: user._id.toString(),
+          companyName
+        }
+      },
+      platformRef: {
+        type: 'Company',
+        entityId: company._id.toString(),
+        userId: user._id.toString(),
+        registeredAt: new Date()
+      }
+    });
+    // ─────────────────────────────────────────────────────────
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
     await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
@@ -442,6 +529,14 @@ exports.verifyEmailByToken = async (req, res) => {
     syncUserStatusAfterVerification(user);
     await user.save();
 
+    // ── CRM: Email Verified ───────────────────────────────────
+    if (user.role === 'staffing_partner') {
+      notifyCRM.partnerEmailVerified(user)
+    } else if (user.role === 'company') {
+      notifyCRM.companyEmailVerified(user)
+    }
+    // ─────────────────────────────────────────────────────────
+
     const verificationState = getVerificationState(user);
 
     return res.status(200).json({
@@ -502,6 +597,14 @@ exports.verifyEmail = async (req, res) => {
 
     syncUserStatusAfterVerification(user);
     await user.save();
+
+    // ── CRM: Email Verified ───────────────────────────────────
+    if (user.role === 'staffing_partner') {
+      notifyCRM.partnerEmailVerified(user)
+    } else if (user.role === 'company') {
+      notifyCRM.companyEmailVerified(user)
+    }
+    // ─────────────────────────────────────────────────────────
 
     const verificationState = getVerificationState(user);
 
@@ -602,6 +705,16 @@ exports.verifyMobileOTP = async (req, res) => {
       syncUserStatusAfterVerification(user);
       await user.save();
 
+      // ── CRM: Mobile Verified ──────────────────────────────────
+      if (user.mobileVerified && user.emailVerified) {
+        if (user.role === 'staffing_partner') {
+          notifyCRM.partnerMobileVerified(user)
+        } else if (user.role === 'company') {
+          notifyCRM.companyMobileVerified(user)
+        }
+      }
+      // ─────────────────────────────────────────────────────────
+
       const verificationState = getVerificationState(user);
 
       return res.json({
@@ -659,6 +772,16 @@ exports.verifyMobileOTP = async (req, res) => {
 
     syncUserStatusAfterVerification(user);
     await user.save();
+
+    // ── CRM: Mobile Verified ──────────────────────────────────
+    if (user.mobileVerified && user.emailVerified) {
+      if (user.role === 'staffing_partner') {
+        notifyCRM.partnerMobileVerified(user)
+      } else if (user.role === 'company') {
+        notifyCRM.companyMobileVerified(user)
+      }
+    }
+    // ─────────────────────────────────────────────────────────
 
     const verificationState = getVerificationState(user);
 

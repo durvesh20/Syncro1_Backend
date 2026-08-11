@@ -9,6 +9,7 @@ const candidateLifecycleService = require("../services/candidateLifecycleService
 const StatusMachine = require("../utils/statusMachine");
 const InterviewSlot = require("../models/InterviewSlot");
 const whatsappService = require("../services/whatsappService");
+const notifyCRM = require('../utils/notifyCRM');
 const {
   COMPANY_PERMISSIONS,
   COMPANY_ALL_PERMISSIONS,
@@ -169,6 +170,10 @@ exports.updateBasicInfo = async (req, res) => {
     company.profileCompletion.basicInfo = true;
     await company.save();
 
+    // ── CRM: Company Profile Step ───────────────────────────────────
+    try { notifyCRM.companyProfileStep(req.user, company) } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
+
     // ✅ Return firstName and lastName separately for frontend
     const [returnFirstName, ...lastNameParts] =
       company.decisionMakerName.split(" ");
@@ -260,6 +265,10 @@ exports.updateKYC = async (req, res) => {
     company.profileCompletion.kyc = true;
     await company.save();
 
+    // ── CRM: Company Profile Step ───────────────────────────────────
+    try { notifyCRM.companyProfileStep(req.user, company) } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
+
     res.json({
       success: true,
       message: "KYC updated successfully",
@@ -316,6 +325,10 @@ exports.updateHiringPreferences = async (req, res) => {
     company.profileCompletion.hiringPreferences = true;
     await company.save();
 
+    // ── CRM: Company Profile Step ───────────────────────────────────
+    try { notifyCRM.companyProfileStep(req.user, company) } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
+
     res.json({
       success: true,
       message: "Hiring preferences updated successfully",
@@ -371,6 +384,10 @@ exports.updateBilling = async (req, res) => {
 
     company.profileCompletion.billing = true;
     await company.save();
+
+    // ── CRM: Company Profile Step ───────────────────────────────────
+    try { notifyCRM.companyProfileStep(req.user, company) } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
 
     res.json({
       success: true,
@@ -631,6 +648,10 @@ exports.updateLegalConsents = async (req, res) => {
     company.profileCompletion.legalConsents = true;
     await company.save();
 
+    // ── CRM: Company Profile Step ───────────────────────────────────
+    try { notifyCRM.companyProfileStep(req.user, company) } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
+
     res.json({
       success: true,
       message: "Legal consents updated successfully",
@@ -692,6 +713,9 @@ exports.uploadDocuments = async (req, res) => {
 
     await company.save();
 
+    // ── CRM: Company Profile Step ───────────────────────────────────
+    try { notifyCRM.companyProfileStep(req.user, company) } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
     res.json({
       success: true,
       message: "Documents uploaded successfully",
@@ -846,6 +870,10 @@ exports.submitProfile = async (req, res) => {
 
     await company.save();
     await user.save();
+
+    // ── CRM: Company Profile Submitted ─────────────────────────────
+    try { notifyCRM.companyProfileSubmitted(req.user, company) } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
 
     res.json({
       success: true,
