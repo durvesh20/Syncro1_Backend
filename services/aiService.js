@@ -8,7 +8,7 @@ const { EDU_LEVELS, getEduLevel } = require('./educationUtils');
 
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const AI_MAX_TOKENS = 20000;   // raised from 8000 to 20000 to prevent truncation on GPT-5 reasoning
+const AI_MAX_TOKENS = 20000;
 
 // ── Caching for efficient AI use (Change E) ─────────────────────────────────
 const crypto = require('crypto');

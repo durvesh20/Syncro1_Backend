@@ -32,6 +32,7 @@ require('./models/ScoringLog');
 require('./models/Testimonial');
 require('./models/Award');
 require('./models/CompanyLogo');
+require('./models/LandingPageLead');
 
 const app = express();
 
@@ -100,7 +101,9 @@ const allowedOrigins = [
   'https://syncro1.com',
   'https://www.syncro1.com',
   'http://localhost:9696',
-  'http://localhost:3000'
+  'http://localhost:3000',
+  'http://localhost:2121',
+  'https://syncro1.co',
 ];
 
 const corsOptions = {
@@ -163,6 +166,7 @@ app.use('/api/agreements', require('./routes/agreementRoutes'));
 app.use('/api/ai', require('./routes/aiRoutes'));
 app.use('/api/reports', require('./routes/reportRoutes'));
 app.use('/api/landing', require('./routes/landingRoutes'));
+app.use('/api/landingpage', require('./routes/landingpageRoutes'));
 
 
 /* =========================================================

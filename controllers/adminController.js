@@ -1477,14 +1477,14 @@ exports.getAnalytics = async (req, res) => {
 // @route   GET /api/admin/jobs/pending
 exports.getPendingJobs = async (req, res) => {
   try {
-    const { page = 1, limit = 20, sortBy = 'createdAt', approvalStatus } = req.query;
+    const { page = 1, limit = 20, sortBy = 'createdAt', status } = req.query;
 
     // ✅ Allow filtering by multiple approval statuses
-    const statusFilter = approvalStatus
-      ? [approvalStatus]
+    const statusFilter = status
+      ? [String(status).toUpperCase().trim().replace(/[\s-]+/g, '_')]
       : ['PENDING_APPROVAL', 'EDIT_REQUESTED'];
 
-    const query = { approvalStatus: { $in: statusFilter } };
+    const query = { status: { $in: statusFilter } };
 
     // Sub-admins can see all pending jobs
 
@@ -1512,7 +1512,7 @@ exports.getPendingJobs = async (req, res) => {
           (Date.now() - job.createdAt) / (1000 * 60 * 60)
         ),
         isStale: (Date.now() - job.createdAt) > (7 * 24 * 60 * 60 * 1000),
-        approvalStatus: job.approvalStatus,
+        status: job.status,
         rejectionReason: job.rejectionReason || null,
         rejectedAt: job.rejectedAt || null,
         rejectedBy: job.rejectedBy || null,
@@ -1530,7 +1530,7 @@ exports.getPendingJobs = async (req, res) => {
       }
     }));
 
-    // ✅ Summary by approvalStatus
+    // ✅ Summary by status
     const matchStage = {};
     // Sub-admins stats can see all pending jobs
 
@@ -1538,7 +1538,7 @@ exports.getPendingJobs = async (req, res) => {
       { $match: matchStage },
       {
         $group: {
-          _id: '$approvalStatus',
+          _id: '$status',
           count: { $sum: 1 }
         }
       }
@@ -1555,10 +1555,10 @@ exports.getPendingJobs = async (req, res) => {
         },
         stats: {
           pending: jobsWithMeta.filter(
-            j => j.approvalStatus === 'PENDING_APPROVAL'
+            j => j.status === 'PENDING_APPROVAL'
           ).length,
           editRequested: jobsWithMeta.filter(
-            j => j.approvalStatus === 'EDIT_REQUESTED'
+            j => j.status === 'EDIT_REQUESTED'
           ).length,
           stale: jobsWithMeta.filter(j => j._meta.isStale).length,
           byStatus: statusSummary.reduce((acc, item) => {
@@ -1596,19 +1596,23 @@ exports.approveJob = async (req, res) => {
 
     // Sub-admins can approve any job
 
-    if (job.approvalStatus !== 'PENDING_APPROVAL') {
+    if (job.status !== 'PENDING_APPROVAL') {
       return res.status(400).json({
         success: false,
-        message: `Cannot approve job with status: ${job.approvalStatus}`,
-        currentStatus: job.approvalStatus
+        message: `Cannot approve job with status: ${job.status}`,
+        currentStatus: job.status
       });
     }
 
-    job.approvalStatus = 'ACTIVE';
-    job.status = 'ACTIVE';
+    // Set APPROVED first (creates audit trail entry), then immediately move to ACTIVE
+    job.status = 'APPROVED';
     job.approvedBy = req.user._id;
     job.approvedAt = new Date();
     job.addToHistory('APPROVED', req.user._id, {}, notes || 'Job approved by admin');
+    await job.save(); // persists APPROVED in statusHistory
+
+    // Auto-transition APPROVED → ACTIVE
+    job.status = 'ACTIVE';
     await job.save();
 
     const companyDoc = await Company.findById(job.company);
@@ -1669,7 +1673,7 @@ exports.approveJob = async (req, res) => {
       data: {
         jobId: job._id,
         title: job.title,
-        approvalStatus: 'ACTIVE',
+        status: 'ACTIVE',
         approvedAt: job.approvedAt,
         isVisibleToPartners: true
       }
@@ -1709,15 +1713,14 @@ exports.rejectJob = async (req, res) => {
 
     // Sub-admins can reject any job
 
-    if (job.approvalStatus !== 'PENDING_APPROVAL') {
+    if (job.status !== 'PENDING_APPROVAL') {
       return res.status(400).json({
         success: false,
-        message: `Cannot reject job with status: ${job.approvalStatus}`
+        message: `Cannot reject job with status: ${job.status}`
       });
     }
 
-    job.approvalStatus = 'REJECTED';
-    job.status = 'DRAFT';
+    job.status = 'REJECTED';
     job.rejectionReason = reason.trim();
     job.rejectedAt = new Date();
     job.rejectedBy = req.user._id;
@@ -1777,7 +1780,7 @@ exports.rejectJob = async (req, res) => {
       data: {
         jobId: job._id,
         title: job.title,
-        approvalStatus: 'REJECTED',
+        status: 'REJECTED',
         rejectionReason: reason,
         rejectedAt: job.rejectedAt
       }
@@ -1822,7 +1825,7 @@ exports.getPendingEditRequests = async (req, res) => {
     }
 
     const editRequests = await JobEditRequest.find(query)
-      .populate('job', 'title approvalStatus category location')
+      .populate('job', 'title status category location')
       .populate('company', 'companyName')
       .populate('requestedBy', 'email')
       .sort(sort)
@@ -2034,7 +2037,7 @@ exports.approveEditRequest = async (req, res) => {
     }
 
     job.applyEditChanges(appliedChanges);
-    job.approvalStatus = 'ACTIVE';
+    job.status = 'ACTIVE';
     job.approvedEditCount += 1;
     job.addToHistory(
       'EDIT_APPROVED',
@@ -2168,7 +2171,7 @@ exports.rejectEditRequest = async (req, res) => {
     editRequest.adminResponse = reason.trim();
     await editRequest.save();
 
-    job.approvalStatus = 'ACTIVE';
+    job.status = 'ACTIVE';
     job.rejectedEditCount += 1;
     job.addToHistory('EDIT_REJECTED', req.user._id, editRequest.requestedChanges, reason);
     await job.save();
@@ -2285,15 +2288,14 @@ exports.discontinueJob = async (req, res) => {
 
     // Sub-admins can discontinue any job
 
-    if (job.approvalStatus === 'DISCONTINUED') {
+    if (job.status === 'DISCONTINUED') {
       return res.status(400).json({
         success: false,
         message: 'Job is already discontinued'
       });
     }
 
-    job.approvalStatus = 'DISCONTINUED';
-    job.status = 'CLOSED';
+    job.status = 'DISCONTINUED';
     job.discontinuedReason = reason.trim();
     job.discontinuedBy = req.user._id;
     job.discontinuedAt = new Date();
@@ -2360,7 +2362,7 @@ exports.discontinueJob = async (req, res) => {
       data: {
         jobId: job._id,
         title: job.title,
-        approvalStatus: 'DISCONTINUED',
+        status: 'DISCONTINUED',
         discontinuedReason: reason,
         discontinuedAt: job.discontinuedAt,
         pendingEditRequestsCancelled: await JobEditRequest.countDocuments({
@@ -2411,7 +2413,7 @@ exports.getJobEditHistory = async (req, res) => {
         job: {
           id: job._id,
           title: job.title,
-          approvalStatus: job.approvalStatus,
+          status: job.status,
           createdAt: job.createdAt,
           approvedAt: job.approvedAt,
           discontinuedAt: job.discontinuedAt
@@ -2480,7 +2482,6 @@ exports.getAllJobs = async (req, res) => {
   try {
     const {
       status,
-      approvalStatus,
       company,
       partner,
       page = 1,
@@ -2489,8 +2490,9 @@ exports.getAllJobs = async (req, res) => {
     } = req.query;
 
     const query = {};
-    if (status) query.status = status;
-    if (approvalStatus) query.approvalStatus = approvalStatus;
+    if (status) {
+      query.status = String(status).toUpperCase().trim().replace(/[\s-]+/g, '_');
+    }
     if (company) {
       if (typeof company === 'string' && company.includes(',')) {
         const ids = company.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
@@ -2554,7 +2556,7 @@ exports.getAllJobs = async (req, res) => {
     const [statusSummary, totalJobs] = await Promise.all([
       Job.aggregate([
         { $match: summaryMatch },
-        { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+        { $group: { _id: '$status', count: { $sum: 1 } } }
       ]),
       Job.countDocuments(summaryMatch)
     ]);
@@ -3075,14 +3077,14 @@ exports.getCompanyDetail = async (req, res) => {
     // Get job stats
     const jobStats = await Job.aggregate([
       { $match: { company: company._id } },
-      { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+      { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
     // Get recent jobs
     const recentJobs = await Job.find({ company: company._id })
       .sort({ createdAt: -1 })
       .limit(5)
-      .select('title approvalStatus status createdAt vacancies');
+      .select('title status status createdAt vacancies');
 
     // Get candidate pipeline
     const candidateStats = await Candidate.aggregate([
@@ -3133,18 +3135,18 @@ exports.getAllJobsWithCandidates = async (req, res) => {
   try {
     const {
       status,
-      approvalStatus,
       company,
       page = 1,
       limit = 20,
       search,
       needsAdminReview,
-      stage
+      stage,
+      hasCandidates,
+      assignedTo
     } = req.query;
 
     const query = {};
     if (status) query.status = status;
-    if (approvalStatus) query.approvalStatus = approvalStatus;
     if (company) {
       if (typeof company === 'string' && company.includes(',')) {
         const ids = company.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
@@ -3161,11 +3163,20 @@ exports.getAllJobsWithCandidates = async (req, res) => {
       }
       console.log("getAllJobsWithCandidates company query:", query.company);
     }
+    if (assignedTo) {
+      if (assignedTo === 'unassigned') {
+        query.assignedTo = null;
+      } else if (mongoose.Types.ObjectId.isValid(assignedTo)) {
+        query.assignedTo = new mongoose.Types.ObjectId(assignedTo);
+      }
+    }
     // Sub-admins can see all jobs with candidates
-    if (search) {
+    if (search && search.trim()) {
+      const rx = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       query.$or = [
-        { title: new RegExp(search, 'i') },
-        { category: new RegExp(search, 'i') }
+        { uniqueId: rx },
+        { title: rx },
+        { category: rx }
       ];
     }
 
@@ -3337,10 +3348,12 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         }
       },
 
-      // Filter if needsAdminReview or stage is requested
+      // Filter if needsAdminReview, stage, or hasCandidates is requested
       ...(needsAdminReview === 'true' ? [{ $match: { 'candidateStatusBreakdown.adminReview': { $gt: 0 } } }] : []),
       ...(stage === 'interviews' ? [{ $match: { 'candidateStatusBreakdown.interviewRounds': { $gt: 0 } } }] : []),
       ...(stage === 'hr_round' ? [{ $match: { 'candidateStatusBreakdown.hrRounds': { $gt: 0 } } }] : []),
+      ...(hasCandidates === 'true' || hasCandidates === 'yes' ? [{ $match: { totalCandidates: { $gt: 0 } } }] : []),
+      ...(hasCandidates === 'false' || hasCandidates === 'no' ? [{ $match: { totalCandidates: 0 } }] : []),
 
       // Pagination
       { $skip: skip },
@@ -3364,7 +3377,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
           vacancies: 1,
           filledPositions: 1,
           status: 1,
-          approvalStatus: 1,
+          status: 1,
           isUrgent: 1,
           isFeatured: 1,
           eligiblePlans: 1,
@@ -3541,6 +3554,46 @@ exports.getAllJobsWithCandidates = async (req, res) => {
           }
         },
         { $match: { count: { $gt: 0 } } },
+        { $count: 'total' }
+      ]);
+      total = countResult[0]?.total || 0;
+    } else if (hasCandidates === 'true' || hasCandidates === 'yes') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            candCount: { $size: '$candidates' }
+          }
+        },
+        { $match: { candCount: { $gt: 0 } } },
+        { $count: 'total' }
+      ]);
+      total = countResult[0]?.total || 0;
+    } else if (hasCandidates === 'false' || hasCandidates === 'no') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            candCount: { $size: '$candidates' }
+          }
+        },
+        { $match: { candCount: 0 } },
         { $count: 'total' }
       ]);
       total = countResult[0]?.total || 0;
@@ -3893,11 +3946,11 @@ exports.updateJobStatusByAdmin = async (req, res) => {
     const oldStatus = job.status;
     job.status = status;
 
-    // Sync approvalStatus based on active/closed status
+    // Sync status based on active/closed status
     if (status === 'CLOSED') {
-      job.approvalStatus = 'DISCONTINUED';
+      job.status = 'DISCONTINUED';
     } else if (status === 'ACTIVE') {
-      job.approvalStatus = 'ACTIVE';
+      job.status = 'ACTIVE';
     }
 
     job.addToHistory('UPDATED', req.user._id, { status: { old: oldStatus, new: status } }, `Job status updated to ${status} by admin`);

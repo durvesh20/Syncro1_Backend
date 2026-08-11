@@ -5,13 +5,10 @@ const User = require("../models/User");
 const Job = require("../models/Job");
 const Candidate = require("../models/Candidate");
 const ScreeningQuestion = require("../models/ScreeningQuestion");
-const { parseJobPosition } = require("../services/jobPositionParser");
 const candidateLifecycleService = require("../services/candidateLifecycleService");
-const StatusMachine = require("../utils/statusMachine");
 const InterviewSlot = require("../models/InterviewSlot");
 const whatsappService = require("../services/whatsappService");
 const {
-  COMPANY_PERMISSIONS,
   COMPANY_ALL_PERMISSIONS,
   COMPANY_PERMISSION_GROUPS,
   COMPANY_SUB_ADMIN_BUNDLES
@@ -902,13 +899,13 @@ exports.getDashboard = async (req, res) => {
     // ✅ NEW: Approval status breakdown
     const approvalStats = await Job.aggregate([
       { $match: { company: company._id } },
-      { $group: { _id: "$approvalStatus", count: { $sum: 1 } } }
+      { $group: { _id: "$status", count: { $sum: 1 } } }
     ]);
 
     // ✅ NEW: Get rejected jobs for alerts
     const rejectedJobs = await Job.find({
       company: company._id,
-      approvalStatus: 'REJECTED'
+      status: 'REJECTED'
     })
       .select('title rejectionReason rejectedAt')
       .sort({ rejectedAt: -1 })
@@ -917,7 +914,7 @@ exports.getDashboard = async (req, res) => {
     // ✅ NEW: Get pending approval jobs
     const pendingApprovalJobs = await Job.find({
       company: company._id,
-      approvalStatus: 'PENDING_APPROVAL'
+      status: 'PENDING_APPROVAL'
     })
       .select('title createdAt')
       .sort({ createdAt: -1 })
@@ -1084,7 +1081,7 @@ exports.createJob = async (req, res) => {
       company: company._id,
       postedBy: req.user._id,
       status: "DRAFT",
-      approvalStatus: "DRAFT",
+      status: "DRAFT",
       eligiblePlans,
     };
 
@@ -1092,11 +1089,6 @@ exports.createJob = async (req, res) => {
 
     company.metrics.totalJobsPosted += 1;
     await company.save();
-
-    // Trigger asynchronous JD parsing for JobPosition structure
-    parseJobPosition(job).catch(err => {
-      console.error(`[JD-PARSER] Asynchronous parsing error on job creation: ${err.message}`);
-    });
 
     console.log(
       `[JOB] Created as DRAFT: "${job.title}" — Requires admin approval before becoming visible`,
@@ -1145,15 +1137,15 @@ exports.getJobs = async (req, res) => {
     );
 
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
-    const { status, approvalStatus, search } = req.query;
+    const { status, search } = req.query;
 
     const query = { company: company._id };
-    if (status) query.status = status;
-    if (approvalStatus) {
-      if (approvalStatus === 'ACTIVE') {
-        query.approvalStatus = { $in: ['ACTIVE', 'APPROVED', 'EDIT_REQUESTED'] };
+    if (status) {
+      const normalizedStatus = String(status).toUpperCase().trim().replace(/[\s-]+/g, '_');
+      if (normalizedStatus === 'ACTIVE') {
+        query.status = { $in: ['ACTIVE', 'APPROVED', 'EDIT_REQUESTED'] };
       } else {
-        query.approvalStatus = approvalStatus;
+        query.status = normalizedStatus;
       }
     }
 
@@ -1180,13 +1172,13 @@ exports.getJobs = async (req, res) => {
         .limit(limit),
       Job.countDocuments(query),
       Job.countDocuments({ company: company._id }),
-      Job.countDocuments({ company: company._id, approvalStatus: { $in: ['ACTIVE', 'APPROVED'] }, status: { $ne: 'CLOSED' } }),
-      Job.countDocuments({ company: company._id, approvalStatus: 'PENDING_APPROVAL' }),
-      Job.countDocuments({ company: company._id, approvalStatus: 'EDIT_REQUESTED' }),
-      Job.countDocuments({ company: company._id, approvalStatus: 'DRAFT' }),
+      Job.countDocuments({ company: company._id, status: { $in: ['ACTIVE', 'APPROVED'] }, status: { $ne: 'CLOSED' } }),
+      Job.countDocuments({ company: company._id, status: 'PENDING_APPROVAL' }),
+      Job.countDocuments({ company: company._id, status: 'EDIT_REQUESTED' }),
+      Job.countDocuments({ company: company._id, status: 'DRAFT' }),
       Job.countDocuments({ company: company._id, status: 'CLOSED' }),
       Job.countDocuments({ company: company._id, status: 'ON_HOLD' }),
-      Job.countDocuments({ company: company._id, approvalStatus: 'REJECTED' }),
+      Job.countDocuments({ company: company._id, status: 'REJECTED' }),
     ]);
 
     const summary = {
@@ -1271,7 +1263,7 @@ exports.getRejectedJobs = async (req, res) => {
 
     const query = {
       company: company._id,
-      approvalStatus: 'REJECTED'
+      status: 'REJECTED'
     };
 
     const skip = (page - 1) * limit;
@@ -1409,11 +1401,6 @@ exports.updateJob = async (req, res) => {
 
     // This will trigger the pre-save status sync hooks
     await job.save();
-
-    // Trigger asynchronous JD parsing for JobPosition structure
-    parseJobPosition(job).catch(err => {
-      console.error(`[JD-PARSER] Asynchronous parsing error on job update: ${err.message}`);
-    });
 
     res.json({
       success: true,
@@ -2533,11 +2520,11 @@ exports.submitJobForApproval = async (req, res) => {
     }
 
     // Validation: Can only submit DRAFT or REJECTED jobs
-    if (!['DRAFT', 'REJECTED'].includes(job.approvalStatus)) {
+    if (!['DRAFT', 'REJECTED'].includes(job.status)) {
       return res.status(400).json({
         success: false,
-        message: `Cannot submit job with status: ${job.approvalStatus}`,
-        currentStatus: job.approvalStatus
+        message: `Cannot submit job with status: ${job.status}`,
+        currentStatus: job.status
       });
     }
 
@@ -2562,7 +2549,6 @@ exports.submitJobForApproval = async (req, res) => {
     }
 
     // Update job status
-    job.approvalStatus = 'PENDING_APPROVAL';
     job.status = 'PENDING_APPROVAL';
     job.addToHistory('SUBMITTED', req.user._id, {}, 'Job submitted for approval');
     await job.save();
@@ -2608,7 +2594,7 @@ exports.submitJobForApproval = async (req, res) => {
       message: 'Job submitted for admin approval successfully',
       data: {
         jobId: job._id,
-        approvalStatus: 'PENDING_APPROVAL',
+        status: 'PENDING_APPROVAL',
         submittedAt: new Date(),
         estimatedReviewTime: '24-48 hours'
       }
@@ -2647,11 +2633,11 @@ exports.requestJobEdit = async (req, res) => {
     }
 
     // Can only request edit on ACTIVE jobs
-    if (job.approvalStatus !== 'ACTIVE') {
+    if (job.status !== 'ACTIVE') {
       return res.status(400).json({
         success: false,
-        message: `Cannot request edit on job with status: ${job.approvalStatus}. Only ACTIVE jobs can be edited.`,
-        hint: job.approvalStatus === 'DRAFT' ? 'You can edit this job directly.' : 'Wait for current approval process to complete.'
+        message: `Cannot request edit on job with status: ${job.status}. Only ACTIVE jobs can be edited.`,
+        hint: job.status === 'DRAFT' ? 'You can edit this job directly.' : 'Wait for current approval process to complete.'
       });
     }
 
@@ -2868,7 +2854,7 @@ exports.requestJobEdit = async (req, res) => {
     });
 
     // Update job
-    job.approvalStatus = 'EDIT_REQUESTED';
+    job.status = 'EDIT_REQUESTED';
     job.editRequestCount += 1;
     job.lastEditRequestAt = new Date();
     job.addToHistory('EDIT_REQUESTED', req.user._id, validatedChanges, changeDescription);
@@ -2968,8 +2954,8 @@ exports.getJobEditRequests = async (req, res) => {
         job: {
           id: job._id,
           title: job.title,
-          approvalStatus: job.approvalStatus,
-          canRequestEdit: job.approvalStatus === 'ACTIVE' && stats.pending === 0
+          status: job.status,
+          canRequestEdit: job.status === 'ACTIVE' && stats.pending === 0
         }
       }
     });
@@ -3030,8 +3016,8 @@ exports.cancelEditRequest = async (req, res) => {
       status: 'PENDING'
     });
 
-    if (otherPending === 0 && job.approvalStatus === 'EDIT_REQUESTED') {
-      job.approvalStatus = 'ACTIVE';
+    if (otherPending === 0 && job.status === 'EDIT_REQUESTED') {
+      job.status = 'ACTIVE';
       await job.save();
     }
 
@@ -3040,7 +3026,7 @@ exports.cancelEditRequest = async (req, res) => {
       message: 'Edit request cancelled successfully',
       data: {
         editRequestId: editRequest._id,
-        jobStatus: job.approvalStatus
+        jobStatus: job.status
       }
     });
   } catch (error) {

@@ -45,7 +45,7 @@ exports.showInterest = async (req, res) => {
             });
         }
 
-        if (job.status !== 'ACTIVE' || job.approvalStatus !== 'ACTIVE') {
+        if (job.status !== 'ACTIVE') {
             return res.status(400).json({
                 success: false,
                 message: 'This job is not active'
@@ -321,7 +321,6 @@ exports.getMyInterestedJobs = async (req, res) => {
                 experienceLevel: i.jobDetails.experienceLevel,
                 vacancies: i.jobDetails.vacancies,
                 status: i.jobDetails.status,
-                approvalStatus: i.jobDetails.approvalStatus,
                 metrics: i.jobDetails.metrics,
                 eligiblePlans: i.jobDetails.eligiblePlans,
                 isUrgent: i.jobDetails.isUrgent,
@@ -810,7 +809,7 @@ exports.getHotJobs = async (req, res) => {
 
         const hotJobs = await Job.find({
             status: 'ACTIVE',
-            approvalStatus: 'ACTIVE'
+            status: 'ACTIVE'
         })
             .select('title category location salary metrics eligiblePlans isUrgent createdAt')
             .sort({ 'metrics.interestedPartners': -1 })

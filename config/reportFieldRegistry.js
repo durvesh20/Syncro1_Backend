@@ -29,7 +29,8 @@ const CANDIDATE_LOOKUPS = [
   { from: 'jobs', localField: 'job', foreignField: '_id', as: 'jobInfo' },
   { from: 'companies', localField: 'company', foreignField: '_id', as: 'companyInfo' },
   { from: 'staffingpartners', localField: 'submittedBy', foreignField: '_id', as: 'partnerInfo' },
-  { from: 'jobpositions', localField: 'job', foreignField: 'jobId', as: 'jobPositionInfo' }
+  { from: 'jobpositions', localField: 'job', foreignField: 'jobId', as: 'jobPositionInfo' },
+  { from: 'users', localField: 'adminQueue.reviewedBy', foreignField: '_id', as: 'reviewedByUser' }
 ];
 
 const CANDIDATE_DETAILS_SECTION = {
@@ -71,8 +72,6 @@ const CANDIDATE_SCORING_SECTION = {
   ]
 };
 
-
-
 const CANDIDATE_JOB_CONTEXT_SECTION = {
   sectionKey: 'jobContext',
   label: 'Job Context',
@@ -81,9 +80,23 @@ const CANDIDATE_JOB_CONTEXT_SECTION = {
     { key: 'job_uniqueId', label: 'Job ID', path: 'jobInfo.uniqueId', type: 'string', default: false },
     { key: 'job_status', label: 'Job Status', path: 'jobInfo.status', type: 'string', default: false },
     { key: 'job_city', label: 'Job Location', path: 'jobInfo.location.city', type: 'array', default: false },
-    { key: 'job_company', label: 'Owning Company', path: 'companyInfo.companyName', type: 'string', default: true },
+    { key: 'job_company', label: 'Owning Company', path: 'companyInfo.companyName', type: 'string', default: false },
     { key: 'job_sourcePartner', label: 'Submitted By (Partner)', path: 'partnerInfo.firmName', type: 'string', default: false },
     { key: 'job_requiredSkills', label: 'Job Required Skills', path: 'jobPositionInfo.parsedRequirements.skills.mustHave', type: 'array', default: false }
+  ]
+};
+
+// Admin rejection details section (for all admin candidate-centric reports)
+const CANDIDATE_REJECTION_SECTION = {
+  sectionKey: 'rejectionDetails',
+  label: 'Rejection Details',
+  fields: [
+    { key: 'rej_adminAction', label: 'Admin Review Action', path: 'adminQueue.action', type: 'string', default: false },
+    { key: 'rej_reason', label: 'Rejection Reason', path: 'adminQueue.rejectionReason', type: 'string', default: false },
+    { key: 'rej_reviewNotes', label: 'Review Notes', path: 'adminQueue.reviewNotes', type: 'string', default: false },
+    { key: 'rej_rejectedBy', label: 'Rejected By (Name)', path: 'reviewedByUser.name', type: 'string', compute: 'rej_rejectedBy', default: false },
+    { key: 'rej_rejectedByEmail', label: 'Rejected By (Email)', path: 'reviewedByUser.email', type: 'string', default: false },
+    { key: 'rej_rejectedAt', label: 'Reviewed At', path: 'adminQueue.reviewedAt', type: 'date', default: false }
   ]
 };
 
@@ -295,7 +308,8 @@ const reportFieldRegistry = {
     sections: [
       CANDIDATE_DETAILS_SECTION,
       CANDIDATE_SCORING_SECTION,
-      CANDIDATE_JOB_CONTEXT_SECTION
+      CANDIDATE_JOB_CONTEXT_SECTION,
+      CANDIDATE_REJECTION_SECTION
     ],
     filters: [
       { key: 'job', label: 'Job', type: 'jobSelect', appliesTo: 'job' },
@@ -316,7 +330,8 @@ const reportFieldRegistry = {
       CANDIDATE_DETAILS_SECTION,
       CANDIDATE_SCORING_SECTION,
       CANDIDATE_JOB_CONTEXT_SECTION,
-      PARTNER_CONTEXT_SECTION
+      PARTNER_CONTEXT_SECTION,
+      CANDIDATE_REJECTION_SECTION
     ],
     filters: [
       { key: 'partner', label: 'Talent Partner', type: 'partnerSelect', appliesTo: 'submittedBy', roles: ['admin', 'sub_admin'] },

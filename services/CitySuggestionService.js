@@ -72,6 +72,16 @@ class CityService {
 
         return suggestions.slice(0, limit);
     }
+
+    getStateSuggestions(query, limit = 12) {
+        if (!countryData || !countryData.states) return [];
+        const states = countryData.states.map(s => ({ id: s.id, name: s.name, iso2: s.iso2 }));
+        if (!query || query.trim().length === 0) {
+            return states.slice(0, limit);
+        }
+        const searchTerm = query.trim().toLowerCase();
+        return states.filter(s => s.name.toLowerCase().includes(searchTerm)).slice(0, limit);
+    }
 }
 
 module.exports = new CityService();

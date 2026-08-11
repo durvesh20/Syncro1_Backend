@@ -3733,7 +3733,6 @@ exports.getWorkedJobs = async (req, res) => {
           category: item.jobDetails.category,
           employmentType: item.jobDetails.employmentType,
           status: item.jobDetails.status,
-          approvalStatus: item.jobDetails.approvalStatus,
           location: item.jobDetails.location,
           salary: item.jobDetails.salary,
           uniqueId: item.jobDetails.uniqueId

@@ -123,6 +123,13 @@ function computeValue(doc, fieldDef) {
       const last = getPath(doc, 'lastName') || '';
       return [first, last].filter(Boolean).join(' ') || 'N/A';
     }
+    case 'rej_rejectedBy': {
+      // reviewedByUser is the $lookup result from users collection
+      const user = doc.reviewedByUser;
+      if (!user) return '';
+      const name = user.name || [user.firstName, user.lastName].filter(Boolean).join(' ');
+      return name || user.email || '';
+    }
     default:
       return '';
   }

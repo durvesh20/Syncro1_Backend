@@ -178,6 +178,15 @@ const handleUploadError = (err, req, res, next) => {
     });
   }
 
+  // Cloudinary rate limit — http_code 429
+  if (err.http_code === 429 || err.name === 'UnexpectedResponse' && String(err.message).includes('429')) {
+    console.warn('[UPLOAD] Cloudinary rate limit hit (429):', JSON.stringify(err));
+    return res.status(429).json({
+      success: false,
+      message: 'Too many uploads at once. Please wait a few seconds and try again.'
+    });
+  }
+
   // Any other upload error
   const msg = err instanceof Error ? err.message : (err.message || JSON.stringify(err));
   console.error('[UPLOAD] File upload error:', msg);

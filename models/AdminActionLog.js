@@ -36,6 +36,7 @@ const adminActionLogSchema = new mongoose.Schema({
             'JOB_APPROVED',
             'JOB_REJECTED',
             'JOB_DISCONTINUED',
+            'JOB_STATUS_UPDATED',
 
             // Assignment actions
             'APPLICATION_ASSIGNED',

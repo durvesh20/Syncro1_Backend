@@ -152,14 +152,34 @@ const jobSchema = new mongoose.Schema({
     default: ['Any']
   },
 
-  // ==================== JOB STATUS ====================
+  // ==================== JOB STATUS (UNIFIED) ====================
+  // Single source of truth covering both lifecycle and approval workflow.
+  // Values:
+  //   Pre-approval:  DRAFT → PENDING_APPROVAL → APPROVED (auto → ACTIVE) | REJECTED
+  //   Operational:   ACTIVE → PAUSED | ON_HOLD | FILLED | CLOSED
+  //   Edit cycle:    ACTIVE → EDIT_REQUESTED → APPROVED (auto → ACTIVE)
+  //   Admin force:   DISCONTINUED
   status: {
     type: String,
-    enum: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'CLOSED', 'FILLED', 'ON_HOLD'],
+    enum: [
+      'DRAFT',
+      'PENDING_APPROVAL',
+      'APPROVED',        // Transitional — auto-moves to ACTIVE after save
+      'ACTIVE',
+      'PAUSED',
+      'ON_HOLD',
+      'FILLED',
+      'CLOSED',
+      'REJECTED',
+      'EDIT_REQUESTED',
+      'DISCONTINUED'
+    ],
     default: 'DRAFT'
   },
 
-  // ==================== APPROVAL WORKFLOW ====================
+  // ==================== APPROVAL STATUS (DEPRECATED ALIAS) ====================
+  // @deprecated — Kept for backward compatibility only. Auto-synced from `status`
+  // via pre-save hook. Read `status` instead of this field in all new code.
   approvalStatus: {
     type: String,
     enum: [
@@ -296,8 +316,10 @@ const jobSchema = new mongoose.Schema({
 });
 
 // ==================== INDEXES ====================
-jobSchema.index({ company: 1, approvalStatus: 1 });
-jobSchema.index({ approvalStatus: 1, createdAt: -1 });
+jobSchema.index({ company: 1, status: 1 });
+jobSchema.index({ status: 1, createdAt: -1 });
+jobSchema.index({ company: 1, approvalStatus: 1 }); // @deprecated — kept for backward compat
+jobSchema.index({ approvalStatus: 1, createdAt: -1 }); // @deprecated
 jobSchema.index({ status: 1, eligiblePlans: 1 });
 jobSchema.index({ category: 1, status: 1 });
 jobSchema.index({ 'location.city': 1, status: 1 });
@@ -305,18 +327,36 @@ jobSchema.index({ company: 1, status: 1, createdAt: -1 });
 
 // ==================== VIRTUAL FIELDS ====================
 jobSchema.virtual('isPendingReview').get(function () {
-  return this.approvalStatus === 'PENDING_APPROVAL' || this.approvalStatus === 'EDIT_REQUESTED';
+  return this.status === 'PENDING_APPROVAL' || this.status === 'EDIT_REQUESTED';
 });
 
 jobSchema.virtual('canBeEdited').get(function () {
-  return ['DRAFT', 'REJECTED'].includes(this.approvalStatus);
+  return ['DRAFT', 'REJECTED'].includes(this.status);
 });
 
 jobSchema.virtual('requiresApproval').get(function () {
-  return this.approvalStatus === 'EDIT_REQUESTED';
+  return this.status === 'EDIT_REQUESTED';
 });
 
 // ==================== MIDDLEWARE ====================
+
+// Auto-sync deprecated `approvalStatus` field from `status` for backward compat.
+// New code should always read/write `status` only.
+jobSchema.pre('save', function (next) {
+  const approvalLinkedStatuses = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'ACTIVE', 'EDIT_REQUESTED', 'DISCONTINUED'];
+  if (approvalLinkedStatuses.includes(this.status)) {
+    this.approvalStatus = this.status;
+  } else {
+    // Operational statuses (PAUSED, ON_HOLD, FILLED, CLOSED) — keep approvalStatus as ACTIVE
+    // since the job was approved before reaching these states
+    if (!approvalLinkedStatuses.includes(this.approvalStatus)) {
+      this.approvalStatus = 'ACTIVE';
+    }
+  }
+  next();
+});
+
+// Deadline-based auto ON_HOLD logic
 jobSchema.pre('save', function (next) {
   const now = new Date();
   if (!this.isModified('status')) {
@@ -328,6 +368,7 @@ jobSchema.pre('save', function (next) {
   }
   next();
 });
+
 
 jobSchema.pre('save', async function (next) {
   // Auto-generate slug

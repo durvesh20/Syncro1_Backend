@@ -41,12 +41,24 @@ const CANDIDATE_TRANSITIONS = {
 };
 
 const JOB_TRANSITIONS = {
-  'DRAFT': ['PENDING_APPROVAL', 'ACTIVE'],
-  'PENDING_APPROVAL': ['ACTIVE', 'DRAFT'],
-  'ACTIVE': ['PAUSED', 'CLOSED', 'FILLED'],
-  'PAUSED': ['ACTIVE', 'CLOSED'],
-  'CLOSED': [],
-  'FILLED': ['ACTIVE']
+  // Pre-approval flow
+  'DRAFT':            ['PENDING_APPROVAL'],
+  'PENDING_APPROVAL': ['APPROVED', 'REJECTED', 'DRAFT'],
+  'APPROVED':         ['ACTIVE'],            // transitional — admin sets, auto-moves to ACTIVE
+  'REJECTED':         ['DRAFT'],             // company edits and resubmits
+
+  // Operational flow (company/admin manual changes)
+  'ACTIVE':           ['PAUSED', 'ON_HOLD', 'FILLED', 'CLOSED', 'EDIT_REQUESTED'],
+  'PAUSED':           ['ACTIVE', 'CLOSED'],
+  'ON_HOLD':          ['ACTIVE', 'CLOSED'],
+  'FILLED':           ['ACTIVE'],            // can reopen
+  'CLOSED':           [],                   // terminal
+
+  // Edit cycle
+  'EDIT_REQUESTED':   ['APPROVED', 'REJECTED'],
+
+  // Admin force-stop
+  'DISCONTINUED':     []                    // terminal
 };
 
 // What each role is allowed to change
@@ -69,8 +81,10 @@ const ROLE_PERMISSIONS = {
     ]
   },
   job: {
-    company: ['DRAFT', 'ACTIVE', 'PAUSED', 'CLOSED'],
-    admin: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'CLOSED', 'FILLED']
+    // Company can manage operational states; cannot approve/reject themselves
+    company: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'ON_HOLD', 'FILLED', 'CLOSED', 'EDIT_REQUESTED'],
+    // Admin has full control including approval workflow and force-stop
+    admin:   ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'ACTIVE', 'PAUSED', 'ON_HOLD', 'FILLED', 'CLOSED', 'REJECTED', 'EDIT_REQUESTED', 'DISCONTINUED']
   }
 };
 
@@ -191,10 +205,15 @@ class StatusMachine {
       'ON_HOLD': 'On Hold',
       // Job statuses
       'PENDING_APPROVAL': 'Pending Approval',
-      'ACTIVE': 'Active',
-      'PAUSED': 'Paused',
-      'CLOSED': 'Closed',
-      'FILLED': 'Filled'
+      'APPROVED':         'Approved',
+      'ACTIVE':           'Active',
+      'PAUSED':           'Paused',
+      'ON_HOLD':          'On Hold',
+      'FILLED':           'Filled',
+      'CLOSED':           'Closed',
+      'REJECTED':         'Rejected',
+      'EDIT_REQUESTED':   'Edit Requested',
+      'DISCONTINUED':     'Discontinued'
     };
 
     const normalized = status?.toString().toUpperCase().trim();
