@@ -1996,6 +1996,15 @@ exports.approveEditRequest = async (req, res) => {
           }
         }
 
+        // ✅ Prevent clearing required string fields such as category
+        if (field === 'category') {
+          const validNew = (typeof newValue === 'string' && newValue.trim()) ? newValue.trim() : null;
+          const validOld = (typeof change.old === 'string' && change.old.trim()) ? change.old.trim() : null;
+          const validJobCat = (typeof job.category === 'string' && job.category.trim()) ? job.category.trim() : null;
+
+          newValue = validNew || validJobCat || validOld || 'Other';
+        }
+
         job.set(field, newValue);
 
         appliedChanges[field] = {
@@ -2037,6 +2046,17 @@ exports.approveEditRequest = async (req, res) => {
     }
 
     job.applyEditChanges(appliedChanges);
+
+    // ✅ Ensure required category field is never empty or missing on the job document
+    if (!job.category || typeof job.category !== 'string' || !job.category.trim()) {
+      job.category = (typeof editRequest.requestedChanges?.category?.new === 'string' && editRequest.requestedChanges.category.new.trim())
+        ? editRequest.requestedChanges.category.new.trim()
+        : (typeof editRequest.requestedChanges?.category?.old === 'string' && editRequest.requestedChanges.category.old.trim())
+        ? editRequest.requestedChanges.category.old.trim()
+        : 'Other';
+      job.markModified('category');
+    }
+
     job.status = 'ACTIVE';
     job.approvedEditCount += 1;
     job.addToHistory(
@@ -2046,6 +2066,18 @@ exports.approveEditRequest = async (req, res) => {
       notes || 'Edit request approved'
     );
     await job.save();
+
+    // ✅ Sync talent partner slot sizes (submissionLimit) if vacancies were updated (1 vacancy = 5 slots)
+    if (appliedChanges.vacancies) {
+      try {
+        const { syncJobInterestSlots } = require('../services/slotService');
+        const oldVac = Number(appliedChanges.vacancies.old) || 1;
+        const newVac = Number(appliedChanges.vacancies.new) || job.vacancies;
+        await syncJobInterestSlots(job._id, oldVac, newVac);
+      } catch (slotErr) {
+        console.error('Failed to sync partner slots on edit approval:', slotErr);
+      }
+    }
 
     // Trigger asynchronous JD parsing for JobPosition structure
     parseJobPosition(job).catch(err => {

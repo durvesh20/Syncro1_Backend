@@ -123,6 +123,42 @@ function computeValue(doc, fieldDef) {
       const last = getPath(doc, 'lastName') || '';
       return [first, last].filter(Boolean).join(' ') || 'N/A';
     }
+    case 'cand_education': {
+      const edu = getPath(doc, 'profile.education');
+      if (Array.isArray(edu) && edu.length > 0) {
+        const formatted = edu
+          .map((e) => {
+            if (typeof e === 'string') return e;
+            if (typeof e === 'object' && e !== null) {
+              const parts = [e.degree, e.institution, e.year].filter(Boolean);
+              return parts.join(' - ');
+            }
+            return String(e);
+          })
+          .filter(Boolean);
+        if (formatted.length > 0) return formatted.join('; ');
+      }
+      if (typeof edu === 'string' && edu.trim().length > 0) {
+        return edu.trim();
+      }
+      const aiEdu = getPath(doc, 'resumeAnalysis.scoreBreakdown.education.candidateEducation');
+      if (aiEdu && typeof aiEdu === 'string' && aiEdu.trim().length > 0 && aiEdu !== 'Not provided') {
+        return aiEdu.trim();
+      }
+      const rawAiEdu = getPath(doc, 'resumeAnalysis.education');
+      if (Array.isArray(rawAiEdu) && rawAiEdu.length > 0) {
+        return rawAiEdu.join('; ');
+      }
+      return 'N/A';
+    }
+    case 'cand_writeup': {
+      const writeup =
+        getPath(doc, 'profile.writeup') ||
+        getPath(doc, 'submissionMetadata.partnerNotes') ||
+        getPath(doc, 'adminQueue.reviewNotes') ||
+        getPath(doc, 'resumeAnalysis.summary');
+      return writeup || 'N/A';
+    }
     case 'rej_rejectedBy': {
       // reviewedByUser is the $lookup result from users collection
       const user = doc.reviewedByUser;

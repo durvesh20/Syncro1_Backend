@@ -1396,11 +1396,23 @@ exports.updateJob = async (req, res) => {
       }
     }
 
+    const oldVacancies = job.vacancies || 1;
+
     // Apply fields from body
     Object.assign(job, req.body);
 
     // This will trigger the pre-save status sync hooks
     await job.save();
+
+    // ✅ Sync talent partner slot sizes (submissionLimit) if vacancies were updated (1 vacancy = 5 slots)
+    if (req.body.vacancies !== undefined && Number(req.body.vacancies) !== oldVacancies) {
+      try {
+        const { syncJobInterestSlots } = require('../services/slotService');
+        await syncJobInterestSlots(job._id, oldVacancies, Number(req.body.vacancies));
+      } catch (slotErr) {
+        console.error('[COMPANY] Failed to sync partner slots on job update:', slotErr);
+      }
+    }
 
     res.json({
       success: true,
@@ -2816,6 +2828,13 @@ exports.requestJobEdit = async (req, res) => {
         // align the old value to the actual currentValue in the database.
         // This ensures the edit request proceeds smoothly and the admin gets the correct diff.
         change.old = currentValue !== undefined ? currentValue : null;
+      }
+
+      // Ensure required category field is not submitted as empty string or null
+      if (field === 'category') {
+        if (!change.new || typeof change.new !== 'string' || !change.new.trim()) {
+          change.new = (typeof currentValue === 'string' && currentValue.trim()) ? currentValue.trim() : (typeof change.old === 'string' && change.old.trim()) ? change.old.trim() : 'Other';
+        }
       }
 
       // Check if new value is actually different; if they are same, we just skip it (don't error out)
