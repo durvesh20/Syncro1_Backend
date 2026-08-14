@@ -44,8 +44,10 @@ const CANDIDATE_DETAILS_SECTION = {
     { key: 'cand_email', label: 'Email', path: 'email', type: 'string', default: true },
     { key: 'cand_mobile', label: 'Mobile', path: 'mobile', type: 'string', default: false },
     { key: 'cand_status', label: 'Current Status', path: 'status', type: 'string', default: true },
+    { key: 'cand_education', label: 'Education', type: 'string', compute: 'cand_education', default: false },
+    { key: 'cand_writeup', label: 'Remark / Writeup', type: 'string', compute: 'cand_writeup', default: false },
     { key: 'cand_location', label: 'Location', path: 'profile.location', type: 'string', default: false },
-    { key: 'cand_totalExp', label: 'Total Experience (yrs)', path: 'profile.totalExperience', type: 'number', default: true },
+    { key: 'cand_totalExp', label: 'Total Experience (yrs)', path: 'profile.totalExperience', type: 'number', default: false },
     { key: 'cand_relExp', label: 'Relevant Experience (yrs)', path: 'profile.relevantExperience', type: 'number', default: false },
     { key: 'cand_notice', label: 'Notice Period', path: 'profile.noticePeriod', type: 'string', default: false },
     { key: 'cand_currentSalary', label: 'Current CTC', path: 'profile.currentSalary', type: 'number', default: false },
@@ -55,7 +57,7 @@ const CANDIDATE_DETAILS_SECTION = {
     { key: 'cand_skills', label: 'Skills', path: 'profile.skills', type: 'array', default: false },
     { key: 'cand_linkedin', label: 'LinkedIn', path: 'profile.linkedinProfile', type: 'string', default: false },
     { key: 'cand_consentStatus', label: 'Consent Status', path: 'consent.consentStatus', type: 'string', default: false },
-    { key: 'cand_submittedAt', label: 'Submitted At', path: 'createdAt', type: 'date', default: true }
+    { key: 'cand_submittedAt', label: 'Submitted At', path: 'createdAt', type: 'date', default: false }
   ]
 };
 

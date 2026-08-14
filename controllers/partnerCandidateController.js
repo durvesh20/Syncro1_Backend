@@ -457,6 +457,10 @@ exports.applyFromPool = async (req, res) => {
       await interest.save();
     }
 
+    // ✅ Ensure partner slot size matches current job vacancies (1 vacancy = 5 slots)
+    const { ensureMinJobInterestSlots } = require('../services/slotService');
+    await ensureMinJobInterestSlots(interest, job);
+
     // ── 4. Submission limit ──
     if (interest.submissionCount >= interest.submissionLimit) {
       return res.status(403).json({

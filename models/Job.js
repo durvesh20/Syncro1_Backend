@@ -44,7 +44,9 @@ const jobSchema = new mongoose.Schema({
   // ==================== JOB DETAILS ====================
   category: {
     type: String,
-    required: true
+    required: [true, 'Job category is required'],
+    default: 'Other',
+    trim: true
   },
   subCategory: String,
   employmentType: {
@@ -472,11 +474,19 @@ jobSchema.methods.applyEditChanges = function (appliedChanges) {
     const keys = field.split('.');
     let obj = this;
     for (let i = 0; i < keys.length - 1; i++) {
+      if (!obj[keys[i]]) obj[keys[i]] = {};
       obj = obj[keys[i]];
     }
     const val = appliedChanges[field];
     const valueToSet = (val && typeof val === 'object' && 'new' in val) ? val.new : val;
-    obj[keys[keys.length - 1]] = valueToSet;
+
+    if (field === 'category' && (!valueToSet || typeof valueToSet !== 'string' || !valueToSet.trim())) {
+      if (!obj['category'] || typeof obj['category'] !== 'string' || !obj['category'].trim()) {
+        obj['category'] = 'Other';
+      }
+    } else {
+      obj[keys[keys.length - 1]] = valueToSet;
+    }
     this.markModified(field);
   });
 };
