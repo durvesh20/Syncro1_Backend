@@ -13,6 +13,7 @@ const {
   COMPANY_PERMISSION_GROUPS,
   COMPANY_SUB_ADMIN_BUNDLES
 } = require('../utils/permissions');
+const { isWorkEmail } = require('../utils/validators');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -3112,6 +3113,24 @@ exports.createSubAdmin = async (req, res) => {
 
     const normalizedEmail = email.toLowerCase().trim();
     const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+    if (!isWorkEmail(normalizedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please use an official company work email address.'
+      });
+    }
+
+    const ownerEmail = req.user?.email || '';
+    const ownerDomain = ownerEmail.includes('@') ? ownerEmail.split('@')[1].toLowerCase().trim() : '';
+    const subAdminDomain = normalizedEmail.includes('@') ? normalizedEmail.split('@')[1].toLowerCase().trim() : '';
+
+    if (ownerDomain && subAdminDomain && ownerDomain !== subAdminDomain) {
+      return res.status(400).json({
+        success: false,
+        message: `Sub-admin email domain (@${subAdminDomain}) must match your company's registered email domain (@${ownerDomain}).`
+      });
+    }
 
     const existingUser = await User.findOne({
       $or: [

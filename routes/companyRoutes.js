@@ -114,12 +114,12 @@ const blockSubAdmins = (req, res, next) => {
 };
 
 // ==================== COMPANY SUB-ADMIN ROUTES ====================
-router.get('/sub-admins/permissions', blockSubAdmins, getPermissionsMeta);
-router.post('/sub-admins', blockSubAdmins, createSubAdmin);
-router.get('/sub-admins', blockSubAdmins, getSubAdmins);
-router.get('/sub-admins/:id', blockSubAdmins, getSubAdminById);
-router.put('/sub-admins/:id', blockSubAdmins, updateSubAdmin);
-router.put('/sub-admins/:id/status', blockSubAdmins, updateSubAdminStatus);
+router.get('/sub-admins/permissions', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getPermissionsMeta);
+router.post('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, createSubAdmin);
+router.get('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getSubAdmins);
+router.get('/sub-admins/:id', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getSubAdminById);
+router.put('/sub-admins/:id', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, updateSubAdmin);
+router.put('/sub-admins/:id/status', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, updateSubAdminStatus);
 
 // Middleware to override req.user._id for sub-admins so they act on behalf of the parent company
 router.use((req, res, next) => {

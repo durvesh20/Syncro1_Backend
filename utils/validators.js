@@ -97,7 +97,123 @@ const validateResumeUrl = (urlStr) => {
     return { valid: true };
 };
 
-module.exports = { validateEmail, validateMobile, validateGST, validatePAN, validateResumeUrl };
+/**
+ * Set of public/free webmail email domains that are not permitted for company registration.
+ */
+const BLOCKED_PUBLIC_EMAIL_DOMAINS = new Set([
+    // Google
+    "gmail.com",
+    "googlemail.com",
+    // Microsoft / Outlook / Hotmail / Live
+    "outlook.com",
+    "outlook.in",
+    "outlook.co.uk",
+    "hotmail.com",
+    "hotmail.co.uk",
+    "hotmail.fr",
+    "hotmail.de",
+    "live.com",
+    "live.in",
+    "live.com.au",
+    "msn.com",
+    "passport.com",
+    // Yahoo / Ymail / Rocketmail
+    "yahoo.com",
+    "yahoo.co.in",
+    "yahoo.in",
+    "yahoo.co.uk",
+    "yahoo.ca",
+    "yahoo.com.au",
+    "yahoo.fr",
+    "yahoo.de",
+    "ymail.com",
+    "rocketmail.com",
+    // Rediff / Reddit / Redit
+    "rediffmail.com",
+    "rediff.com",
+    "reddit.com",
+    "redit.com",
+    // Apple / iCloud
+    "icloud.com",
+    "me.com",
+    "mac.com",
+    // AOL
+    "aol.com",
+    "aim.com",
+    // Zoho Personal
+    "zoho.com",
+    "zoho.in",
+    "zohomail.com",
+    // Proton / Tuta
+    "protonmail.com",
+    "proton.me",
+    "pm.me",
+    "tutanota.com",
+    "tutamail.com",
+    "tuta.io",
+    // Mail.com / GMX
+    "mail.com",
+    "gmx.com",
+    "gmx.net",
+    // Yandex
+    "yandex.com",
+    "yandex.ru",
+    // Lycos / Fastmail / Hushmail / Inbox
+    "lycos.com",
+    "fastmail.com",
+    "hushmail.com",
+    "inbox.com",
+    // Common Disposable / Temporary Email Domains
+    "tempmail.com",
+    "temp-mail.org",
+    "guerrillamail.com",
+    "10minutemail.com",
+    "mailinator.com",
+    "throwawaymail.com",
+    "dispostable.com"
+]);
+
+const PUBLIC_PROVIDER_PREFIXES = [
+    "gmail.",
+    "googlemail.",
+    "outlook.",
+    "hotmail.",
+    "yahoo.",
+    "ymail.",
+    "rediffmail.",
+    "rediff.",
+    "reddit.",
+    "redit.",
+    "icloud.",
+    "aol.",
+    "protonmail.",
+    "proton.",
+    "mailinator."
+];
+
+const isWorkEmail = (email) => {
+    if (!email || typeof email !== "string") return false;
+    const trimmed = email.trim().toLowerCase();
+    const atIndex = trimmed.lastIndexOf("@");
+    if (atIndex === -1 || atIndex === trimmed.length - 1) return false;
+
+    const domain = trimmed.slice(atIndex + 1);
+
+    if (BLOCKED_PUBLIC_EMAIL_DOMAINS.has(domain)) {
+        return false;
+    }
+
+    for (const prefix of PUBLIC_PROVIDER_PREFIXES) {
+        if (domain.startsWith(prefix)) {
+            return false;
+        }
+    }
+
+    return true;
+};
+
+module.exports = { validateEmail, validateMobile, validateGST, validatePAN, validateResumeUrl, isWorkEmail };
+
 
 
 
