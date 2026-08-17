@@ -1252,4 +1252,121 @@ router.post('/candidates/:id/pipeline/resend-interview-consent', pipelineResendI
 const { getJobScreeningQuestionsForAdmin } = require('../controllers/adminController');
 router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForAdmin);
 
+// ==================== PRE-SCREEN & MANUAL AI MATCH ====================
+
+/**
+ * @route  POST /api/admin/candidates/:id/run-ai-match
+ * @desc   Manually trigger AI resume matching for a candidate.
+ *         Accessible by admin and sub-admin (both authorised via authorizeAdminAccess).
+ *         AI matching is NEVER auto-triggered — this is the only way to run it.
+ * @access Admin | Sub-Admin
+ */
+router.post(
+  '/candidates/:id/run-ai-match',
+  async (req, res) => {
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+      const result = await candidateQueueService.runAIMatchForCandidate(
+        req.params.id,
+        req.user._id
+      );
+
+      res.json({
+        success: true,
+        message: 'AI matching completed successfully',
+        data: result
+      });
+    } catch (error) {
+      console.error('[ADMIN] run-ai-match error:', error.message);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'AI matching failed'
+      });
+    }
+  }
+);
+
+/**
+ * @route  GET /api/admin/candidates/:id/prescreen
+ * @desc   Fetch pre-screen result for a candidate (standalone endpoint for detail panels).
+ * @access Admin | Sub-Admin
+ */
+router.get(
+  '/candidates/:id/prescreen',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const candidate = await Candidate.findById(req.params.id)
+        .select('prescreen firstName lastName status job')
+        .populate('job', 'title experienceRange salary expectedJoiningDate location');
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          prescreen: candidate.prescreen || null,
+          candidateName: `${candidate.firstName} ${candidate.lastName}`,
+          candidateStatus: candidate.status,
+          job: candidate.job
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
+/**
+ * @route  POST /api/admin/candidates/:id/re-calculate-prescreen
+ * @desc   Re-calculate pre-screening score for a candidate against current job criteria.
+ * @access Admin | Sub-Admin
+ */
+router.post(
+  '/candidates/:id/re-calculate-prescreen',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const prescreenService = require('../services/prescreenService');
+
+      const candidate = await Candidate.findById(req.params.id)
+        .populate('job');
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      const prescreenResult = prescreenService.runPreScreen(candidate, candidate.job);
+      candidate.prescreen = prescreenResult;
+
+      candidate.statusHistory = candidate.statusHistory || [];
+      candidate.statusHistory.push({
+        status: candidate.status,
+        changedBy: req.user?._id,
+        changedAt: new Date(),
+        notes: `Pre-screening score re-calculated manually by Admin: ${prescreenResult.prescreen_score}% (${prescreenResult.status}).`
+      });
+
+      await candidate.save();
+
+      res.json({
+        success: true,
+        message: 'Pre-screening score re-calculated successfully',
+        data: {
+          prescreen: candidate.prescreen,
+          candidate
+        }
+      });
+    } catch (error) {
+      console.error('[ADMIN] re-calculate-prescreen error:', error.message);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to re-calculate pre-screening score'
+      });
+    }
+  }
+);
+
 module.exports = router;

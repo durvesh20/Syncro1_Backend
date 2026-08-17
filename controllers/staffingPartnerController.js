@@ -2907,9 +2907,16 @@ exports.resendConsent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Submission not found' });
     }
 
-    // Allow resend if consent is pending or candidate is still in draft (consent never sent)
+    // Allow resend if:
+    //  • consent is pending / never responded
+    //  • draft (consent never sent)
+    //  • WITHDRAWN because the link expired (whatsappConsent.status === 'EXPIRED')
+    const isExpiredWithdrawal =
+      candidate.status === 'WITHDRAWN' &&
+      candidate.whatsappConsent?.status === 'EXPIRED';
+
     const allowedResendStatuses = ['CONSENT_PENDING', 'DRAFT'];
-    if (!allowedResendStatuses.includes(candidate.status)) {
+    if (!allowedResendStatuses.includes(candidate.status) && !isExpiredWithdrawal) {
       return res.status(400).json({
         success: false,
         message: candidate.status === 'CONSENT_CONFIRMED'
@@ -2926,16 +2933,17 @@ exports.resendConsent = async (req, res) => {
     const companyName = company?.companyName || 'a leading company';
     let consentToken = candidate.whatsappConsent?.token;
 
-    // For DRAFT candidates, consent was never sent — generate a fresh token
-    if (!consentToken) {
-      if (candidate.status !== 'DRAFT') {
-        return res.status(400).json({ success: false, message: 'Consent token missing. Cannot resend.' });
-      }
+    // For DRAFT candidates or expired WITHDRAWN candidates, generate a fresh token & reset expiry
+    if (!consentToken || isExpiredWithdrawal) {
       consentToken = crypto.randomBytes(32).toString('hex');
       if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
       candidate.whatsappConsent.token = consentToken;
       candidate.whatsappConsent.sentTo = candidate.mobile;
     }
+
+    // Set/refresh consent expiration to 48 hours from now
+    const consentExpiry = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    candidate.whatsappConsent.expiresAt = consentExpiry;
 
     const result = await whatsappService.sendCandidateConsent(
       candidate.mobile,
@@ -2949,8 +2957,9 @@ exports.resendConsent = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Failed to resend WhatsApp consent', error: result.error });
     }
 
-    // Update consent timestamps and promote DRAFT → CONSENT_PENDING
+    // Update consent timestamps and promote DRAFT / WITHDRAWN → CONSENT_PENDING
     if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
+    candidate.whatsappConsent.status = 'PENDING';
     candidate.whatsappConsent.resentAt = new Date();
     candidate.whatsappConsent.sentAt = new Date();
 
@@ -2963,7 +2972,9 @@ exports.resendConsent = async (req, res) => {
       changedAt: new Date(),
       notes: previousStatus === 'DRAFT'
         ? 'WhatsApp consent sent for the first time (from DRAFT) by partner'
-        : 'WhatsApp consent resent by partner'
+        : previousStatus === 'WITHDRAWN'
+          ? 'WhatsApp consent resent after previous link expired (from WITHDRAWN) by partner'
+          : 'WhatsApp consent resent by partner'
     });
     await candidate.save();
 

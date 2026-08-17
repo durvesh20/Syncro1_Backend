@@ -763,6 +763,43 @@ const candidateSchema = new mongoose.Schema({
     }
   ],
 
+  // ==================== PRE-SCREEN RESULT (rule-based, runs after consent) ====================
+  // Populated automatically by prescreenService right after candidate confirms WhatsApp consent.
+  // AI matching is intentionally NOT triggered here — recruiters/admins trigger it manually.
+  prescreen: {
+    computed_at: Date,
+
+    // Raw sub-scores (0–100 each) — stored separately so weights can be retuned later
+    location_score:   { type: Number, default: null },
+    salary_score:     { type: Number, default: null },
+    notice_score:     { type: Number, default: null },
+    experience_score: { type: Number, default: null },
+
+    // Weighted composite of the four sub-scores (0–100)
+    prescreen_score:  { type: Number, default: null },
+
+    // Status label derived from prescreen_score thresholds
+    status: {
+      type: String,
+      enum: ['qualified', 'borderline', 'not_qualified', 'skipped'],
+      default: null
+    },
+
+    // Hard-filter fields (Phase 4 — kept here so model is ready)
+    hard_filter_triggered: { type: Boolean, default: false },
+    hard_filter_reason:    { type: String, default: null },
+
+    // Set to true when one or more fields required for scoring were missing
+    data_incomplete:    { type: Boolean, default: false },
+    incomplete_fields:  [String],  // e.g. ['salary', 'location']
+
+    // Detailed reasons for each sub-score (for recruiter tooltip)
+    location_detail:   String,
+    salary_detail:     String,
+    notice_detail:     String,
+    experience_detail: String,
+  },
+
 }, {
   timestamps: true
 });
@@ -776,6 +813,7 @@ candidateSchema.index({ 'payout.status': 1, 'payout.eligibleDate': 1 }); // For 
 candidateSchema.index({ 'replacementGuarantee.endDate': 1 }); // For guarantee expiry
 candidateSchema.index({ 'resumeAnalysis.profileScore': -1 });
 candidateSchema.index({ 'adminQueue.action': 1, createdAt: -1 });
+candidateSchema.index({ 'prescreen.status': 1, 'prescreen.prescreen_score': -1 }); // Pre-screen queries
 
 // ==================== METHODS ====================
 
