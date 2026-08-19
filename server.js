@@ -5,7 +5,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const connectDB = require('./config/db');
-require('./config/env'); 
+require('./config/env');
 
 
 // Connect to database
@@ -84,8 +84,18 @@ if (rateLimitEnabled) {
    BODY PARSING
 ========================================================= */
 
+const mongoSanitize = require('express-mongo-sanitize');
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+/* =========================================================
+   NOSQL INJECTION SANITIZATION
+   Sanitize user-supplied data to prevent NoSQL query injection (strips $ and .)
+========================================================= */
+app.use(mongoSanitize({
+  replaceWith: '_'
+}));
 
 /* =========================================================
    COOKIE PARSER
