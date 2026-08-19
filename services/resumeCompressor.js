@@ -40,7 +40,12 @@ ${resumeText}`
     if (!model.includes('gpt-5') && !model.includes('o1') && !model.includes('o3')) {
       params.temperature = 0.1;
     }
+    const startTime = Date.now();
     const response = await openai.chat.completions.create(params);
+    const durationMs = Date.now() - startTime;
+
+    const { logTokenUsage } = require('./aiService');
+    logTokenUsage('Resume Text Compression', model, response.usage, response.choices[0]?.finish_reason || 'stop', 1, durationMs);
 
     const resultText = response.choices[0]?.message?.content;
     if (!resultText) {

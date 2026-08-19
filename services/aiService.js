@@ -80,6 +80,53 @@ function _buildSweepTerms() {
         });
 }
 
+function logTokenUsage(contextName, model, usage = {}, finishReason = 'stop', attempt = 1, durationMs = 0) {
+    const promptTokens = usage.prompt_tokens || 0;
+    const completionTokens = usage.completion_tokens || 0;
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens || 0;
+    const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens || 0;
+    const totalTokens = usage.total_tokens || (promptTokens + completionTokens);
+
+    let inputRate = 0.0000025;
+    let outputRate = 0.0000100;
+    const m = (model || '').toLowerCase();
+    if (m.includes('gpt-4o-mini') || m.includes('mini')) {
+        inputRate = 0.00000015;
+        outputRate = 0.00000060;
+    } else if (m.includes('gpt-3.5')) {
+        inputRate = 0.00000050;
+        outputRate = 0.00000150;
+    } else if (m.includes('o1') || m.includes('o3')) {
+        inputRate = 0.0000150;
+        outputRate = 0.0000600;
+    }
+
+    const estimatedCost = (promptTokens * inputRate) + (completionTokens * outputRate);
+
+    console.log(`\n┌──────────────────────────────────────────────────────────┐`);
+    console.log(`│ 📊 AI TOKEN USAGE REPORT                                 │`);
+    console.log(`├──────────────────────────────────────────────────────────┤`);
+    console.log(`│ Context:          ${contextName.padEnd(38)}│`);
+    console.log(`│ Model:            ${model.padEnd(38)}│`);
+    console.log(`│ Finish Reason:    ${finishReason.padEnd(38)}│`);
+    console.log(`│ Attempt:          ${String(attempt).padEnd(38)}│`);
+    console.log(`├──────────────────────────────────────────────────────────┤`);
+    console.log(`│ 📥 Prompt (Input) Tokens:      ${String(promptTokens.toLocaleString()).padEnd(25)}│`);
+    if (cachedTokens > 0) {
+        console.log(`│    └─ Cached Input Tokens:     ${String(cachedTokens.toLocaleString()).padEnd(25)}│`);
+    }
+    console.log(`│ 📤 Completion (Output) Tokens: ${String(completionTokens.toLocaleString()).padEnd(25)}│`);
+    if (reasoningTokens > 0) {
+        console.log(`│    └─ Reasoning Tokens:        ${String(reasoningTokens.toLocaleString()).padEnd(25)}│`);
+    }
+    console.log(`│ 🔢 Total Tokens Used:          ${String(totalTokens.toLocaleString()).padEnd(25)}│`);
+    if (durationMs > 0) {
+        console.log(`│ ⏱️  Response Time:              ${(durationMs + ' ms').padEnd(25)}│`);
+    }
+    console.log(`│ 💵 Estimated Cost:             ${('$' + estimatedCost.toFixed(5) + ' USD').padEnd(25)}│`);
+    console.log(`└──────────────────────────────────────────────────────────┘\n`);
+}
+
 class AIService {
     constructor() {
         this.enabled = process.env.AI_ENABLED === 'true';
@@ -343,6 +390,7 @@ class AIService {
     async _callAI(prompt, attempt = 1) {
         const openai = getOpenAI();
         const model = getModel();
+        const startTime = Date.now();
 
         const maxTokens = attempt === 1 ? AI_MAX_TOKENS : 24000;
         console.log(`[AI] Calling OpenAI (attempt ${attempt}), model: ${model}, max_completion_tokens: ${maxTokens}`);
@@ -374,6 +422,7 @@ class AIService {
         }
 
         const completion = await openai.chat.completions.create(params);
+        const durationMs = Date.now() - startTime;
 
         const finishReason = completion.choices[0]?.finish_reason;
         const responseText = completion.choices[0]?.message?.content;
@@ -383,7 +432,7 @@ class AIService {
         const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens || 0;
         const totalTokens = usage.total_tokens || 0;
 
-        console.log(`[AI] finish_reason=${finishReason} | prompt_tokens=${promptTokens} | completion_tokens=${completionTokens} | reasoning_tokens=${reasoningTokens} | total_tokens=${totalTokens}`);
+        logTokenUsage('Candidate Resume Matching', model, usage, finishReason, attempt, durationMs);
 
         // Handle truncation
         if (finishReason === 'length') {
@@ -1114,4 +1163,6 @@ class AIService {
     }
 }
 
-module.exports = new AIService();
+const instance = new AIService();
+instance.logTokenUsage = logTokenUsage;
+module.exports = instance;

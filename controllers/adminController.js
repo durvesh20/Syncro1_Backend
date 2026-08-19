@@ -3679,12 +3679,13 @@ exports.getJobWithCandidates = async (req, res) => {
 
     // Sub-admins can view candidates for any job
 
-    // ✅ Get ALL candidates for this job with full details
+    // ✅ Get ALL candidates for this job with full details including prescreen
     const candidates = await Candidate.find({ job: job._id })
       .populate('submittedBy', 'firmName firstName lastName uniqueId metrics user')
       .sort({ createdAt: -1 })
       .select(
         'firstName lastName email mobile status profile resume interviewConfig ' +
+        'prescreen prescreenScore ' +
         'resumeAnalysis.profileScore resumeAnalysis.matchLevel ' +
         'resumeAnalysis.recommendation resumeAnalysis.scoreBreakdown ' +
         'resumeAnalysis.parsed resumeAnalysis.flags resumeAnalysis.advice ' +
@@ -3736,13 +3737,27 @@ exports.getJobWithCandidates = async (req, res) => {
     const slotsUsed = activeCandidates.length;
     const slotsRemaining = Math.max(0, totalSlots - slotsUsed);
 
-    // ✅ Enrich candidates with additional computed fields
+    // ✅ Enrich candidates with additional computed fields including prescreen
+    const prescreenService = require('../services/prescreenService');
     const enrichedCandidates = candidates.map(c => {
-      const cObj = c.toObject();
+      let cObj = c.toObject();
+      const unprescreenedStatuses = ['CONSENT_PENDING', 'DRAFT', 'CONSENT_DENIED'];
+      if (!unprescreenedStatuses.includes(cObj.status) && (!cObj.prescreen || !cObj.prescreen.status)) {
+        try {
+          cObj.prescreen = prescreenService.runPreScreen(cObj, job.toObject ? job.toObject() : job);
+        } catch (psErr) {
+          console.warn('[AdminController] PreScreen compute error:', psErr.message);
+        }
+      } else if (unprescreenedStatuses.includes(cObj.status)) {
+        cObj.prescreen = null;
+      }
       return {
         ...cObj,
+        prescreen: cObj.prescreen,
         _meta: {
           profileScore: c.resumeAnalysis?.profileScore || 0,
+          prescreen: cObj.prescreen,
+          prescreenScore: cObj.prescreen?.prescreen_score,
           matchLevel: c.resumeAnalysis?.matchLevel || 'UNKNOWN',
           aiDecision: c.resumeAnalysis?.recommendation || 'HOLD',
           aiParsed: c.resumeAnalysis?.parsed || false,

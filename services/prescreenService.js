@@ -105,9 +105,11 @@ function scoreLocation(candidate, jobLocation) {
   }
 
   const candidateCity = (
+    candidate.location ||
+    candidate.currentLocation ||
     candidate.profile?.location ||
     candidate.profile?.currentLocation ||
-    candidate.currentLocation ||
+    candidate.profile?.standardizedLocation ||
     ''
   ).trim().toLowerCase();
 
@@ -187,7 +189,7 @@ function scoreSalary(candidate, jobSalary) {
     return { score: 100, detail: 'Salary range not published — not screened', skipped: true };
   }
 
-  const rawExpected = candidate.profile?.expectedSalary ?? candidate.expectedSalary;
+  const rawExpected = candidate.expectedSalary ?? candidate.profile?.expectedSalary ?? candidate.currentSalary ?? candidate.profile?.currentSalary;
   const expected = normalizeSalaryToLPA(rawExpected);
 
   if (expected === null) {
@@ -235,7 +237,7 @@ function scoreNotice(candidate, jobExpectedJoiningDate) {
     return { score: 100, detail: 'Job accepts any notice period' };
   }
 
-  const candidateNpStr = candidate.profile?.noticePeriod || candidate.noticePeriod;
+  const candidateNpStr = candidate.noticePeriod || candidate.profile?.noticePeriod;
   const candidateDays = parseNoticeDays(candidateNpStr);
 
   if (candidateDays === null) {
@@ -275,17 +277,23 @@ function scoreExperience(candidate, experienceRange, strict = false) {
     return { score: 100, detail: 'Experience range not specified — not screened', skipped: true };
   }
 
+  // STRICT: Candidate Form Data ONLY (Zero reliance on resume parsing)
   let candidateYears = null;
-  if (candidate.profile?.totalExperienceMonths != null) {
-    candidateYears = Math.round((candidate.profile.totalExperienceMonths / 12) * 10) / 10;
-  } else if (candidate.profile?.experienceYears != null) {
-    candidateYears = candidate.profile.experienceYears;
-  } else if (candidate.profile?.totalExperience != null) {
-    candidateYears = candidate.profile.totalExperience;
+  const rawFormExp =
+    candidate.totalExperience ??
+    candidate.profile?.totalExperience ??
+    candidate.relevantExperience ??
+    candidate.profile?.relevantExperience;
+
+  if (rawFormExp != null && rawFormExp !== '') {
+    const parsed = Number(rawFormExp);
+    if (!isNaN(parsed) && parsed >= 0) {
+      candidateYears = parsed;
+    }
   }
 
   if (candidateYears === null) {
-    return { score: 50, detail: 'Experience data not available — neutral score', skipped: true };
+    return { score: 50, detail: 'Experience data not available in form submission — neutral score', skipped: true };
   }
 
   const min = experienceRange.min ?? 0;

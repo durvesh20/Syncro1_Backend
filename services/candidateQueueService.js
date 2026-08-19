@@ -133,101 +133,86 @@ class CandidateQueueService {
 
                     // ✅ Map AI scoring fields to DB shape
                     scoreBreakdown = {
-                        skills: {
-                            score: scoring.skillsMatch || 0,
-                            weight: 0.30,
-                            matchedRequired: ranking.mustHaveSkillsMatched || [],
-                            missingRequired: ranking.mustHaveSkillsMissing || [],
-                            matchedPreferred: ranking.shouldHaveSkillsMatched || ranking.preferredSkillsMatched || [],
-                            missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
-                            coveragePercent: scoring.skillCoveragePercent || 0
+                    skills: {
+                        score: scoring.skillsMatch || 0,
+                        weight: 0.30,
+                        matchedRequired: ranking.mustHaveSkillsMatched || [],
+                        missingRequired: ranking.mustHaveSkillsMissing || [],
+                        matchedPreferred: ranking.shouldHaveSkillsMatched || ranking.preferredSkillsMatched || [],
+                        missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
+                        coveragePercent: scoring.skillCoveragePercent || 0
+                    },
+                                        experience: {
+                        score: scoring.experienceMatch || 0,
+                        weight: 0.20,
+                        actualExperienceFromResume: screening.experienceRange?.actualExperienceFromResume || screening.experienceRange?.actual || (candidate.profile?.totalExperience ? `${candidate.profile.totalExperience} Yrs` : 'N/A'),
+                        formReportedExperience: screening.experienceRange?.formReportedExperience || (candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} Yrs` : 'Not specified'),
+                        actual: screening.experienceRange?.actual || (candidate.profile?.totalExperience ? `${candidate.profile.totalExperience} Yrs` : 'N/A'),
+                        required: screening.experienceRange?.required || '',
+                        status: screening.experienceRange?.status || (scoring.experienceMatch >= 80 ? 'MEETS' : scoring.experienceMatch >= 50 ? 'PARTIAL' : 'BELOW'),
+                        detail: screening.experienceRange?.detail || candidate.prescreen?.experience_detail || '',
+                        relevancePercent: 100
+                    },
+                    domain: {
+                        score: scoring.domainMatch ?? (screening.domainMatch?.status === 'EXACT' ? 100 : screening.domainMatch?.status === 'RELATED' ? 70 : screening.domainMatch?.status === 'UNRELATED' ? 20 : 50),
+                        weight: 0.05,
+                        jobDomain: screening.domainMatch?.jobDomain || '',
+                        candidateDomain: screening.domainMatch?.candidateDomain || '',
+                        status: screening.domainMatch?.status || (scoring.domainMatch >= 80 ? 'EXACT' : scoring.domainMatch >= 50 ? 'RELATED' : 'UNRELATED')
+                    },
+                    education: {
+                        score: scoring.educationMatch || 0, weight: 0.05,
+                        minimumRequired: screening.educationMatch?.minimumRequired || '',
+                        candidateEducation: screening.educationMatch?.candidateEducation || '',
+                        status: screening.educationMatch?.status || ''
+                    },
+                    salary: {
+                        score: scoring.salaryFit || 0, weight: 0.10,
+                        budget: screening.salaryFit?.budget || '',
+                        expected: screening.salaryFit?.expected || '',
+                        status: screening.salaryFit?.status || (scoring.salaryFit >= 80 ? 'WITHIN' : scoring.salaryFit >= 50 ? 'SLIGHTLY_OVER' : 'OVER'),
+                        detail: screening.salaryFit?.detail || candidate.prescreen?.salary_detail || '',
+                        withinBudget: ranking.salaryWithinBudget ?? true
+                    },
+                    location: {
+                        score: scoring.locationMatch || 0, weight: 0.10,
+                        jobLocation: screening.locationFit?.jobLocation || '',
+                        candidateLocation: screening.locationFit?.candidateLocation || candidate.profile?.location || '',
+                        status: screening.locationFit?.status || (scoring.locationMatch >= 80 ? 'EXACT' : scoring.locationMatch >= 50 ? 'NEARBY' : 'DIFFERENT'),
+                        detail: screening.locationFit?.detail || candidate.prescreen?.location_detail || '',
+                        willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? null
+                    },
+                    noticePeriod: {
+                        score: scoring.noticePeriodFit ?? candidate.prescreen?.notice_score ?? 0,
+                        weight: 0.10,
+                        required: screening.noticePeriod?.required || candidate.job?.expectedJoiningDate || '',
+                        actual: screening.noticePeriod?.actual || candidate.profile?.noticePeriod || 'Not specified',
+                        status: screening.noticePeriod?.status || (candidate.prescreen?.notice_score >= 80 ? 'IMMEDIATE' : candidate.prescreen?.notice_score >= 50 ? 'ACCEPTABLE' : 'LONG'),
+                        detail: screening.noticePeriod?.detail || candidate.prescreen?.notice_detail || ''
+                    },
+                    stability: {
+                        score: scoring.stabilityScore || 0, weight: 0.10,
+                        averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
+                        last5YearAverageTenureYears: screening.stabilityAnalysis?.last5YearAverageTenureYears || 0,
+                        totalAverageTenureYears: screening.stabilityAnalysis?.totalAverageTenureYears || 0,
+                        isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
+                        risk: screening.stabilityAnalysis?.stabilityRisk || '',
+                        detail: screening.stabilityAnalysis?.detail || ''
+                    },
+                    summary: {
+                        weightedScore: scoring.weightedScore || 0,
+                        riskPenalty: scoring.riskPenalty || 0,
+                        riskBreakdown: {
+                            careerGapPenalty: scoring.riskBreakdown?.careerGapPenalty || 0,
+                            jobHopperPenalty: scoring.riskBreakdown?.jobHopperPenalty || 0,
+                            domainMismatchPenalty: scoring.riskBreakdown?.domainMismatchPenalty || 0,
+                            experienceDiscrepancyPenalty: scoring.riskBreakdown?.experienceDiscrepancyPenalty || 0,
+                            salaryOverBudgetPenalty: scoring.riskBreakdown?.salaryOverBudgetPenalty || 0
                         },
-                        experience: {
-                            score: scoring.experienceMatch || 0,
-                            weight: 0.20,
-                            totalExperience: candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} years` : 'Not provided',
-                            relevantExperience: candidate.profile?.relevantExperience != null ? `${candidate.profile.relevantExperience} years` : 'Not provided',
-                            actualExperienceFromResume: (() => {
-                                const a = fullAnalysis.candidateProfile || {};
-                                if (a.actualTotalExperience) return a.actualTotalExperience;
-                                if (a.actualTotalMonths != null) {
-                                    const y = Math.floor(a.actualTotalMonths / 12);
-                                    const m = a.actualTotalMonths % 12;
-                                    if (y === 0) return `${m} month${m === 1 ? '' : 's'}`;
-                                    if (m === 0) return `${y} year${y === 1 ? '' : 's'}`;
-                                    return `${y} year${y === 1 ? '' : 's'} ${m} month${m === 1 ? '' : 's'}`;
-                                }
-                                return 'Not provided';
-                            })(),
-                            actual: screening.experienceRange?.actual || '',
-                            required: screening.experienceRange?.required || '',
-                            status: screening.experienceRange?.status || '',
-                            detail: validation.experienceDiscrepancyDetail || '',
-                            relevancePercent: 100
-                        },
-                        domain: {
-                            score: scoring.domainMatch || 0,
-                            weight: 0.05,
-                            jobDomain: screening.domainMatch?.jobDomain || '',
-                            candidateDomain: screening.domainMatch?.candidateDomain || '',
-                            status: screening.domainMatch?.status || ''
-                        },
-                        education: {
-                            score: scoring.educationMatch || 0,
-                            weight: 0.05,
-                            minimumRequired: screening.educationMatch?.minimumRequired || '',
-                            candidateEducation: screening.educationMatch?.candidateEducation || '',
-                            status: screening.educationMatch?.status || ''
-                        },
-                        salary: {
-                            score: scoring.salaryFit || 0,
-                            weight: 0.10,
-                            budget: screening.salaryFit?.budget || '',
-                            expected: screening.salaryFit?.expected || '',
-                            deltaPercent: screening.salaryFit?.deltaPercent || 0,
-                            status: screening.salaryFit?.status || '',
-                            withinBudget: ranking.salaryWithinBudget ?? true
-                        },
-                        location: {
-                            score: scoring.locationMatch || 0,
-                            weight: 0.10,
-                            jobLocation: screening.locationFit?.jobLocation || '',
-                            candidateLocation: screening.locationFit?.candidateLocation || '',
-                            status: screening.locationFit?.status || '',
-                            willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? candidate.willingToRelocate ?? null
-                        },
-                        noticePeriod: {
-                            score: scoring.noticePeriodFit || 0,
-                            weight: 0.10,
-                            required: screening.noticePeriod?.required || '',
-                            actual: screening.noticePeriod?.actual || '',
-                            days: ranking.noticePeriodDays || 0,
-                            status: screening.noticePeriod?.status || ''
-                        },
-                        stability: {
-                            score: scoring.stabilityScore || 0,
-                            weight: 0.10,
-                            averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
-                            last5YearAverageTenureYears: screening.stabilityAnalysis?.last5YearAverageTenureYears || screening.stabilityAnalysis?.averageTenureYears || 0,
-                            totalAverageTenureYears: screening.stabilityAnalysis?.totalAverageTenureYears || 0,
-                            isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
-                            risk: screening.stabilityAnalysis?.stabilityRisk || '',
-                            detail: screening.stabilityAnalysis?.detail || ''
-                        },
-                        summary: {
-                            weightedScore: scoring.weightedScore || 0,
-                            riskPenalty: scoring.riskPenalty || 0,
-                            riskBreakdown: {
-                                careerGapPenalty: scoring.riskBreakdown?.careerGapPenalty || 0,
-                                jobHopperPenalty: scoring.riskBreakdown?.jobHopperPenalty || 0,
-                                domainMismatchPenalty: scoring.riskBreakdown?.domainMismatchPenalty || 0,
-                                experienceDiscrepancyPenalty: scoring.riskBreakdown?.experienceDiscrepancyPenalty || 0,
-                                salaryOverBudgetPenalty: scoring.riskBreakdown?.salaryOverBudgetPenalty || 0
-                            },
-                            finalAdjustedScore: scoring.finalAdjustedScore || 0,
-                            matchLevel: fullAnalysis.matchLevel || 'UNKNOWN'
-                        }
-                    };
+                        finalAdjustedScore: scoring.finalAdjustedScore || 0,
+                        matchLevel: fullAnalysis.matchLevel || 'UNKNOWN'
+                    }
+                };
                     profileScore = scoring.finalAdjustedScore || 0;   // ✅ was scoreBreakdown?.summary?.finalAdjustedScore
                     matchLevel = fullAnalysis.matchLevel || 'UNKNOWN';
                     recommendation = rec.decision || 'HOLD';
@@ -247,10 +232,7 @@ class CandidateQueueService {
                         })));
                     }
 
-                    advice = [
-                        ...(rec.suggestedActions || []),
-                        ...(rec.interviewFocusAreas || [])
-                    ];
+                    advice = []; // Advice deprecated to save token cost
 
                     // Job history logging
                     const jobHistory = candidateProfile.jobHistory || [];
@@ -854,11 +836,11 @@ class CandidateQueueService {
             const jobData = candidate.job?.toObject ? candidate.job.toObject() : candidate.job;
 
             const result = await aiService.parseResume(
-                candidate.resume.url,
-                candidate.resume.fileName,
-                formData,
-                jobData
-            );
+                    candidate.resume.url,
+                    candidate.resume.fileName,
+                    formData,
+                    jobData
+                );
 
             if (result.success && result.fullAnalysis) {
                 parsedData = result.data;
@@ -889,7 +871,7 @@ class CandidateQueueService {
                         relevantExperience: candidate.profile?.relevantExperience != null ? `${candidate.profile.relevantExperience} years` : 'Not provided',
                         actual: screening.experienceRange?.actual || '',
                         required: screening.experienceRange?.required || '',
-                        status: screening.experienceRange?.status || '',
+                        status: screening.experienceRange?.status || (scoring.experienceMatch >= 80 ? 'MEETS' : scoring.experienceMatch >= 50 ? 'PARTIAL' : 'BELOW'),
                         detail: validation.experienceDiscrepancyDetail || '',
                         relevancePercent: 100
                     },
@@ -910,14 +892,14 @@ class CandidateQueueService {
                         budget: screening.salaryFit?.budget || '',
                         expected: screening.salaryFit?.expected || '',
                         deltaPercent: screening.salaryFit?.deltaPercent || 0,
-                        status: screening.salaryFit?.status || '',
+                        status: screening.salaryFit?.status || (scoring.salaryFit >= 80 ? 'WITHIN' : scoring.salaryFit >= 50 ? 'SLIGHTLY_OVER' : 'OVER'),
                         withinBudget: ranking.salaryWithinBudget ?? true
                     },
                     location: {
                         score: scoring.locationMatch || 0, weight: 0.10,
                         jobLocation: screening.locationFit?.jobLocation || '',
                         candidateLocation: screening.locationFit?.candidateLocation || '',
-                        status: screening.locationFit?.status || '',
+                        status: screening.locationFit?.status || (scoring.locationMatch >= 80 ? 'EXACT' : scoring.locationMatch >= 50 ? 'NEARBY' : 'DIFFERENT'),
                         detail: screening.locationFit?.detail || '',
                         willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? null
                     },
@@ -926,7 +908,7 @@ class CandidateQueueService {
                         required: screening.noticePeriod?.required || '',
                         actual: screening.noticePeriod?.actual || '',
                         days: ranking.noticePeriodDays || 0,
-                        status: screening.noticePeriod?.status || ''
+                        status: screening.noticePeriod?.status || (scoring.noticePeriodFit >= 80 ? 'IMMEDIATE' : scoring.noticePeriodFit >= 50 ? 'ACCEPTABLE' : 'LONG')
                     },
                     stability: {
                         score: scoring.stabilityScore || 0, weight: 0.10,
@@ -960,7 +942,7 @@ class CandidateQueueService {
                     ...(validation.redFlags || []).map(f => ({ type: 'WARNING', message: f })),
                     ...(validation.greenFlags || []).map(f => ({ type: 'SUCCESS', message: f }))
                 ];
-                advice = [...(rec.suggestedActions || []), ...(rec.interviewFocusAreas || [])];
+                advice = []; // Advice deprecated to save token cost
 
                 if (parsedData?.profile) {
                     candidate.profile = {

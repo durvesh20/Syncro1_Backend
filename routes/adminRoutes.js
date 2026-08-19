@@ -766,6 +766,52 @@ router.get(
         rawBreakdown.location.willingToRelocate = rawBreakdown.location.willingToRelocate ?? computedRelocate;
       }
 
+      // Dynamic Notice Period backfill from pre-screen for existing/legacy records
+      if (rawBreakdown) {
+        const psNotice = candidate.prescreen?.notice_score;
+        if (!rawBreakdown.noticePeriod || rawBreakdown.noticePeriod.score == null || rawBreakdown.noticePeriod.score === 0) {
+          const npScoreVal = psNotice != null && psNotice > 0 ? psNotice : (rawBreakdown.noticePeriod?.score || 0);
+          rawBreakdown.noticePeriod = {
+            score: npScoreVal,
+            weight: 0.10,
+            required: rawBreakdown.noticePeriod?.required || candidate.job?.expectedJoiningDate || '',
+            actual: rawBreakdown.noticePeriod?.actual || candidate.profile?.noticePeriod || 'Not specified',
+            status: rawBreakdown.noticePeriod?.status || (npScoreVal >= 80 ? 'IMMEDIATE' : npScoreVal >= 50 ? 'ACCEPTABLE' : 'LONG'),
+            detail: rawBreakdown.noticePeriod?.detail || candidate.prescreen?.notice_detail || ''
+          };
+        }
+      }
+
+      // Dynamic Domain Match backfill for existing/legacy records
+      if (rawBreakdown) {
+        if (!rawBreakdown.domain || rawBreakdown.domain.score == null || rawBreakdown.domain.score === 0) {
+          const status = rawBreakdown.domain?.status || candidate.resumeAnalysis?.fullAnalysis?.screening?.domainMatch?.status;
+          let dScore = status === 'EXACT' ? 100 : status === 'RELATED' ? 70 : status === 'UNRELATED' ? 20 : 0;
+          let jobDom = rawBreakdown.domain?.jobDomain || candidate.job?.category || 'Not specified';
+          let candDom = rawBreakdown.domain?.candidateDomain || candidate.profile?.domain || candidate.profile?.currentDesignation || 'Not specified';
+
+          if (dScore === 0 && candidate.job) {
+            try {
+              const candidateScoringService = require('../services/candidateScoringService');
+              const dRes = candidateScoringService._scoreDomain(candidate.profile || {}, candidate.job || {});
+              dScore = dRes.score;
+              jobDom = dRes.jobDomain || jobDom;
+              candDom = dRes.candidateDomain || candDom;
+            } catch (err) {
+              console.error('[ADMIN] Domain backfill error:', err.message);
+            }
+          }
+
+          rawBreakdown.domain = {
+            score: dScore,
+            weight: 0.05,
+            jobDomain: jobDom,
+            candidateDomain: candDom,
+            status: status || (dScore >= 80 ? 'EXACT' : dScore >= 50 ? 'RELATED' : 'UNRELATED')
+          };
+        }
+      }
+
       // Dynamic stability backfill for legacy records
       if (rawBreakdown && candidate.profile) {
         try {
@@ -911,54 +957,54 @@ router.post(
           missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
           coveragePercent: scoring.skillCoveragePercent || 0
         },
-        experience: {
-          score: scoring.experienceMatch || 0,
-          weight: 0.20,
-          actual: screening.experienceRange?.actual || '',
-          required: screening.experienceRange?.required || '',
-          status: screening.experienceRange?.status || '',
-          detail: validation.experienceDiscrepancyDetail || '',
-          relevancePercent: 100
-        },
-        domain: {
-          score: scoring.domainMatch || 0,
-          weight: 0.15,
-          jobDomain: screening.domainMatch?.jobDomain || '',
-          candidateDomain: screening.domainMatch?.candidateDomain || '',
-          status: screening.domainMatch?.status || ''
-        },
-        education: {
-          score: scoring.educationMatch || 0,
-          weight: 0.10,
-          minimumRequired: screening.educationMatch?.minimumRequired || '',
-          candidateEducation: screening.educationMatch?.candidateEducation || '',
-          status: screening.educationMatch?.status || ''
-        },
-        salary: {
-          score: scoring.salaryFit || 0,
-          weight: 0.10,
-          budget: screening.salaryFit?.budget || '',
-          expected: screening.salaryFit?.expected || '',
-          deltaPercent: screening.salaryFit?.deltaPercent || 0,
-          status: screening.salaryFit?.status || '',
-          withinBudget: ranking.salaryWithinBudget ?? true
-        },
-        location: {
-          score: scoring.locationMatch || 0,
-          weight: 0.05,
-          jobLocation: screening.locationFit?.jobLocation || '',
-          candidateLocation: screening.locationFit?.candidateLocation || '',
-          status: screening.locationFit?.status || '',
-          detail: validation.locationMatch || ''
-        },
-        noticePeriod: {
-          score: scoring.noticePeriodFit || 0,
-          weight: 0.05,
-          required: screening.noticePeriod?.required || '',
-          actual: screening.noticePeriod?.actual || '',
-          days: ranking.noticePeriodDays || 0,
-          status: screening.noticePeriod?.status || ''
-        },
+                            experience: {
+                        score: scoring.experienceMatch || 0,
+                        weight: 0.20,
+                        actualExperienceFromResume: screening.experienceRange?.actualExperienceFromResume || screening.experienceRange?.actual || (candidate.profile?.totalExperience ? `${candidate.profile.totalExperience} Yrs` : 'N/A'),
+                        formReportedExperience: screening.experienceRange?.formReportedExperience || (candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} Yrs` : 'Not specified'),
+                        actual: screening.experienceRange?.actual || (candidate.profile?.totalExperience ? `${candidate.profile.totalExperience} Yrs` : 'N/A'),
+                        required: screening.experienceRange?.required || '',
+                        status: screening.experienceRange?.status || (scoring.experienceMatch >= 80 ? 'MEETS' : scoring.experienceMatch >= 50 ? 'PARTIAL' : 'BELOW'),
+                        detail: screening.experienceRange?.detail || candidate.prescreen?.experience_detail || '',
+                        relevancePercent: 100
+                    },
+                    domain: {
+                        score: scoring.domainMatch ?? (screening.domainMatch?.status === 'EXACT' ? 100 : screening.domainMatch?.status === 'RELATED' ? 70 : screening.domainMatch?.status === 'UNRELATED' ? 20 : 50),
+                        weight: 0.05,
+                        jobDomain: screening.domainMatch?.jobDomain || '',
+                        candidateDomain: screening.domainMatch?.candidateDomain || '',
+                        status: screening.domainMatch?.status || (scoring.domainMatch >= 80 ? 'EXACT' : scoring.domainMatch >= 50 ? 'RELATED' : 'UNRELATED')
+                    },
+                    education: {
+                        score: scoring.educationMatch || 0, weight: 0.05,
+                        minimumRequired: screening.educationMatch?.minimumRequired || '',
+                        candidateEducation: screening.educationMatch?.candidateEducation || '',
+                        status: screening.educationMatch?.status || ''
+                    },
+                    salary: {
+                        score: scoring.salaryFit || 0, weight: 0.10,
+                        budget: screening.salaryFit?.budget || '',
+                        expected: screening.salaryFit?.expected || '',
+                        status: screening.salaryFit?.status || (scoring.salaryFit >= 80 ? 'WITHIN' : scoring.salaryFit >= 50 ? 'SLIGHTLY_OVER' : 'OVER'),
+                        detail: screening.salaryFit?.detail || candidate.prescreen?.salary_detail || '',
+                        withinBudget: ranking.salaryWithinBudget ?? true
+                    },
+                    location: {
+                        score: scoring.locationMatch || 0, weight: 0.10,
+                        jobLocation: screening.locationFit?.jobLocation || '',
+                        candidateLocation: screening.locationFit?.candidateLocation || candidate.profile?.location || '',
+                        status: screening.locationFit?.status || (scoring.locationMatch >= 80 ? 'EXACT' : scoring.locationMatch >= 50 ? 'NEARBY' : 'DIFFERENT'),
+                        detail: screening.locationFit?.detail || candidate.prescreen?.location_detail || '',
+                        willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? null
+                    },
+                    noticePeriod: {
+                        score: scoring.noticePeriodFit ?? candidate.prescreen?.notice_score ?? 0,
+                        weight: 0.10,
+                        required: screening.noticePeriod?.required || candidate.job?.expectedJoiningDate || '',
+                        actual: screening.noticePeriod?.actual || candidate.profile?.noticePeriod || 'Not specified',
+                        status: screening.noticePeriod?.status || (candidate.prescreen?.notice_score >= 80 ? 'IMMEDIATE' : candidate.prescreen?.notice_score >= 50 ? 'ACCEPTABLE' : 'LONG'),
+                        detail: screening.noticePeriod?.detail || candidate.prescreen?.notice_detail || ''
+                    },
         stability: {
           score: scoring.stabilityScore || 0,
           weight: 0.05,
