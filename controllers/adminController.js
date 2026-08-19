@@ -1,4 +1,5 @@
 // backend/controllers/adminController.js
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
@@ -1092,7 +1093,7 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
     if (!job) {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
-    
+
     if (job.pipelineTemplate && job.pipelineTemplate.length > 0) {
       if (!roundType) {
         return res.status(400).json({ success: false, message: 'Please specify the roundType for these interview slots.' });
@@ -1113,7 +1114,7 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
       if (!slot.endTime) errors.push('End time is required');
       if (!slot.maxCandidates || slot.maxCandidates < 1) errors.push('Max candidates must be at least 1');
       if (!slot.interviewMode) errors.push('Interview mode is required');
-      
+
       if (errors.length > 0) {
         invalidSlots.push({ index, errors });
       } else {
@@ -1126,7 +1127,7 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
     }
 
     const createdSlots = await Promise.all(
-      validSlots.map(slot => 
+      validSlots.map(slot =>
         InterviewSlot.create({
           job: job._id,
           company: job.company,
@@ -1161,18 +1162,18 @@ exports.adminCancelJobInterviewSlot = async (req, res) => {
     if (!slot) {
       return res.status(404).json({ success: false, message: 'Interview slot not found' });
     }
-    
+
     if (slot.job.toString() !== req.params.jobId) {
       return res.status(400).json({ success: false, message: 'Slot does not belong to this job' });
     }
-    
+
     if (slot.assignedCandidates && slot.assignedCandidates.length > 0) {
       return res.status(400).json({ success: false, message: 'Cannot cancel slot with assigned candidates. Remove candidates first.' });
     }
-    
+
     slot.status = 'CANCELLED';
     await slot.save();
-    
+
     res.status(200).json({ success: true, message: 'Interview slot cancelled successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to cancel interview slot' });
@@ -1204,16 +1205,68 @@ exports.checkPayoutEligibility = async (req, res) => {
 // @route   GET /api/admin/users
 exports.getUsers = async (req, res) => {
   try {
-    const { role, status, page = 1, limit = 20, search } = req.query;
+    const { role, status, emailVerified, mobileVerified, verified, page = 1, limit = 20, search } = req.query;
 
     const query = {};
     if (role) query.role = role;
     if (status) query.status = status;
+    if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
+    if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
+
+    if (verified === 'true') {
+      let verifiedUserIds = [];
+      if (role === 'staffing_partner') {
+        const partners = await StaffingPartner.find({ verificationStatus: 'APPROVED' }).select('user');
+        verifiedUserIds = partners.map(p => p.user).filter(Boolean);
+      } else if (role === 'company') {
+        const companies = await Company.find({ verificationStatus: 'APPROVED' }).select('user');
+        verifiedUserIds = companies.map(c => c.user).filter(Boolean);
+      } else {
+        const partners = await StaffingPartner.find({ verificationStatus: 'APPROVED' }).select('user');
+        const companies = await Company.find({ verificationStatus: 'APPROVED' }).select('user');
+        verifiedUserIds = [...partners, ...companies].map(x => x.user).filter(Boolean);
+      }
+      query._id = { $in: verifiedUserIds };
+    }
+
     if (search) {
-      query.$or = [
-        { email: new RegExp(search, 'i') },
-        { mobile: new RegExp(search, 'i') }
+      const searchRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      let matchedUserIdsFromProfiles = [];
+
+      if (!role || role === 'company') {
+        const matchingCompanies = await Company.find({ companyName: searchRegex }).select('user');
+        matchingCompanies.forEach(c => {
+          if (c.user) matchedUserIdsFromProfiles.push(c.user);
+        });
+      }
+
+      if (!role || role === 'staffing_partner') {
+        const matchingPartners = await StaffingPartner.find({ firmName: searchRegex }).select('user');
+        matchingPartners.forEach(p => {
+          if (p.user) matchedUserIdsFromProfiles.push(p.user);
+        });
+      }
+
+      const searchConditions = [
+        { email: searchRegex },
+        { mobile: searchRegex },
+        { firstName: searchRegex },
+        { lastName: searchRegex }
       ];
+
+      if (matchedUserIdsFromProfiles.length > 0) {
+        searchConditions.push({ _id: { $in: matchedUserIdsFromProfiles } });
+      }
+
+      if (query._id) {
+        query.$and = [
+          { _id: query._id },
+          { $or: searchConditions }
+        ];
+        delete query._id;
+      } else {
+        query.$or = searchConditions;
+      }
     }
 
     let allowedUserIds = null;
@@ -1452,14 +1505,14 @@ exports.getAnalytics = async (req, res) => {
 // @route   GET /api/admin/jobs/pending
 exports.getPendingJobs = async (req, res) => {
   try {
-    const { page = 1, limit = 20, sortBy = 'createdAt', approvalStatus } = req.query;
+    const { page = 1, limit = 20, sortBy = 'createdAt', status } = req.query;
 
     // ✅ Allow filtering by multiple approval statuses
-    const statusFilter = approvalStatus
-      ? [approvalStatus]
+    const statusFilter = status
+      ? [String(status).toUpperCase().trim().replace(/[\s-]+/g, '_')]
       : ['PENDING_APPROVAL', 'EDIT_REQUESTED'];
 
-    const query = { approvalStatus: { $in: statusFilter } };
+    const query = { status: { $in: statusFilter } };
 
     // Sub-admins can see all pending jobs
 
@@ -1487,7 +1540,7 @@ exports.getPendingJobs = async (req, res) => {
           (Date.now() - job.createdAt) / (1000 * 60 * 60)
         ),
         isStale: (Date.now() - job.createdAt) > (7 * 24 * 60 * 60 * 1000),
-        approvalStatus: job.approvalStatus,
+        status: job.status,
         rejectionReason: job.rejectionReason || null,
         rejectedAt: job.rejectedAt || null,
         rejectedBy: job.rejectedBy || null,
@@ -1505,7 +1558,7 @@ exports.getPendingJobs = async (req, res) => {
       }
     }));
 
-    // ✅ Summary by approvalStatus
+    // ✅ Summary by status
     const matchStage = {};
     // Sub-admins stats can see all pending jobs
 
@@ -1513,7 +1566,7 @@ exports.getPendingJobs = async (req, res) => {
       { $match: matchStage },
       {
         $group: {
-          _id: '$approvalStatus',
+          _id: '$status',
           count: { $sum: 1 }
         }
       }
@@ -1530,10 +1583,10 @@ exports.getPendingJobs = async (req, res) => {
         },
         stats: {
           pending: jobsWithMeta.filter(
-            j => j.approvalStatus === 'PENDING_APPROVAL'
+            j => j.status === 'PENDING_APPROVAL'
           ).length,
           editRequested: jobsWithMeta.filter(
-            j => j.approvalStatus === 'EDIT_REQUESTED'
+            j => j.status === 'EDIT_REQUESTED'
           ).length,
           stale: jobsWithMeta.filter(j => j._meta.isStale).length,
           byStatus: statusSummary.reduce((acc, item) => {
@@ -1571,19 +1624,23 @@ exports.approveJob = async (req, res) => {
 
     // Sub-admins can approve any job
 
-    if (job.approvalStatus !== 'PENDING_APPROVAL') {
+    if (job.status !== 'PENDING_APPROVAL') {
       return res.status(400).json({
         success: false,
-        message: `Cannot approve job with status: ${job.approvalStatus}`,
-        currentStatus: job.approvalStatus
+        message: `Cannot approve job with status: ${job.status}`,
+        currentStatus: job.status
       });
     }
 
-    job.approvalStatus = 'ACTIVE';
-    job.status = 'ACTIVE';
+    // Set APPROVED first (creates audit trail entry), then immediately move to ACTIVE
+    job.status = 'APPROVED';
     job.approvedBy = req.user._id;
     job.approvedAt = new Date();
     job.addToHistory('APPROVED', req.user._id, {}, notes || 'Job approved by admin');
+    await job.save(); // persists APPROVED in statusHistory
+
+    // Auto-transition APPROVED → ACTIVE
+    job.status = 'ACTIVE';
     await job.save();
 
     const companyDoc = await Company.findById(job.company);
@@ -1644,7 +1701,7 @@ exports.approveJob = async (req, res) => {
       data: {
         jobId: job._id,
         title: job.title,
-        approvalStatus: 'ACTIVE',
+        status: 'ACTIVE',
         approvedAt: job.approvedAt,
         isVisibleToPartners: true
       }
@@ -1684,15 +1741,14 @@ exports.rejectJob = async (req, res) => {
 
     // Sub-admins can reject any job
 
-    if (job.approvalStatus !== 'PENDING_APPROVAL') {
+    if (job.status !== 'PENDING_APPROVAL') {
       return res.status(400).json({
         success: false,
-        message: `Cannot reject job with status: ${job.approvalStatus}`
+        message: `Cannot reject job with status: ${job.status}`
       });
     }
 
-    job.approvalStatus = 'REJECTED';
-    job.status = 'DRAFT';
+    job.status = 'REJECTED';
     job.rejectionReason = reason.trim();
     job.rejectedAt = new Date();
     job.rejectedBy = req.user._id;
@@ -1752,7 +1808,7 @@ exports.rejectJob = async (req, res) => {
       data: {
         jobId: job._id,
         title: job.title,
-        approvalStatus: 'REJECTED',
+        status: 'REJECTED',
         rejectionReason: reason,
         rejectedAt: job.rejectedAt
       }
@@ -1774,13 +1830,15 @@ exports.rejectJob = async (req, res) => {
 exports.getPendingEditRequests = async (req, res) => {
   try {
     const JobEditRequest = require('../models/JobEditRequest');
-    const { page = 1, limit = 20, priority, sortBy = 'priority' } = req.query;
+    const { page = 1, limit = 20, priority, status = 'PENDING', sortBy = 'priority' } = req.query;
 
-    const query = { status: 'PENDING' };
-    if (priority) query.priority = priority;
-
-    // Restrict sub-admins
-    // Sub-admins can see all pending edit requests
+    const query = {};
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    if (priority && priority !== 'all') {
+      query.priority = priority;
+    }
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -1795,7 +1853,7 @@ exports.getPendingEditRequests = async (req, res) => {
     }
 
     const editRequests = await JobEditRequest.find(query)
-      .populate('job', 'title approvalStatus category location')
+      .populate('job', 'title status category location')
       .populate('company', 'companyName')
       .populate('requestedBy', 'email')
       .sort(sort)
@@ -1820,9 +1878,20 @@ exports.getPendingEditRequests = async (req, res) => {
     }
 
     const priorityStats = await JobEditRequest.aggregate([
-      { $match: query },
+      { $match: { status: 'PENDING' } },
       { $group: { _id: '$priority', count: { $sum: 1 } } }
     ]);
+
+    const statusStats = await JobEditRequest.aggregate([
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
+
+    const byStatusMap = { PENDING: 0, APPROVED: 0, REJECTED: 0 };
+    statusStats.forEach(curr => {
+      if (curr._id && byStatusMap.hasOwnProperty(curr._id)) {
+        byStatusMap[curr._id] = curr.count;
+      }
+    });
 
     res.json({
       success: true,
@@ -1839,7 +1908,8 @@ exports.getPendingEditRequests = async (req, res) => {
           byPriority: priorityStats.reduce((acc, curr) => {
             acc[curr._id] = curr.count;
             return acc;
-          }, {})
+          }, {}),
+          byStatus: byStatusMap
         }
       }
     });
@@ -1938,12 +2008,36 @@ exports.approveEditRequest = async (req, res) => {
         const oldValue = job.get(field);
         const parsedOldValue = JSON.parse(JSON.stringify(oldValue ?? null));
 
-        // ✅ Use Mongoose's built-in setter to apply and natively track exactly what changed
-        job.set(field, change.new);
+        let newValue = change.new;
+        const pathType = job.schema.path(field);
+        if (pathType) {
+          if (pathType.instance === 'Boolean') {
+            if (newValue === '' || newValue === null || newValue === undefined) {
+              newValue = false;
+            } else if (typeof newValue === 'string') {
+              newValue = newValue.toLowerCase() === 'true' || newValue === '1';
+            } else {
+              newValue = Boolean(newValue);
+            }
+          } else if (pathType.instance === 'Number' && (newValue === '' || newValue === null)) {
+            newValue = null;
+          }
+        }
+
+        // ✅ Prevent clearing required string fields such as category
+        if (field === 'category') {
+          const validNew = (typeof newValue === 'string' && newValue.trim()) ? newValue.trim() : null;
+          const validOld = (typeof change.old === 'string' && change.old.trim()) ? change.old.trim() : null;
+          const validJobCat = (typeof job.category === 'string' && job.category.trim()) ? job.category.trim() : null;
+
+          newValue = validNew || validJobCat || validOld || 'Other';
+        }
+
+        job.set(field, newValue);
 
         appliedChanges[field] = {
           old: parsedOldValue,
-          new: change.new
+          new: newValue
         };
 
         // ✅ Tell Mongoose directly that this specific path was modified (fixes Array staleness)
@@ -1956,8 +2050,42 @@ exports.approveEditRequest = async (req, res) => {
 
     // ✅ REMOVED: topLevelKeys loop (was causing double-mark issues)
 
+    // If screeningQuestions were requested to change, update ScreeningQuestion model
+    if (changes.screeningQuestions && Array.isArray(changes.screeningQuestions.new)) {
+      try {
+        const ScreeningQuestion = require('../models/ScreeningQuestion');
+        await ScreeningQuestion.deleteMany({ job: job._id });
+        if (changes.screeningQuestions.new.length > 0) {
+          await ScreeningQuestion.insertMany(
+            changes.screeningQuestions.new.map((q, idx) => ({
+              job: job._id,
+              questionText: q.questionText?.trim() || '',
+              answerType: q.answerType,
+              idealAnswer: String(q.idealAnswer ?? ''),
+              isRequired: q.isRequired !== false,
+              createdBy: req.user._id,
+              order: idx
+            }))
+          );
+        }
+      } catch (sqErr) {
+        console.error('Failed to apply screeningQuestions on edit approval:', sqErr);
+      }
+    }
+
     job.applyEditChanges(appliedChanges);
-    job.approvalStatus = 'ACTIVE';
+
+    // ✅ Ensure required category field is never empty or missing on the job document
+    if (!job.category || typeof job.category !== 'string' || !job.category.trim()) {
+      job.category = (typeof editRequest.requestedChanges?.category?.new === 'string' && editRequest.requestedChanges.category.new.trim())
+        ? editRequest.requestedChanges.category.new.trim()
+        : (typeof editRequest.requestedChanges?.category?.old === 'string' && editRequest.requestedChanges.category.old.trim())
+        ? editRequest.requestedChanges.category.old.trim()
+        : 'Other';
+      job.markModified('category');
+    }
+
+    job.status = 'ACTIVE';
     job.approvedEditCount += 1;
     job.addToHistory(
       'EDIT_APPROVED',
@@ -1966,6 +2094,18 @@ exports.approveEditRequest = async (req, res) => {
       notes || 'Edit request approved'
     );
     await job.save();
+
+    // ✅ Sync talent partner slot sizes (submissionLimit) if vacancies were updated (1 vacancy = 5 slots)
+    if (appliedChanges.vacancies) {
+      try {
+        const { syncJobInterestSlots } = require('../services/slotService');
+        const oldVac = Number(appliedChanges.vacancies.old) || 1;
+        const newVac = Number(appliedChanges.vacancies.new) || job.vacancies;
+        await syncJobInterestSlots(job._id, oldVac, newVac);
+      } catch (slotErr) {
+        console.error('Failed to sync partner slots on edit approval:', slotErr);
+      }
+    }
 
     // Trigger asynchronous JD parsing for JobPosition structure
     parseJobPosition(job).catch(err => {
@@ -2091,7 +2231,7 @@ exports.rejectEditRequest = async (req, res) => {
     editRequest.adminResponse = reason.trim();
     await editRequest.save();
 
-    job.approvalStatus = 'ACTIVE';
+    job.status = 'ACTIVE';
     job.rejectedEditCount += 1;
     job.addToHistory('EDIT_REJECTED', req.user._id, editRequest.requestedChanges, reason);
     await job.save();
@@ -2208,15 +2348,14 @@ exports.discontinueJob = async (req, res) => {
 
     // Sub-admins can discontinue any job
 
-    if (job.approvalStatus === 'DISCONTINUED') {
+    if (job.status === 'DISCONTINUED') {
       return res.status(400).json({
         success: false,
         message: 'Job is already discontinued'
       });
     }
 
-    job.approvalStatus = 'DISCONTINUED';
-    job.status = 'CLOSED';
+    job.status = 'DISCONTINUED';
     job.discontinuedReason = reason.trim();
     job.discontinuedBy = req.user._id;
     job.discontinuedAt = new Date();
@@ -2283,7 +2422,7 @@ exports.discontinueJob = async (req, res) => {
       data: {
         jobId: job._id,
         title: job.title,
-        approvalStatus: 'DISCONTINUED',
+        status: 'DISCONTINUED',
         discontinuedReason: reason,
         discontinuedAt: job.discontinuedAt,
         pendingEditRequestsCancelled: await JobEditRequest.countDocuments({
@@ -2334,7 +2473,7 @@ exports.getJobEditHistory = async (req, res) => {
         job: {
           id: job._id,
           title: job.title,
-          approvalStatus: job.approvalStatus,
+          status: job.status,
           createdAt: job.createdAt,
           approvedAt: job.approvedAt,
           discontinuedAt: job.discontinuedAt
@@ -2403,17 +2542,46 @@ exports.getAllJobs = async (req, res) => {
   try {
     const {
       status,
-      approvalStatus,
       company,
+      partner,
       page = 1,
       limit = 20,
       search
     } = req.query;
 
     const query = {};
-    if (status) query.status = status;
-    if (approvalStatus) query.approvalStatus = approvalStatus;
-    if (company) query.company = company;
+    if (status) {
+      query.status = String(status).toUpperCase().trim().replace(/[\s-]+/g, '_');
+    }
+    if (company) {
+      if (typeof company === 'string' && company.includes(',')) {
+        const ids = company.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (ids.length > 0) {
+          query.company = { $in: ids };
+        }
+      } else if (Array.isArray(company)) {
+        const ids = company.map(id => String(id).trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (ids.length > 0) {
+          query.company = { $in: ids };
+        }
+      } else if (mongoose.Types.ObjectId.isValid(company)) {
+        query.company = new mongoose.Types.ObjectId(company);
+      }
+      console.log('getAllJobs company query:', query.company);
+    }
+    // When filtering by partner, find distinct job IDs from candidates submitted by that partner
+    if (partner) {
+      const Candidate = require('../models/Candidate');
+      const partnerIds = (typeof partner === 'string' && partner.includes(','))
+        ? partner.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id))
+        : (Array.isArray(partner)
+          ? partner.map(id => String(id).trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id))
+          : (mongoose.Types.ObjectId.isValid(partner) ? [new mongoose.Types.ObjectId(partner)] : []));
+      if (partnerIds.length > 0) {
+        const partnerJobIds = await Candidate.distinct('job', { submittedBy: { $in: partnerIds } });
+        query._id = { $in: partnerJobIds };
+      }
+    }
     // Sub-admins can see all jobs
     if (search) {
       query.$or = [
@@ -2434,7 +2602,7 @@ exports.getAllJobs = async (req, res) => {
         .populate('company', 'companyName kyc.industry uniqueId')
         .populate('postedBy', 'email')
         .populate('assignedTo', 'email role')
-        .sort({ createdAt: -1 })
+        .sort({ updatedAt: -1 })
         .skip(skip)
         .limit(sanitizedLimit),
       Job.countDocuments(query)
@@ -2443,12 +2611,12 @@ exports.getAllJobs = async (req, res) => {
     // Build scoped summary match (same filters except status/search for global tab counts)
     const summaryMatch = {};
     // Sub-admins stats can see all jobs
-    if (company) summaryMatch.company = new (require('mongoose').Types.ObjectId)(company);
+    if (query.company) summaryMatch.company = query.company;
 
     const [statusSummary, totalJobs] = await Promise.all([
       Job.aggregate([
         { $match: summaryMatch },
-        { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+        { $group: { _id: '$status', count: { $sum: 1 } } }
       ]),
       Job.countDocuments(summaryMatch)
     ]);
@@ -2507,7 +2675,7 @@ exports.getJobDetail = async (req, res) => {
     const candidates = await Candidate.find({ job: job._id })
       .populate('submittedBy', 'firmName firstName lastName')
       .sort({ createdAt: -1 })
-      .select('firstName lastName status createdAt submittedBy');
+      .select('firstName lastName email phone status createdAt submittedBy screeningAnswers screeningScore');
 
     const editRequests = await JobEditRequest.find({ job: job._id })
       .populate('requestedBy', 'email')
@@ -2527,6 +2695,7 @@ exports.getJobDetail = async (req, res) => {
       success: true,
       data: {
         job: jobData,
+        jobPosition,
         candidates: {
           total: candidates.length,
           list: candidates
@@ -2625,7 +2794,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
   if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
     return;
   }
-  
+
   const InterviewSlot = require('../models/InterviewSlot');
   const getActiveRoundInfoLocal = (c) => {
     for (let i = 0; i < c.rounds.length; i++) {
@@ -2656,7 +2825,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
       changedAt: new Date(),
       notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
     });
-    
+
     candidate.auditTrail = candidate.auditTrail || [];
     candidate.auditTrail.push({
       actorId: userId || candidate._id,
@@ -2679,7 +2848,14 @@ exports.getCandidateDetail = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
       .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
-      .populate({ path: 'job', select: 'title uniqueId company education assignedTo', populate: { path: 'assignedTo', select: 'email role' } })
+      .populate({
+        path: 'job',
+        select: 'title uniqueId company education assignedTo',
+        populate: [
+          { path: 'assignedTo', select: 'email role' },
+          { path: 'company', select: 'companyName uniqueId' }
+        ]
+      })
       .populate('company', 'companyName uniqueId')
       .populate('statusHistory.changedBy', 'email role')
       .populate('notes.addedBy', 'email role');
@@ -2961,14 +3137,14 @@ exports.getCompanyDetail = async (req, res) => {
     // Get job stats
     const jobStats = await Job.aggregate([
       { $match: { company: company._id } },
-      { $group: { _id: '$approvalStatus', count: { $sum: 1 } } }
+      { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
     // Get recent jobs
     const recentJobs = await Job.find({ company: company._id })
       .sort({ createdAt: -1 })
       .limit(5)
-      .select('title approvalStatus status createdAt vacancies');
+      .select('title status status createdAt vacancies');
 
     // Get candidate pipeline
     const candidateStats = await Candidate.aggregate([
@@ -3019,29 +3195,66 @@ exports.getAllJobsWithCandidates = async (req, res) => {
   try {
     const {
       status,
-      approvalStatus,
       company,
       page = 1,
       limit = 20,
       search,
-      needsAdminReview
+      needsAdminReview,
+      stage,
+      hasCandidates,
+      assignedTo
     } = req.query;
 
     const query = {};
     if (status) query.status = status;
-    if (approvalStatus) query.approvalStatus = approvalStatus;
-    if (company) query.company = company;
+    if (company) {
+      if (typeof company === 'string' && company.includes(',')) {
+        const ids = company.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (ids.length > 0) {
+          query.company = { $in: ids };
+        }
+      } else if (Array.isArray(company)) {
+        const ids = company.map(id => String(id).trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        if (ids.length > 0) {
+          query.company = { $in: ids };
+        }
+      } else if (mongoose.Types.ObjectId.isValid(company)) {
+        query.company = new mongoose.Types.ObjectId(company);
+      }
+      console.log("getAllJobsWithCandidates company query:", query.company);
+    }
+    if (assignedTo) {
+      if (assignedTo === 'unassigned') {
+        query.assignedTo = null;
+      } else if (mongoose.Types.ObjectId.isValid(assignedTo)) {
+        query.assignedTo = new mongoose.Types.ObjectId(assignedTo);
+      }
+    }
     // Sub-admins can see all jobs with candidates
-    if (search) {
+    if (search && search.trim()) {
+      const rx = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       query.$or = [
-        { title: new RegExp(search, 'i') },
-        { category: new RegExp(search, 'i') }
+        { uniqueId: rx },
+        { title: rx },
+        { category: rx }
       ];
     }
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
     const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+    // ✅ Pre-HR interview statuses & HR+ statuses
+    const PRE_HR_STATUSES = [
+      'INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED',
+      'INTERVIEW_CONFIRMED', 'RESCHEDULE_REQUESTED', 'INTERVIEW_CONDUCTED', 'INTERVIEWED',
+      'ROUND_SELECTED_NEXT', 'ROUND_ON_HOLD', 'ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'SLOTS_NOT_PUBLISHED'
+    ];
+
+    const HR_AND_ABOVE_STATUSES = [
+      'ROUND_SELECTED_DIRECT_HR', 'HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED',
+      'HR_ON_HOLD', 'OFFERED', 'OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'JOINED', 'ONBOARDING'
+    ];
 
     // ✅ Aggregate jobs with candidate counts and details
     const jobs = await Job.aggregate([
@@ -3153,7 +3366,9 @@ exports.getAllJobsWithCandidates = async (req, res) => {
             adminReview: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'ADMIN_REVIEW'] } } } },
             submitted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SUBMITTED'] } } } },
             shortlisted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SHORTLISTED'] } } } },
-            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', ['INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED']] } } } },
+            interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', PRE_HR_STATUSES] } } } },
+            interviewRounds: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', PRE_HR_STATUSES] } } } },
+            hrRounds: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', HR_AND_ABOVE_STATUSES] } } } },
             interviewed: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'INTERVIEWED'] } } } },
             offered: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFERED'] } } } },
             offerAccepted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'OFFER_ACCEPTED'] } } } },
@@ -3193,8 +3408,12 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         }
       },
 
-      // Filter if needsAdminReview is requested
+      // Filter if needsAdminReview, stage, or hasCandidates is requested
       ...(needsAdminReview === 'true' ? [{ $match: { 'candidateStatusBreakdown.adminReview': { $gt: 0 } } }] : []),
+      ...(stage === 'interviews' ? [{ $match: { 'candidateStatusBreakdown.interviewRounds': { $gt: 0 } } }] : []),
+      ...(stage === 'hr_round' ? [{ $match: { 'candidateStatusBreakdown.hrRounds': { $gt: 0 } } }] : []),
+      ...(hasCandidates === 'true' || hasCandidates === 'yes' ? [{ $match: { totalCandidates: { $gt: 0 } } }] : []),
+      ...(hasCandidates === 'false' || hasCandidates === 'no' ? [{ $match: { totalCandidates: 0 } }] : []),
 
       // Pagination
       { $skip: skip },
@@ -3218,7 +3437,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
           vacancies: 1,
           filledPositions: 1,
           status: 1,
-          approvalStatus: 1,
+          status: 1,
           isUrgent: 1,
           isFeatured: 1,
           eligiblePlans: 1,
@@ -3309,8 +3528,6 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         slotsRemaining: job.slotsRemaining
       };
 
-      // Sub-admins can see all candidates metrics
-
       return {
         ...job,
         candidates: jobCandidates,
@@ -3346,6 +3563,100 @@ exports.getAllJobsWithCandidates = async (req, res) => {
         { $count: 'count' }
       ]);
       total = countResult[0]?.count || 0;
+    } else if (stage === 'interviews') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            count: {
+              $size: {
+                $filter: {
+                  input: '$candidates',
+                  cond: { $in: ['$$this.status', PRE_HR_STATUSES] }
+                }
+              }
+            }
+          }
+        },
+        { $match: { count: { $gt: 0 } } },
+        { $count: 'total' }
+      ]);
+      total = countResult[0]?.total || 0;
+    } else if (stage === 'hr_round') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            count: {
+              $size: {
+                $filter: {
+                  input: '$candidates',
+                  cond: { $in: ['$$this.status', HR_AND_ABOVE_STATUSES] }
+                }
+              }
+            }
+          }
+        },
+        { $match: { count: { $gt: 0 } } },
+        { $count: 'total' }
+      ]);
+      total = countResult[0]?.total || 0;
+    } else if (hasCandidates === 'true' || hasCandidates === 'yes') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            candCount: { $size: '$candidates' }
+          }
+        },
+        { $match: { candCount: { $gt: 0 } } },
+        { $count: 'total' }
+      ]);
+      total = countResult[0]?.total || 0;
+    } else if (hasCandidates === 'false' || hasCandidates === 'no') {
+      const countResult = await Job.aggregate([
+        { $match: query },
+        {
+          $lookup: {
+            from: 'candidates',
+            localField: '_id',
+            foreignField: 'job',
+            as: 'candidates'
+          }
+        },
+        {
+          $project: {
+            candCount: { $size: '$candidates' }
+          }
+        },
+        { $match: { candCount: 0 } },
+        { $count: 'total' }
+      ]);
+      total = countResult[0]?.total || 0;
     } else {
       total = await Job.countDocuments(query);
     }
@@ -3607,7 +3918,7 @@ exports.withdrawCandidateByAdmin = async (req, res) => {
 
     // Notify the staffing partner (fire-and-forget)
     try {
-      const notificationEngine = require('./notificationEngine');
+      const notificationEngine = require('../services/notificationEngine');
       // Resolve partner user ID
       let partnerUserId;
       if (candidate.submittedBy?.user?._id) {
@@ -3622,7 +3933,6 @@ exports.withdrawCandidateByAdmin = async (req, res) => {
       }
 
       if (partnerUserId) {
-        const notificationEngine = require('./notificationEngine');
         await notificationEngine.send({
           recipientId: partnerUserId,
           type: 'CANDIDATE_WITHDRAWN',
@@ -3696,11 +4006,11 @@ exports.updateJobStatusByAdmin = async (req, res) => {
     const oldStatus = job.status;
     job.status = status;
 
-    // Sync approvalStatus based on active/closed status
+    // Sync status based on active/closed status
     if (status === 'CLOSED') {
-      job.approvalStatus = 'DISCONTINUED';
+      job.status = 'DISCONTINUED';
     } else if (status === 'ACTIVE') {
-      job.approvalStatus = 'ACTIVE';
+      job.status = 'ACTIVE';
     }
 
     job.addToHistory('UPDATED', req.user._id, { status: { old: oldStatus, new: status } }, `Job status updated to ${status} by admin`);
@@ -4474,7 +4784,7 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
       if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
       for (let i = 0; i < cand.rounds.length; i++) {
         const r = cand.rounds[i];
-        const L_STATES = [ 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED', 'RESCHEDULE_REQUESTED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONDUCTED', 'ROUND_ON_HOLD' ];
+        const L_STATES = ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED', 'RESCHEDULE_REQUESTED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONDUCTED', 'ROUND_ON_HOLD'];
         if (L_STATES.includes(r.status)) return { index: i, round: r };
       }
       return null;
@@ -4533,5 +4843,22 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
   } catch (error) {
     console.error('Admin assign candidate to slot error:', error);
     res.status(500).json({ success: false, message: 'Failed to assign candidate to slot', error: error.message });
+  }
+};
+// @desc   Get screening questions for a job (admin side)
+// @route  GET /api/admin/jobs/:jobId/screening-questions
+// @access Admin / SubAdmin
+exports.getJobScreeningQuestionsForAdmin = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const ScreeningQuestion = require('../models/ScreeningQuestion');
+    const questions = await ScreeningQuestion.find({ job: jobId }).sort({ order: 1 });
+    return res.json({
+      success: true,
+      data: { questions, hasQuestions: questions.length > 0 }
+    });
+  } catch (error) {
+    console.error('getJobScreeningQuestionsForAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
   }
 };

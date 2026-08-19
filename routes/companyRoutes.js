@@ -54,7 +54,12 @@ const {
   getSubAdminById,
   updateSubAdmin,
   updateSubAdminStatus,
-  getPermissionsMeta
+  getPermissionsMeta,
+
+  // Screening Questions
+  saveJobScreeningQuestions,
+  getJobScreeningQuestions,
+  deleteJobScreeningQuestion
 } = require('../controllers/companyController');
 
 const {
@@ -109,12 +114,12 @@ const blockSubAdmins = (req, res, next) => {
 };
 
 // ==================== COMPANY SUB-ADMIN ROUTES ====================
-router.get('/sub-admins/permissions', blockSubAdmins, getPermissionsMeta);
-router.post('/sub-admins', blockSubAdmins, createSubAdmin);
-router.get('/sub-admins', blockSubAdmins, getSubAdmins);
-router.get('/sub-admins/:id', blockSubAdmins, getSubAdminById);
-router.put('/sub-admins/:id', blockSubAdmins, updateSubAdmin);
-router.put('/sub-admins/:id/status', blockSubAdmins, updateSubAdminStatus);
+router.get('/sub-admins/permissions', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getPermissionsMeta);
+router.post('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, createSubAdmin);
+router.get('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getSubAdmins);
+router.get('/sub-admins/:id', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getSubAdminById);
+router.put('/sub-admins/:id', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, updateSubAdmin);
+router.put('/sub-admins/:id/status', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, updateSubAdminStatus);
 
 // Middleware to override req.user._id for sub-admins so they act on behalf of the parent company
 router.use((req, res, next) => {
@@ -423,5 +428,10 @@ router.post('/candidates/:id/pipeline/mark-not-joined',      ...PIPELINE_MW, pip
 // Resend interview consent (WhatsApp + Email) – for SLOT_DETAILS_SHARED round
 const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
 router.post('/candidates/:id/pipeline/resend-interview-consent', ...PIPELINE_MW, pipelineResendInterviewConsent);
+
+// ==================== SCREENING QUESTION ROUTES ====================
+router.post('/jobs/:jobId/screening-questions', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('POST_JOB'), saveJobScreeningQuestions);
+router.get('/jobs/:jobId/screening-questions', checkCompanyPermission('VIEW_JOBS'), getJobScreeningQuestions);
+router.delete('/jobs/:jobId/screening-questions/:qId', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('POST_JOB'), deleteJobScreeningQuestion);
 
 module.exports = router;

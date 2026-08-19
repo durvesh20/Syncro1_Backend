@@ -28,7 +28,7 @@ const companySchema = new mongoose.Schema({
   },
   department: {
     type: String,
-    enum: ['HR', 'Talent Acquisition', 'Founder/CEO', 'Operations', 'Admin', 'Other'],
+    trim: true,
     required: true
   },
   linkedinProfile: String,
@@ -98,16 +98,9 @@ const companySchema = new mongoose.Schema({
       type: String,
       enum: ['1-5', '6-15', '16-30', '30+']
     },
-    typicalCtcBand: {
-      type: String,
-      enum: ['0-5 LPA', '5-20 LPA', '20-35 LPA', '35+ LPA']
-    },
+    typicalCtcBand: mongoose.Schema.Types.Mixed,
     preferredLocations: [String],
-    workModePreference: {
-      type: String,
-      enum: ['Remote', 'Hybrid', 'Onsite', 'Flexible'],
-      default: 'Hybrid'
-    },
+    workModePreference: mongoose.Schema.Types.Mixed,
     urgencyLevel: {
       type: String,
       enum: ['Immediate', 'Within 30 days', 'Within 60 days', 'Ongoing']

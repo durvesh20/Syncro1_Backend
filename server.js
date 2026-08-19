@@ -5,7 +5,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const connectDB = require('./config/db');
-require('./config/env'); 
+require('./config/env');
 
 
 // Connect to database
@@ -19,6 +19,7 @@ testCloudinary();
 const { initializeAI } = require('./config/ai');
 initializeAI();
 
+
 // ✅ Register ALL models BEFORE routes (prevents MissingSchemaError)
 require('./models/Notification');
 require('./models/AgreementQuery');
@@ -28,6 +29,10 @@ require('./models/LimitExtensionRequest');
 require('./models/Payout');
 require('./models/Invoice');
 require('./models/ScoringLog');
+require('./models/Testimonial');
+require('./models/Award');
+require('./models/CompanyLogo');
+require('./models/LandingPageLead');
 
 const app = express();
 
@@ -79,8 +84,18 @@ if (rateLimitEnabled) {
    BODY PARSING
 ========================================================= */
 
+const mongoSanitize = require('express-mongo-sanitize');
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+/* =========================================================
+   NOSQL INJECTION SANITIZATION
+   Sanitize user-supplied data to prevent NoSQL query injection (strips $ and .)
+========================================================= */
+app.use(mongoSanitize({
+  replaceWith: '_'
+}));
 
 /* =========================================================
    COOKIE PARSER
@@ -96,7 +111,9 @@ const allowedOrigins = [
   'https://syncro1.com',
   'https://www.syncro1.com',
   'http://localhost:9696',
-  'http://localhost:3000'
+  'http://localhost:3000',
+  'http://localhost:2121',
+  'https://syncro1.co',
 ];
 
 const corsOptions = {
@@ -157,6 +174,10 @@ app.use('/api/cities', require('./routes/citySuggestionRoutes'));
 app.use('/api/job-interests', require('./routes/jobInterestRoutes'));
 app.use('/api/agreements', require('./routes/agreementRoutes'));
 app.use('/api/ai', require('./routes/aiRoutes'));
+app.use('/api/reports', require('./routes/reportRoutes'));
+app.use('/api/landing', require('./routes/landingRoutes'));
+app.use('/api/landingpage', require('./routes/landingpageRoutes'));
+
 
 /* =========================================================
    ERROR HANDLER
@@ -197,17 +218,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-/* =========================================================
-   SERVE FRONTEND BUILD
-========================================================= */
-
-app.use(express.static(path.join(__dirname, '../Syncro1_Frontend/build')));
-
-app.get('*', (req, res) => {
-  res.sendFile(
-    path.resolve(__dirname, '../Syncro1_Frontend/build', 'index.html')
-  );
-});
 
 /* =========================================================
    START SERVER
@@ -247,7 +257,7 @@ const server = app.listen(PORT, () => {
   console.log(
     '   AI:         ' +
     (process.env.AI_ENABLED === 'true' && process.env.OPENAI_API_KEY
-      ? '🤖 Enabled (OpenAI ' + (process.env.OPENAI_MODEL || 'gpt-4o-mini') + ')'
+      ? '🤖 Enabled (OpenAI ' + (process.env.OPENAI_MODEL || 'gpt-5-mini') + ')'
       : '⏸️  Disabled')
   );
   console.log('═══════════════════════════════════════════════════════');

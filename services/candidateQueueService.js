@@ -22,6 +22,7 @@ class CandidateQueueService {
     async processAfterConsent(candidateId) {
         console.log(`[QUEUE] ── Processing candidate after consent: ${candidateId} ──`);
 
+
         const candidate = await Candidate.findById(candidateId)
             .populate('job')
             .populate('submittedBy', 'firmName firstName lastName user')
@@ -84,6 +85,8 @@ class CandidateQueueService {
                     education: candidate.profile?.education || [],
                     certifications: candidate.profile?.certifications || [],
                     languages: candidate.profile?.languages || [],
+                    jobHistory: candidate.profile?.jobHistory || candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
+                    experience: candidate.profile?.experience || candidate.profile?.jobHistory || [],
                     // relocation willingness
                     willingToRelocate: candidate.profile?.willingToRelocate ?? null,
                 };
@@ -129,7 +132,13 @@ class CandidateQueueService {
                             actualExperienceFromResume: (() => {
                                 const a = fullAnalysis.candidateProfile || {};
                                 if (a.actualTotalExperience) return a.actualTotalExperience;
-                                if (a.actualTotalMonths != null) return `${Math.round((a.actualTotalMonths / 12) * 10) / 10} years`;
+                                if (a.actualTotalMonths != null) {
+                                    const y = Math.floor(a.actualTotalMonths / 12);
+                                    const m = a.actualTotalMonths % 12;
+                                    if (y === 0) return `${m} month${m === 1 ? '' : 's'}`;
+                                    if (m === 0) return `${y} year${y === 1 ? '' : 's'}`;
+                                    return `${y} year${y === 1 ? '' : 's'} ${m} month${m === 1 ? '' : 's'}`;
+                                }
                                 return 'Not provided';
                             })(),
                             actual: screening.experienceRange?.actual || '',
@@ -167,7 +176,7 @@ class CandidateQueueService {
                             jobLocation: screening.locationFit?.jobLocation || '',
                             candidateLocation: screening.locationFit?.candidateLocation || '',
                             status: screening.locationFit?.status || '',
-                            detail: ''
+                            willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? candidate.willingToRelocate ?? null
                         },
                         noticePeriod: {
                             score: scoring.noticePeriodFit || 0,
@@ -240,21 +249,112 @@ class CandidateQueueService {
                     console.log(`   ⚠️  Risk Penalty: ${scoring.riskPenalty || 0}`);          // ✅ was scoreBreakdown?.summary?.riskPenalty
 
                 } else {
-                    throw new Error('AI returned no analysis results');
+                    console.warn('[QUEUE] ⚠️ AI returned success=false or no fullAnalysis, falling back to manual review.');
                 }
-
             } catch (aiError) {
-                console.error(`[QUEUE] ❌ AI Error:`);
+                console.error(`[QUEUE] ❌ AI Error during processing:`);
                 console.error('   Message:', aiError.message);
                 console.error('   Stack:', aiError.stack?.split('\n')[0]);
-                throw aiError;
             }
         } else {
             if (!aiEnabled) {
-                throw new Error('AI analysis is disabled (AI_ENABLED !== true)');
+                console.log('[QUEUE] AI analysis is disabled (AI_ENABLED !== true), using manual review fallback.');
             } else {
-                throw new Error('Candidate has no resume URL for AI analysis');
+                console.warn('[QUEUE] Candidate has no resume URL, using manual review fallback.');
             }
+        }
+
+        // Initialize default/fallback scoreBreakdown if AI was not parsed successfully
+        if (!aiParsed) {
+            scoreBreakdown = {
+                skills: {
+                    score: 0,
+                    weight: 0.30,
+                    matchedRequired: [],
+                    missingRequired: [],
+                    matchedPreferred: [],
+                    missingPreferred: [],
+                    coveragePercent: 0
+                },
+                experience: {
+                    score: 0,
+                    weight: 0.20,
+                    totalExperience: candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} years` : 'Not provided',
+                    relevantExperience: candidate.profile?.relevantExperience != null ? `${candidate.profile.relevantExperience} years` : 'Not provided',
+                    actualExperienceFromResume: 'Not provided',
+                    actual: '',
+                    required: '',
+                    status: '',
+                    detail: 'AI analysis failed/skipped — manual review required',
+                    relevancePercent: 100
+                },
+                domain: {
+                    score: 0,
+                    weight: 0.05,
+                    jobDomain: '',
+                    candidateDomain: '',
+                    status: ''
+                },
+                education: {
+                    score: 0,
+                    weight: 0.05,
+                    minimumRequired: '',
+                    candidateEducation: '',
+                    status: ''
+                },
+                salary: {
+                    score: 0,
+                    weight: 0.10,
+                    budget: '',
+                    expected: '',
+                    deltaPercent: 0,
+                    status: '',
+                    withinBudget: true
+                },
+                location: {
+                    score: 0,
+                    weight: 0.10,
+                    jobLocation: '',
+                    candidateLocation: '',
+                    status: '',
+                    detail: '',
+                    willingToRelocate: candidate.profile?.willingToRelocate ?? candidate.willingToRelocate ?? null
+                },
+                noticePeriod: {
+                    score: 0,
+                    weight: 0.10,
+                    required: '',
+                    actual: '',
+                    days: 0,
+                    status: ''
+                },
+                stability: {
+                    score: 0,
+                    weight: 0.10,
+                    averageTenureYears: 0,
+                    last5YearAverageTenureYears: 0,
+                    totalAverageTenureYears: 0,
+                    isJobHopper: false,
+                    risk: '',
+                    detail: ''
+                },
+                summary: {
+                    weightedScore: 0,
+                    riskPenalty: 0,
+                    riskBreakdown: {
+                        careerGapPenalty: 0,
+                        jobHopperPenalty: 0,
+                        domainMismatchPenalty: 0,
+                        experienceDiscrepancyPenalty: 0,
+                        salaryOverBudgetPenalty: 0
+                    },
+                    finalAdjustedScore: 0,
+                    matchLevel: 'PENDING'
+                }
+            };
+            profileScore = 0;
+            matchLevel = 'PENDING';
+            recommendation = 'HOLD';
         }
 
         // ✅ SAVE COMPLETE RESUME ANALYSIS TO CANDIDATE
@@ -273,6 +373,10 @@ class CandidateQueueService {
 
         // ✅ UPDATE PROFILE WITH EXTRACTED DATA
         if (parsedData?.profile) {
+            const parsedRelocate = parsedData.profile?.willingToRelocate !== undefined
+                ? (parsedData.profile.willingToRelocate === true || parsedData.profile.willingToRelocate === 'true')
+                : null;
+            const finalRelocate = candidate.profile?.willingToRelocate ?? candidate.willingToRelocate ?? parsedRelocate;
             candidate.profile = {
                 ...candidate.profile?.toObject?.() || {},
                 currentCompany: parsedData.profile?.currentCompany || candidate.profile?.currentCompany,
@@ -280,14 +384,26 @@ class CandidateQueueService {
                 skills: parsedData.profile?.skills?.length > 0 ? parsedData.profile.skills : candidate.profile?.skills || [],
                 education: parsedData.profile?.education?.length > 0 ? parsedData.profile.education : candidate.profile?.education || [],
                 experience: parsedData.profile?.experience?.length > 0 ? parsedData.profile.experience : candidate.profile?.experience || [],
+                jobHistory: parsedData.profile?.jobHistory?.length > 0 ? parsedData.profile.jobHistory : (parsedData.profile?.experience?.length > 0 ? parsedData.profile.experience : candidate.profile?.jobHistory || []),
                 // Preserve AI-calculated experience months for scoring
                 totalExperienceMonths: parsedData.profile?.totalExperienceMonths || candidate.profile?.totalExperienceMonths || null,
                 experienceYears: parsedData.profile?.experienceYears || candidate.profile?.experienceYears || null,
                 languages: parsedData.profile?.languages?.length > 0 ? parsedData.profile.languages : candidate.profile?.languages || [],
-                certifications: parsedData.profile?.certifications?.length > 0 ? parsedData.profile.certifications : candidate.profile?.certifications || [],
+                // Normalize certifications: AI may return objects ({name, certificateId, validTill}), schema expects [String]
+                certifications: (() => {
+                    const raw = parsedData.profile?.certifications;
+                    if (Array.isArray(raw) && raw.length > 0) {
+                        return raw.map(c => typeof c === 'string' ? c : (c.name || c.title || c.certification || JSON.stringify(c)));
+                    }
+                    return candidate.profile?.certifications || [];
+                })(),
                 location: candidate.profile?.location,
-                currentLocation: parsedData.profile?.currentLocation || candidate.profile?.currentLocation || candidate.profile?.location
+                currentLocation: parsedData.profile?.currentLocation || candidate.profile?.currentLocation || candidate.profile?.location,
+                willingToRelocate: finalRelocate
             };
+            if (candidate.willingToRelocate === undefined && finalRelocate !== null) {
+                candidate.willingToRelocate = finalRelocate;
+            }
         }
 
         candidate.status = 'ADMIN_REVIEW';

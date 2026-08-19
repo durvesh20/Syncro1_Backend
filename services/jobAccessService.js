@@ -432,13 +432,23 @@ class JobAccessService {
       status: 'ACTIVE'
     });
 
+    const jobMap = jobs.reduce((acc, j) => {
+      acc[j._id.toString()] = j;
+      return acc;
+    }, {});
+
     const interestMap = interests.reduce((acc, i) => {
-      acc[i.job.toString()] = {
+      const jobIdStr = i.job.toString();
+      const targetJob = jobMap[jobIdStr];
+      const minRequiredSlots = targetJob ? (targetJob.vacancies || 1) * 5 : 5;
+      const effectiveLimit = Math.max(i.submissionLimit || 5, minRequiredSlots);
+
+      acc[jobIdStr] = {
         hasInterest: true,
         submissionCount: i.submissionCount,
-        submissionLimit: i.submissionLimit,
-        remainingSlots: i.submissionLimit - i.submissionCount,
-        canSubmit: i.submissionCount < i.submissionLimit
+        submissionLimit: effectiveLimit,
+        remainingSlots: Math.max(0, effectiveLimit - i.submissionCount),
+        canSubmit: i.submissionCount < effectiveLimit
       };
       return acc;
     }, {});

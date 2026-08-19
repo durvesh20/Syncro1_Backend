@@ -11,7 +11,7 @@ const adminActionLogSchema = new mongoose.Schema({
     },
     actorRole: {
         type: String,
-        enum: ['admin', 'sub_admin'],
+        enum: ['admin', 'sub_admin', 'company', 'staffing_partner'],
         required: true
     },
     actorEmail: {
@@ -36,6 +36,7 @@ const adminActionLogSchema = new mongoose.Schema({
             'JOB_APPROVED',
             'JOB_REJECTED',
             'JOB_DISCONTINUED',
+            'JOB_STATUS_UPDATED',
 
             // Assignment actions
             'APPLICATION_ASSIGNED',
@@ -77,7 +78,20 @@ const adminActionLogSchema = new mongoose.Schema({
             'EXTENSION_REQUEST_REJECTED',
 
             // Agreement query
-            'AGREEMENT_QUERY_RESPONDED'
+            'AGREEMENT_QUERY_RESPONDED',
+
+            // Report downloads
+            'REPORT_DOWNLOAD',
+
+            // Pipeline actions (company-side candidate pipeline)
+            'PIPELINE_SHORTLIST',
+            'PIPELINE_REJECT',
+            'PIPELINE_RE_SHORTLIST',
+            'PIPELINE_TEMPLATE_DEFINED',
+            'PIPELINE_MARK_JOINED',
+
+            // Admin candidate actions
+            'CANDIDATE_WITHDRAWN_BY_ADMIN'
         ]
     },
 
@@ -93,7 +107,10 @@ const adminActionLogSchema = new mongoose.Schema({
             'Invoice',
             'User',
             'LimitExtensionRequest',
-            'AgreementQuery'
+            'AgreementQuery',
+            'Report',
+            'CandidateApplication',
+            'Candidate'        // pipeline controller uses this directly
         ],
         required: true
     },

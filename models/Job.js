@@ -44,7 +44,9 @@ const jobSchema = new mongoose.Schema({
   // ==================== JOB DETAILS ====================
   category: {
     type: String,
-    required: true
+    required: [true, 'Job category is required'],
+    default: 'Other',
+    trim: true
   },
   subCategory: String,
   employmentType: {
@@ -67,7 +69,7 @@ const jobSchema = new mongoose.Schema({
     min: {
       type: Number,
       min: 0,
-      set: function(val) {
+      set: function (val) {
         if (val == null || val === '') return val;
         const num = Number(val);
         if (isNaN(num)) return val;
@@ -78,7 +80,7 @@ const jobSchema = new mongoose.Schema({
     max: {
       type: Number,
       min: 0,
-      set: function(val) {
+      set: function (val) {
         if (val == null || val === '') return val;
         const num = Number(val);
         if (isNaN(num)) return val;
@@ -148,19 +150,38 @@ const jobSchema = new mongoose.Schema({
   // ==================== DATES ====================
   applicationDeadline: Date,
   expectedJoiningDate: {
-    type: String,
-    enum: ['0-15 days', '0-30 days', '0-60 days', '0-90 days'],
-    default: '0-15 days'
+    type: mongoose.Schema.Types.Mixed,
+    default: ['Any']
   },
 
-  // ==================== JOB STATUS ====================
+  // ==================== JOB STATUS (UNIFIED) ====================
+  // Single source of truth covering both lifecycle and approval workflow.
+  // Values:
+  //   Pre-approval:  DRAFT → PENDING_APPROVAL → APPROVED (auto → ACTIVE) | REJECTED
+  //   Operational:   ACTIVE → PAUSED | ON_HOLD | FILLED | CLOSED
+  //   Edit cycle:    ACTIVE → EDIT_REQUESTED → APPROVED (auto → ACTIVE)
+  //   Admin force:   DISCONTINUED
   status: {
     type: String,
-    enum: ['DRAFT', 'PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'CLOSED', 'FILLED', 'ON_HOLD'],
+    enum: [
+      'DRAFT',
+      'PENDING_APPROVAL',
+      'APPROVED',        // Transitional — auto-moves to ACTIVE after save
+      'ACTIVE',
+      'PAUSED',
+      'ON_HOLD',
+      'FILLED',
+      'CLOSED',
+      'REJECTED',
+      'EDIT_REQUESTED',
+      'DISCONTINUED'
+    ],
     default: 'DRAFT'
   },
 
-  // ==================== APPROVAL WORKFLOW ====================
+  // ==================== APPROVAL STATUS (DEPRECATED ALIAS) ====================
+  // @deprecated — Kept for backward compatibility only. Auto-synced from `status`
+  // via pre-save hook. Read `status` instead of this field in all new code.
   approvalStatus: {
     type: String,
     enum: [
@@ -280,7 +301,7 @@ const jobSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  
+
   // Ordered list of rounds defined for this job position
   pipelineTemplate: [
     {
@@ -297,8 +318,10 @@ const jobSchema = new mongoose.Schema({
 });
 
 // ==================== INDEXES ====================
-jobSchema.index({ company: 1, approvalStatus: 1 });
-jobSchema.index({ approvalStatus: 1, createdAt: -1 });
+jobSchema.index({ company: 1, status: 1 });
+jobSchema.index({ status: 1, createdAt: -1 });
+jobSchema.index({ company: 1, approvalStatus: 1 }); // @deprecated — kept for backward compat
+jobSchema.index({ approvalStatus: 1, createdAt: -1 }); // @deprecated
 jobSchema.index({ status: 1, eligiblePlans: 1 });
 jobSchema.index({ category: 1, status: 1 });
 jobSchema.index({ 'location.city': 1, status: 1 });
@@ -306,18 +329,36 @@ jobSchema.index({ company: 1, status: 1, createdAt: -1 });
 
 // ==================== VIRTUAL FIELDS ====================
 jobSchema.virtual('isPendingReview').get(function () {
-  return this.approvalStatus === 'PENDING_APPROVAL' || this.approvalStatus === 'EDIT_REQUESTED';
+  return this.status === 'PENDING_APPROVAL' || this.status === 'EDIT_REQUESTED';
 });
 
 jobSchema.virtual('canBeEdited').get(function () {
-  return ['DRAFT', 'REJECTED'].includes(this.approvalStatus);
+  return ['DRAFT', 'REJECTED'].includes(this.status);
 });
 
 jobSchema.virtual('requiresApproval').get(function () {
-  return this.approvalStatus === 'EDIT_REQUESTED';
+  return this.status === 'EDIT_REQUESTED';
 });
 
 // ==================== MIDDLEWARE ====================
+
+// Auto-sync deprecated `approvalStatus` field from `status` for backward compat.
+// New code should always read/write `status` only.
+jobSchema.pre('save', function (next) {
+  const approvalLinkedStatuses = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'ACTIVE', 'EDIT_REQUESTED', 'DISCONTINUED'];
+  if (approvalLinkedStatuses.includes(this.status)) {
+    this.approvalStatus = this.status;
+  } else {
+    // Operational statuses (PAUSED, ON_HOLD, FILLED, CLOSED) — keep approvalStatus as ACTIVE
+    // since the job was approved before reaching these states
+    if (!approvalLinkedStatuses.includes(this.approvalStatus)) {
+      this.approvalStatus = 'ACTIVE';
+    }
+  }
+  next();
+});
+
+// Deadline-based auto ON_HOLD logic
 jobSchema.pre('save', function (next) {
   const now = new Date();
   if (!this.isModified('status')) {
@@ -329,6 +370,7 @@ jobSchema.pre('save', function (next) {
   }
   next();
 });
+
 
 jobSchema.pre('save', async function (next) {
   // Auto-generate slug
@@ -345,11 +387,11 @@ jobSchema.pre('save', async function (next) {
       const companyDoc = await mongoose.model('Company').findById(this.company);
       const name = companyDoc?.companyName || 'JOB';
       const prefix = name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 3).padEnd(3, 'x');
-      
+
       const jobs = await mongoose.model('Job').find({ company: this.company });
       let maxNum = 0;
       const prefixPattern = new RegExp(`^${prefix}(\\d+)$`, 'i');
-      
+
       jobs.forEach(j => {
         if (j.uniqueId) {
           const match = j.uniqueId.match(prefixPattern);
@@ -361,7 +403,7 @@ jobSchema.pre('save', async function (next) {
           }
         }
       });
-      
+
       const nextNum = maxNum + 1;
       const formattedNum = String(nextNum).padStart(3, '0');
       this.uniqueId = `${prefix}${formattedNum}`;
@@ -432,11 +474,19 @@ jobSchema.methods.applyEditChanges = function (appliedChanges) {
     const keys = field.split('.');
     let obj = this;
     for (let i = 0; i < keys.length - 1; i++) {
+      if (!obj[keys[i]]) obj[keys[i]] = {};
       obj = obj[keys[i]];
     }
     const val = appliedChanges[field];
     const valueToSet = (val && typeof val === 'object' && 'new' in val) ? val.new : val;
-    obj[keys[keys.length - 1]] = valueToSet;
+
+    if (field === 'category' && (!valueToSet || typeof valueToSet !== 'string' || !valueToSet.trim())) {
+      if (!obj['category'] || typeof obj['category'] !== 'string' || !obj['category'].trim()) {
+        obj['category'] = 'Other';
+      }
+    } else {
+      obj[keys[keys.length - 1]] = valueToSet;
+    }
     this.markModified(field);
   });
 };

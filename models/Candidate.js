@@ -93,7 +93,15 @@ const candidateSchema = new mongoose.Schema({
     noticePeriod: {
       type: String,
       enum: [
+        'Any',
         'Immediate',
+        '0-15 Days',
+        '15-30 Days',
+        '30-45 Days',
+        '45-60 Days',
+        '60-75 Days',
+        '75-90 Days',
+        'Currently Serving',
         '15 days',
         '30 days',
         '45 days',
@@ -733,6 +741,25 @@ const candidateSchema = new mongoose.Schema({
       reason: String,
       roundIndex: Number, // which round this pertains to (null for top-level actions)
       timestamp: { type: Date, default: Date.now }
+    }
+  ],
+
+  // ── Screening Question Answers ──────────────────────────────────────────────
+  // Populated during candidate submission if the job has screening questions
+  screeningAnswers: [
+    {
+      question: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'ScreeningQuestion'
+      },
+      questionText: String,   // Snapshot of question text at time of submission
+      answerType: {
+        type: String,
+        enum: ['yes_no', 'numeric']
+      },
+      candidateAnswer: String,  // "yes"/"no" or numeric string e.g. "7"
+      idealAnswer: String,      // Snapshot of the ideal answer for comparison
+      isMatch: Boolean          // Computed: candidateAnswer === idealAnswer (numeric: >=)
     }
   ],
 

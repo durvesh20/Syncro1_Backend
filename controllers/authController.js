@@ -10,6 +10,7 @@ const otpService = require('../services/otpService');
 const sendTokenResponse = require('../utils/sendTokenResponse');
 const { validateEmail, validateMobile } = require('../utils/validators');
 const notifyCRM = require('../utils/notifyCRM')
+const { validateEmail, validateMobile, isWorkEmail } = require('../utils/validators');
 
 // Check if we should skip mobile OTP (for development)
 const skipMobileOTP = process.env.WHATSAPP_ENABLED !== 'true';
@@ -167,7 +168,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: 'User with this email or mobile already exists'
+        message: 'Invalid details entered. Please verify your information or try logging in.'
       });
     }
 
@@ -358,6 +359,13 @@ exports.initCompanyRegistration = async (req, res) => {
       });
     }
 
+    if (!isWorkEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please use an official company work email address.'
+      });
+    }
+
     if (!validateMobile(mobile)) {
       return res.status(400).json({
         success: false,
@@ -382,7 +390,7 @@ exports.initCompanyRegistration = async (req, res) => {
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: 'User with this email or mobile already exists'
+        message: 'Invalid details entered. Please verify your information or try logging in.'
       });
     }
 

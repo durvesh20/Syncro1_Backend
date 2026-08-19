@@ -27,3 +27,22 @@ exports.getCitySuggestions = async (req, res) => {
         });
     }
 };
+
+exports.getStateSuggestions = async (req, res) => {
+    try {
+        const { q } = req.query;
+        const suggestions = cityService.getStateSuggestions(q || '');
+
+        res.json({
+            success: true,
+            results: suggestions,
+            count: suggestions.length
+        });
+    } catch (error) {
+        console.error('[State Suggestions Error]:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error'
+        });
+    }
+};

@@ -45,7 +45,7 @@ exports.showInterest = async (req, res) => {
             });
         }
 
-        if (job.status !== 'ACTIVE' || job.approvalStatus !== 'ACTIVE') {
+        if (job.status !== 'ACTIVE') {
             return res.status(400).json({
                 success: false,
                 message: 'This job is not active'
@@ -321,7 +321,6 @@ exports.getMyInterestedJobs = async (req, res) => {
                 experienceLevel: i.jobDetails.experienceLevel,
                 vacancies: i.jobDetails.vacancies,
                 status: i.jobDetails.status,
-                approvalStatus: i.jobDetails.approvalStatus,
                 metrics: i.jobDetails.metrics,
                 eligiblePlans: i.jobDetails.eligiblePlans,
                 isUrgent: i.jobDetails.isUrgent,
@@ -391,6 +390,24 @@ exports.getInterestStatus = async (req, res) => {
             });
         }
 
+        // ✅ Auto-heal submissionLimit if job vacancies were increased
+        const job = await Job.findById(req.params.jobId);
+        if (job) {
+            const { ensureMinJobInterestSlots } = require('../services/slotService');
+            await ensureMinJobInterestSlots(interest, job);
+        }
+
+        const pendingExtension = await LimitExtensionRequest.findOne({
+            partner: partner._id,
+            job: req.params.jobId,
+            status: 'PENDING'
+        });
+
+        const extensionRequestsCount = await LimitExtensionRequest.countDocuments({
+            partner: partner._id,
+            job: req.params.jobId
+        });
+
         res.json({
             success: true,
             data: {
@@ -401,7 +418,15 @@ exports.getInterestStatus = async (req, res) => {
                 submissionLimit: interest.submissionLimit,
                 remainingSlots: Math.max(0, interest.submissionLimit - interest.submissionCount),
                 canSubmit: interest.status === 'ACTIVE' && interest.submissionCount < interest.submissionLimit,
-                limitExtended: interest.limitExtended
+                limitExtended: interest.limitExtended,
+                hasPendingExtension: !!pendingExtension,
+                pendingExtension: pendingExtension ? {
+                    id: pendingExtension._id,
+                    requestedAdditional: pendingExtension.requestedAdditional,
+                    createdAt: pendingExtension.createdAt
+                } : null,
+                extensionRequestsCount,
+                maxExtensionRequestsReached: extensionRequestsCount >= 4
             }
         });
     } catch (error) {
@@ -418,14 +443,8 @@ exports.getInterestStatus = async (req, res) => {
 // @access  Staffing Partner
 exports.requestLimitExtension = async (req, res) => {
     try {
-        const { requestedAdditional, reason } = req.body;
-
-        if (!requestedAdditional || requestedAdditional < 1 || requestedAdditional > 10) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please specify how many additional submissions you need (1-10)'
-            });
-        }
+        const { reason } = req.body;
+        const requestedAdditional = 5; // Fixed 5 slots per single request
 
         if (!reason || reason.trim().length < 10) {
             return res.status(400).json({
@@ -440,7 +459,7 @@ exports.requestLimitExtension = async (req, res) => {
             partner: partner._id,
             job: req.params.jobId,
             status: 'ACTIVE'
-        }).populate('job', 'title');
+        }).populate('job', 'title uniqueId');
 
         if (!interest) {
             return res.status(404).json({
@@ -453,6 +472,19 @@ exports.requestLimitExtension = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: `You still have ${interest.submissionLimit - interest.submissionCount} submission slots remaining. Use them first.`
+            });
+        }
+
+        // Check maximum 4 extension requests limit per job position for a talent partner
+        const totalRequestsCount = await LimitExtensionRequest.countDocuments({
+            partner: partner._id,
+            job: req.params.jobId
+        });
+
+        if (totalRequestsCount >= 4) {
+            return res.status(400).json({
+                success: false,
+                message: 'Maximum limit of 4 extension requests reached for this job position.'
             });
         }
 
@@ -476,7 +508,7 @@ exports.requestLimitExtension = async (req, res) => {
             job: req.params.jobId,
             jobInterest: interest._id,
             user: req.user._id,
-            requestedAdditional: parseInt(requestedAdditional),
+            requestedAdditional: 5,
             reason: reason.trim()
         });
 
@@ -537,7 +569,7 @@ exports.getMyExtensionRequests = async (req, res) => {
         const requests = await LimitExtensionRequest.find({
             partner: partner._id
         })
-            .populate('job', 'title category location')
+            .populate('job', 'title uniqueId category location')
             .populate('reviewedBy', 'email role')
             .sort({ createdAt: -1 });
 
@@ -579,9 +611,10 @@ exports.getAllExtensionRequests = async (req, res) => {
             LimitExtensionRequest.find(query)
                 .populate({
                     path: 'partner',
-                    select: 'firstName lastName firmName metrics verificationStatus'
+                    select: 'firmName metrics verificationStatus'
                 })
-                .populate('job', 'title category location metrics')
+                .populate('job', 'title uniqueId category location metrics')
+                .populate('jobInterest', 'submissionCount submissionLimit limitExtended')
                 .populate('user', 'email mobile')
                 .populate('reviewedBy', 'email role')
                 .sort({ createdAt: -1 })
@@ -627,10 +660,10 @@ exports.getExtensionRequest = async (req, res) => {
         const request = await LimitExtensionRequest.findById(req.params.id)
             .populate({
                 path: 'partner',
-                select: 'firstName lastName firmName metrics verificationStatus subscription'
+                select: 'firmName metrics verificationStatus subscription'
             })
-            .populate('job', 'title category location salary metrics')
-            .populate('jobInterest')
+            .populate('job', 'title uniqueId category location salary metrics')
+            .populate('jobInterest', 'submissionCount submissionLimit limitExtended')
             .populate('user', 'email mobile')
             .populate('reviewedBy', 'email role');
 
@@ -735,17 +768,21 @@ exports.reviewExtensionRequest = async (req, res) => {
         request.reviewedAt = new Date();
         request.adminNotes = adminNotes || null;
 
+        let newLimit = null;
+        const addedSlots = approvedAdditional ? parseInt(approvedAdditional) : (request.requestedAdditional || 5);
+
         if (action === 'approve') {
-            request.approvedAdditional = parseInt(approvedAdditional);
+            request.approvedAdditional = addedSlots;
 
             // Update the job interest limit
             const interest = await require('../models/JobInterest').findById(request.jobInterest);
             if (interest) {
-                interest.submissionLimit += parseInt(approvedAdditional);
+                interest.submissionLimit += addedSlots;
                 interest.limitExtended = true;
                 interest.limitExtendedBy = req.user._id;
                 interest.limitExtendedAt = new Date();
                 await interest.save();
+                newLimit = interest.submissionLimit;
             }
         }
 
@@ -756,7 +793,7 @@ exports.reviewExtensionRequest = async (req, res) => {
             try {
                 const notificationEngine = require('../services/notificationEngine');
                 const message = action === 'approve'
-                    ? `Your request to add ${approvedAdditional} more candidates to "${request.job?.title}" has been approved. Your new limit is now ${5 + parseInt(approvedAdditional)}.${adminNotes ? ` Note: ${adminNotes}` : ''}`
+                    ? `Your request to add ${addedSlots} more candidate slots to "${request.job?.title}" has been approved.${newLimit ? ` Your new limit is now ${newLimit}.` : ''}${adminNotes ? ` Note: ${adminNotes}` : ''}`
                     : `Your extension request for "${request.job?.title}" was not approved.${adminNotes ? ` Reason: ${adminNotes}` : ''}`;
 
                 await notificationEngine.send({
@@ -810,7 +847,7 @@ exports.getHotJobs = async (req, res) => {
 
         const hotJobs = await Job.find({
             status: 'ACTIVE',
-            approvalStatus: 'ACTIVE'
+            status: 'ACTIVE'
         })
             .select('title category location salary metrics eligiblePlans isUrgent createdAt')
             .sort({ 'metrics.interestedPartners': -1 })

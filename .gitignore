@@ -8,6 +8,8 @@ node_modules/
 logs/
 *.log
 
+locust
+
 # Uploads
 uploads/
 

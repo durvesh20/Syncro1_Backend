@@ -15,7 +15,7 @@ async function compressResumeText(resumeText) {
   console.log(`[COMPRESSOR] Compressing long resume text (${resumeText.length} chars) using model ${model}`);
 
   try {
-    const response = await openai.chat.completions.create({
+    const params = {
       model: model,
       messages: [{
         role: 'user',
@@ -35,8 +35,12 @@ You may compress verbose descriptions, but never remove factual data.
 RESUME TEXT:
 ${resumeText}`
       }],
-      temperature: 0.1
-    });
+      max_completion_tokens: 8000
+    };
+    if (!model.includes('gpt-5') && !model.includes('o1') && !model.includes('o3')) {
+      params.temperature = 0.1;
+    }
+    const response = await openai.chat.completions.create(params);
 
     const resultText = response.choices[0]?.message?.content;
     if (!resultText) {

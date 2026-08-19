@@ -4,18 +4,17 @@ const Company = require("../models/Company");
 const User = require("../models/User");
 const Job = require("../models/Job");
 const Candidate = require("../models/Candidate");
-const { parseJobPosition } = require("../services/jobPositionParser");
+const ScreeningQuestion = require("../models/ScreeningQuestion");
 const candidateLifecycleService = require("../services/candidateLifecycleService");
-const StatusMachine = require("../utils/statusMachine");
 const InterviewSlot = require("../models/InterviewSlot");
 const whatsappService = require("../services/whatsappService");
 const notifyCRM = require('../utils/notifyCRM');
 const {
-  COMPANY_PERMISSIONS,
   COMPANY_ALL_PERMISSIONS,
   COMPANY_PERMISSION_GROUPS,
   COMPANY_SUB_ADMIN_BUNDLES
 } = require('../utils/permissions');
+const { isWorkEmail } = require('../utils/validators');
 
 // ==================== HELPER FUNCTIONS ====================
 
@@ -247,7 +246,7 @@ exports.updateKYC = async (req, res) => {
       ...company.kyc,
       registeredName,
       tradeName,
-      logo,
+      logo: logo !== undefined ? logo : company.kyc?.logo,
       description,
       website,
       companyType,
@@ -929,13 +928,13 @@ exports.getDashboard = async (req, res) => {
     // ✅ NEW: Approval status breakdown
     const approvalStats = await Job.aggregate([
       { $match: { company: company._id } },
-      { $group: { _id: "$approvalStatus", count: { $sum: 1 } } }
+      { $group: { _id: "$status", count: { $sum: 1 } } }
     ]);
 
     // ✅ NEW: Get rejected jobs for alerts
     const rejectedJobs = await Job.find({
       company: company._id,
-      approvalStatus: 'REJECTED'
+      status: 'REJECTED'
     })
       .select('title rejectionReason rejectedAt')
       .sort({ rejectedAt: -1 })
@@ -944,7 +943,7 @@ exports.getDashboard = async (req, res) => {
     // ✅ NEW: Get pending approval jobs
     const pendingApprovalJobs = await Job.find({
       company: company._id,
-      approvalStatus: 'PENDING_APPROVAL'
+      status: 'PENDING_APPROVAL'
     })
       .select('title createdAt')
       .sort({ createdAt: -1 })
@@ -1111,7 +1110,7 @@ exports.createJob = async (req, res) => {
       company: company._id,
       postedBy: req.user._id,
       status: "DRAFT",
-      approvalStatus: "DRAFT",
+      status: "DRAFT",
       eligiblePlans,
     };
 
@@ -1119,11 +1118,6 @@ exports.createJob = async (req, res) => {
 
     company.metrics.totalJobsPosted += 1;
     await company.save();
-
-    // Trigger asynchronous JD parsing for JobPosition structure
-    parseJobPosition(job).catch(err => {
-      console.error(`[JD-PARSER] Asynchronous parsing error on job creation: ${err.message}`);
-    });
 
     console.log(
       `[JOB] Created as DRAFT: "${job.title}" — Requires admin approval before becoming visible`,
@@ -1172,11 +1166,17 @@ exports.getJobs = async (req, res) => {
     );
 
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
-    const { status, approvalStatus, search } = req.query;
+    const { status, search } = req.query;
 
     const query = { company: company._id };
-    if (status) query.status = status;
-    if (approvalStatus) query.approvalStatus = approvalStatus;
+    if (status) {
+      const normalizedStatus = String(status).toUpperCase().trim().replace(/[\s-]+/g, '_');
+      if (normalizedStatus === 'ACTIVE') {
+        query.status = { $in: ['ACTIVE', 'APPROVED', 'EDIT_REQUESTED'] };
+      } else {
+        query.status = normalizedStatus;
+      }
+    }
 
     if (search && search.trim()) {
       const rx = new RegExp(search.trim(), 'i');
@@ -1190,16 +1190,36 @@ exports.getJobs = async (req, res) => {
 
     const skip = (page - 1) * limit;
 
-    const jobs = await Job.find(query)
-      .populate(
-        'company',
-        'companyName kyc.industry kyc.logo kyc.companyType kyc.employeeCount city state verificationStatus'
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
+    const [jobs, total, totalAll, totalActive, totalPending, totalEditReq, totalDraft, totalClosed, totalOnHold, totalRejected] = await Promise.all([
+      Job.find(query)
+        .populate(
+          'company',
+          'companyName kyc.industry kyc.logo kyc.companyType kyc.employeeCount city state verificationStatus'
+        )
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Job.countDocuments(query),
+      Job.countDocuments({ company: company._id }),
+      Job.countDocuments({ company: company._id, status: { $in: ['ACTIVE', 'APPROVED'] }, status: { $ne: 'CLOSED' } }),
+      Job.countDocuments({ company: company._id, status: 'PENDING_APPROVAL' }),
+      Job.countDocuments({ company: company._id, status: 'EDIT_REQUESTED' }),
+      Job.countDocuments({ company: company._id, status: 'DRAFT' }),
+      Job.countDocuments({ company: company._id, status: 'CLOSED' }),
+      Job.countDocuments({ company: company._id, status: 'ON_HOLD' }),
+      Job.countDocuments({ company: company._id, status: 'REJECTED' }),
+    ]);
 
-    const total = await Job.countDocuments(query);
+    const summary = {
+      TOTAL: totalAll,
+      ACTIVE: totalActive,
+      PENDING_APPROVAL: totalPending,
+      EDIT_REQUESTED: totalEditReq,
+      DRAFT: totalDraft,
+      CLOSED: totalClosed,
+      ON_HOLD: totalOnHold,
+      REJECTED: totalRejected
+    };
 
     // ✅ Enrich each job with safe company snapshot and active candidates count
     const enrichedJobs = await Promise.all(jobs.map(async (job) => {
@@ -1208,8 +1228,8 @@ exports.getJobs = async (req, res) => {
 
       const activeCandidatesCount = await Candidate.countDocuments({
         job: job._id,
-        status: { 
-          $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED'] 
+        status: {
+          $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED']
         }
       });
 
@@ -1235,6 +1255,7 @@ exports.getJobs = async (req, res) => {
       success: true,
       data: {
         jobs: enrichedJobs,
+        summary,
         pagination: {
           current: page,
           pages: Math.ceil(total / limit),
@@ -1271,7 +1292,7 @@ exports.getRejectedJobs = async (req, res) => {
 
     const query = {
       company: company._id,
-      approvalStatus: 'REJECTED'
+      status: 'REJECTED'
     };
 
     const skip = (page - 1) * limit;
@@ -1345,8 +1366,8 @@ exports.getJob = async (req, res) => {
 
     const activeCandidatesCount = await Candidate.countDocuments({
       job: job._id,
-      status: { 
-        $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED'] 
+      status: {
+        $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED']
       }
     });
 
@@ -1404,16 +1425,23 @@ exports.updateJob = async (req, res) => {
       }
     }
 
+    const oldVacancies = job.vacancies || 1;
+
     // Apply fields from body
     Object.assign(job, req.body);
 
     // This will trigger the pre-save status sync hooks
     await job.save();
 
-    // Trigger asynchronous JD parsing for JobPosition structure
-    parseJobPosition(job).catch(err => {
-      console.error(`[JD-PARSER] Asynchronous parsing error on job update: ${err.message}`);
-    });
+    // ✅ Sync talent partner slot sizes (submissionLimit) if vacancies were updated (1 vacancy = 5 slots)
+    if (req.body.vacancies !== undefined && Number(req.body.vacancies) !== oldVacancies) {
+      try {
+        const { syncJobInterestSlots } = require('../services/slotService');
+        await syncJobInterestSlots(job._id, oldVacancies, Number(req.body.vacancies));
+      } catch (slotErr) {
+        console.error('[COMPANY] Failed to sync partner slots on job update:', slotErr);
+      }
+    }
 
     res.json({
       success: true,
@@ -1574,7 +1602,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
   if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
     return;
   }
-  
+
   const InterviewSlot = require('../models/InterviewSlot');
   const getActiveRoundInfoLocal = (c) => {
     for (let i = 0; i < c.rounds.length; i++) {
@@ -1590,12 +1618,12 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
   if (!activeRoundInfo) return;
 
   const jobId = candidate.job?._id || candidate.job;
-  
+
   const rt = (activeRoundInfo.round.roundType || '').trim().toUpperCase();
   const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
   const isHr = hrNames.includes(rt);
-  
-  const roundTypeQuery = isHr 
+
+  const roundTypeQuery = isHr
     ? { $in: [activeRoundInfo.round.roundType, ...hrNames.map(n => new RegExp(`^${n}$`, 'i')), /HR_ROUND/i, /HR Round/i] }
     : activeRoundInfo.round.roundType;
 
@@ -1614,7 +1642,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
       changedAt: new Date(),
       notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
     });
-    
+
     candidate.auditTrail = candidate.auditTrail || [];
     candidate.auditTrail.push({
       actorId: userId || candidate._id,
@@ -2533,37 +2561,35 @@ exports.submitJobForApproval = async (req, res) => {
     }
 
     // Validation: Can only submit DRAFT or REJECTED jobs
-    if (!['DRAFT', 'REJECTED'].includes(job.approvalStatus)) {
+    if (!['DRAFT', 'REJECTED'].includes(job.status)) {
       return res.status(400).json({
         success: false,
-        message: `Cannot submit job with status: ${job.approvalStatus}`,
-        currentStatus: job.approvalStatus
+        message: `Cannot submit job with status: ${job.status}`,
+        currentStatus: job.status
       });
     }
 
-    // Validate required fields are complete
-    const requiredFields = ['title', 'description', 'category', 'employmentType', 'experienceLevel', 'location.city'];
+    // Validate required fields are complete before approval submit
     const missingFields = [];
-
-    requiredFields.forEach(field => {
-      const keys = field.split('.');
-      let value = job;
-      for (const key of keys) {
-        value = value?.[key];
-      }
-      if (!value) missingFields.push(field);
-    });
+    if (!job.title || !job.title.trim() || job.title === 'Untitled Job') missingFields.push('Title');
+    if (!job.description || !job.description.trim()) missingFields.push('Description');
+    if (!job.category || !job.category.trim()) missingFields.push('Category');
+    if (!job.subCategory && !job.subcategory) missingFields.push('Sub Category');
+    if (!job.location?.city || (Array.isArray(job.location.city) && job.location.city.length === 0)) missingFields.push('City');
+    if (!job.location?.isRemote && !job.location?.isHybrid && !job.location?.isOnSite) missingFields.push('Job Type');
+    if (!job.skills?.required || job.skills.required.length === 0) missingFields.push('Mandatory Skills');
+    if (!job.education?.minimum || (Array.isArray(job.education.minimum) && job.education.minimum.length === 0)) missingFields.push('Qualification');
+    if (!job.applicationDeadline) missingFields.push('Application Deadline');
 
     if (missingFields.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Please complete all required fields before submitting',
+        message: `Cannot submit for approval. Please complete mandatory fields: ${missingFields.join(', ')}`,
         missingFields
       });
     }
 
     // Update job status
-    job.approvalStatus = 'PENDING_APPROVAL';
     job.status = 'PENDING_APPROVAL';
     job.addToHistory('SUBMITTED', req.user._id, {}, 'Job submitted for approval');
     await job.save();
@@ -2609,7 +2635,7 @@ exports.submitJobForApproval = async (req, res) => {
       message: 'Job submitted for admin approval successfully',
       data: {
         jobId: job._id,
-        approvalStatus: 'PENDING_APPROVAL',
+        status: 'PENDING_APPROVAL',
         submittedAt: new Date(),
         estimatedReviewTime: '24-48 hours'
       }
@@ -2648,11 +2674,11 @@ exports.requestJobEdit = async (req, res) => {
     }
 
     // Can only request edit on ACTIVE jobs
-    if (job.approvalStatus !== 'ACTIVE') {
+    if (job.status !== 'ACTIVE') {
       return res.status(400).json({
         success: false,
-        message: `Cannot request edit on job with status: ${job.approvalStatus}. Only ACTIVE jobs can be edited.`,
-        hint: job.approvalStatus === 'DRAFT' ? 'You can edit this job directly.' : 'Wait for current approval process to complete.'
+        message: `Cannot request edit on job with status: ${job.status}. Only ACTIVE jobs can be edited.`,
+        hint: job.status === 'DRAFT' ? 'You can edit this job directly.' : 'Wait for current approval process to complete.'
       });
     }
 
@@ -2790,12 +2816,21 @@ exports.requestJobEdit = async (req, res) => {
         continue;
       }
 
-      // Check if field exists in the Job schema
-      const pathExists = Job.schema.path(field) !== undefined || 
-                         Object.keys(Job.schema.paths).some(p => p.startsWith(field + '.'));
+      // Check if field exists in the Job schema or is screeningQuestions
+      const pathExists = field === 'screeningQuestions' ||
+        Job.schema.path(field) !== undefined ||
+        Object.keys(Job.schema.paths).some(p => p.startsWith(field + '.'));
 
       if (!pathExists) {
         invalidFields.push(`${field}: Field does not exist in job`);
+        continue;
+      }
+
+      // Special handling for screeningQuestions (decoupled from Job schema paths)
+      if (field === 'screeningQuestions') {
+        if (!valuesAreEqual(change.old, change.new)) {
+          validatedChanges[field] = change;
+        }
         continue;
       }
 
@@ -2822,6 +2857,13 @@ exports.requestJobEdit = async (req, res) => {
         // align the old value to the actual currentValue in the database.
         // This ensures the edit request proceeds smoothly and the admin gets the correct diff.
         change.old = currentValue !== undefined ? currentValue : null;
+      }
+
+      // Ensure required category field is not submitted as empty string or null
+      if (field === 'category') {
+        if (!change.new || typeof change.new !== 'string' || !change.new.trim()) {
+          change.new = (typeof currentValue === 'string' && currentValue.trim()) ? currentValue.trim() : (typeof change.old === 'string' && change.old.trim()) ? change.old.trim() : 'Other';
+        }
       }
 
       // Check if new value is actually different; if they are same, we just skip it (don't error out)
@@ -2860,7 +2902,7 @@ exports.requestJobEdit = async (req, res) => {
     });
 
     // Update job
-    job.approvalStatus = 'EDIT_REQUESTED';
+    job.status = 'EDIT_REQUESTED';
     job.editRequestCount += 1;
     job.lastEditRequestAt = new Date();
     job.addToHistory('EDIT_REQUESTED', req.user._id, validatedChanges, changeDescription);
@@ -2960,8 +3002,8 @@ exports.getJobEditRequests = async (req, res) => {
         job: {
           id: job._id,
           title: job.title,
-          approvalStatus: job.approvalStatus,
-          canRequestEdit: job.approvalStatus === 'ACTIVE' && stats.pending === 0
+          status: job.status,
+          canRequestEdit: job.status === 'ACTIVE' && stats.pending === 0
         }
       }
     });
@@ -3022,8 +3064,8 @@ exports.cancelEditRequest = async (req, res) => {
       status: 'PENDING'
     });
 
-    if (otherPending === 0 && job.approvalStatus === 'EDIT_REQUESTED') {
-      job.approvalStatus = 'ACTIVE';
+    if (otherPending === 0 && job.status === 'EDIT_REQUESTED') {
+      job.status = 'ACTIVE';
       await job.save();
     }
 
@@ -3032,7 +3074,7 @@ exports.cancelEditRequest = async (req, res) => {
       message: 'Edit request cancelled successfully',
       data: {
         editRequestId: editRequest._id,
-        jobStatus: job.approvalStatus
+        jobStatus: job.status
       }
     });
   } catch (error) {
@@ -3099,6 +3141,24 @@ exports.createSubAdmin = async (req, res) => {
 
     const normalizedEmail = email.toLowerCase().trim();
     const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+    if (!isWorkEmail(normalizedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please use an official company work email address.'
+      });
+    }
+
+    const ownerEmail = req.user?.email || '';
+    const ownerDomain = ownerEmail.includes('@') ? ownerEmail.split('@')[1].toLowerCase().trim() : '';
+    const subAdminDomain = normalizedEmail.includes('@') ? normalizedEmail.split('@')[1].toLowerCase().trim() : '';
+
+    if (ownerDomain && subAdminDomain && ownerDomain !== subAdminDomain) {
+      return res.status(400).json({
+        success: false,
+        message: `Sub-admin email domain (@${subAdminDomain}) must match your company's registered email domain (@${ownerDomain}).`
+      });
+    }
 
     const existingUser = await User.findOne({
       $or: [
@@ -3450,5 +3510,145 @@ exports.getPermissionsMeta = async (req, res) => {
       message: 'Failed to fetch permissions metadata',
       error: error.message
     });
+  }
+};
+
+// ==================== SCREENING QUESTIONS ====================
+
+/**
+ * @desc   Add/replace all screening questions for a job
+ * @route  POST /api/companies/jobs/:jobId/screening-questions
+ * @access Company
+ */
+exports.saveJobScreeningQuestions = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    let company = await Company.findOne({ user: req.user._id });
+    if (!company && req.user.company) {
+      company = await Company.findById(req.user.company);
+    }
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const { questions } = req.body; // Array of { questionText, answerType, idealAnswer, isRequired }
+
+    // Verify job belongs to this company
+    const job = await Job.findOne({ _id: jobId, company: company._id });
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    // For active jobs, screening questions follow the edit request flow only internally
+    // (questions themselves can be changed freely since they are not part of the job edit workflow)
+
+    if (!Array.isArray(questions)) {
+      return res.status(400).json({ success: false, message: 'questions must be an array' });
+    }
+
+    // Validate each question
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      if (!q.questionText?.trim()) {
+        return res.status(400).json({ success: false, message: `Question ${i + 1}: text is required` });
+      }
+      if (!['yes_no', 'numeric'].includes(q.answerType)) {
+        return res.status(400).json({ success: false, message: `Question ${i + 1}: answerType must be yes_no or numeric` });
+      }
+      if (q.answerType === 'yes_no' && !['yes', 'no'].includes(q.idealAnswer)) {
+        return res.status(400).json({ success: false, message: `Question ${i + 1}: idealAnswer for yes_no must be "yes" or "no"` });
+      }
+      if (q.answerType === 'numeric' && (isNaN(Number(q.idealAnswer)) || q.idealAnswer === '')) {
+        return res.status(400).json({ success: false, message: `Question ${i + 1}: idealAnswer for numeric must be a valid number` });
+      }
+    }
+
+    // Delete existing questions for this job and re-create
+    await ScreeningQuestion.deleteMany({ job: jobId });
+
+    const created = await ScreeningQuestion.insertMany(
+      questions.map((q, idx) => ({
+        job: jobId,
+        questionText: q.questionText.trim(),
+        answerType: q.answerType,
+        idealAnswer: String(q.idealAnswer),
+        isRequired: q.isRequired !== false, // default true
+        createdBy: req.user._id,
+        order: idx
+      }))
+    );
+
+    return res.json({
+      success: true,
+      message: 'Screening questions saved successfully',
+      data: { questions: created }
+    });
+  } catch (error) {
+    console.error('saveJobScreeningQuestions error:', error);
+    res.status(500).json({ success: false, message: 'Failed to save screening questions', error: error.message });
+  }
+};
+
+/**
+ * @desc   Get screening questions for a job (company side)
+ * @route  GET /api/companies/jobs/:jobId/screening-questions
+ * @access Company
+ */
+exports.getJobScreeningQuestions = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    let company = await Company.findOne({ user: req.user._id });
+    if (!company && req.user.company) {
+      company = await Company.findById(req.user.company);
+    }
+
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const job = await Job.findOne({ _id: jobId, company: company._id });
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const questions = await ScreeningQuestion.find({ job: jobId }).sort({ order: 1 });
+
+    return res.json({
+      success: true,
+      data: { questions }
+    });
+  } catch (error) {
+    console.error('getJobScreeningQuestions error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
+  }
+};
+
+/**
+ * @desc   Delete a single screening question
+ * @route  DELETE /api/companies/jobs/:jobId/screening-questions/:qId
+ * @access Company
+ */
+exports.deleteJobScreeningQuestion = async (req, res) => {
+  try {
+    const { jobId, qId } = req.params;
+    let company = await Company.findOne({ user: req.user._id });
+    if (!company && req.user.company) {
+      company = await Company.findById(req.user.company);
+    }
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const job = await Job.findOne({ _id: jobId, company: company._id });
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    await ScreeningQuestion.deleteOne({ _id: qId, job: jobId });
+
+    return res.json({ success: true, message: 'Question deleted' });
+  } catch (error) {
+    console.error('deleteJobScreeningQuestion error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete screening question', error: error.message });
   }
 };

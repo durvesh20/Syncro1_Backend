@@ -53,7 +53,6 @@ const jobPositionSchema = new mongoose.Schema({
   updatedAt:  { type: Date, default: Date.now }
 });
 
-jobPositionSchema.index({ jobId: 1 });
 jobPositionSchema.index({ 'parsedRequirements.detectedDomain': 1 });
 
 module.exports = mongoose.model('JobPosition', jobPositionSchema);

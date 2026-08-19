@@ -255,6 +255,171 @@ router.get(
   getCandidateDetail
 );
 
+// Revoke company rejection and resubmit candidate
+router.put(
+  '/candidates/:id/revoke-resubmit',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const candidate = await Candidate.findById(req.params.id);
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      const rejectedStatuses = ['REJECTED', 'ROUND_REJECTED', 'HR_REJECTED', 'OFFER_REJECTED', 'ASSESSMENT_FAILED'];
+      if (!rejectedStatuses.includes(candidate.status)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot revoke: candidate is currently in status "${candidate.status}" and is not rejected by company.`
+        });
+      }
+
+      const { notes } = req.body;
+      const prevStatus = candidate.status;
+
+      // Reset pipeline rejection outcomes to keep flowchart/details clean
+      if (candidate.status === 'ROUND_REJECTED') {
+        if (candidate.interviews && candidate.interviews.length > 0) {
+          const lastRound = candidate.interviews[candidate.interviews.length - 1];
+          if (lastRound.outcome && lastRound.outcome.decision === 'REJECTED') {
+            lastRound.outcome = undefined;
+          }
+        }
+      } else if (candidate.status === 'HR_REJECTED') {
+        if (candidate.hrRound) {
+          candidate.hrRound = undefined;
+        }
+      }
+
+      candidate.status = 'SUBMITTED';
+      candidate.statusHistory.push({
+        status: 'SUBMITTED',
+        changedBy: req.user._id,
+        changedAt: new Date(),
+        notes: notes?.trim() || `Rejection (previous status: ${prevStatus}) revoked and resubmitted to company by Admin`
+      });
+
+      await candidate.save();
+
+      res.json({
+        success: true,
+        message: 'Candidate rejection revoked and resubmitted successfully.',
+        data: candidate
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to revoke and resubmit candidate',
+        error: error.message
+      });
+    }
+  }
+);
+
+// Candidate Withdraw: Revoke admin shortlist (sent to company) and reset candidate status to ADMIN_REVIEW
+router.put(
+  '/candidates/:id/candidate-withdraw',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const candidate = await Candidate.findById(req.params.id);
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      if (candidate.status !== 'SUBMITTED' && candidate.status !== 'ADMIN_REJECTED') {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot withdraw action: candidate is currently in status "${candidate.status}".`
+        });
+      }
+
+      const { notes } = req.body;
+      const prevStatus = candidate.status;
+
+      candidate.status = 'ADMIN_REVIEW';
+      
+      // If it was a rejection, clean up rejection flags
+      if (prevStatus === 'ADMIN_REJECTED') {
+        candidate.rejectionReason = undefined;
+        candidate.rejectedBy = undefined;
+        candidate.rejectedAt = undefined;
+      }
+
+      candidate.statusHistory.push({
+        status: 'ADMIN_REVIEW',
+        changedBy: req.user?._id,
+        changedAt: new Date(),
+        notes: notes?.trim() || `Candidate withdrawn (from ${prevStatus}). Reset to Admin Review.`
+      });
+
+      await candidate.save();
+
+      res.json({
+        success: true,
+        message: 'Admin shortlist revoked successfully. Candidate reset to Pre-Screening Review.',
+        data: candidate
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to revoke admin shortlist',
+        error: error.message
+      });
+    }
+  }
+);
+router.put(
+  '/candidates/:id/revoke-admin-rejection',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const candidate = await Candidate.findById(req.params.id);
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      if (candidate.status !== 'ADMIN_REJECTED') {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot revoke admin rejection: candidate is currently in status "${candidate.status}", not ADMIN_REJECTED.`
+        });
+      }
+
+      const { notes } = req.body;
+
+      candidate.status = 'ADMIN_REVIEW';
+      candidate.rejectionReason = undefined;
+      candidate.rejectedBy = undefined;
+      candidate.rejectedAt = undefined;
+
+      candidate.statusHistory.push({
+        status: 'ADMIN_REVIEW',
+        changedBy: req.user?._id,
+        changedAt: new Date(),
+        notes: notes?.trim() || 'Admin pre-screening rejection revoked. Candidate reset to Screening Review.'
+      });
+
+      await candidate.save();
+
+      res.json({
+        success: true,
+        message: 'Admin rejection revoked successfully. Candidate reset to Pre-Screening Review.',
+        data: candidate
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to revoke admin rejection',
+        error: error.message
+      });
+    }
+  }
+);
+
 // Get all AI scoring logs for a candidate application
 router.get(
   '/scoring-logs/:applicationId',
@@ -562,7 +727,7 @@ router.get(
       const candidate = await Candidate.findById(req.params.id)
         .populate({
           path: 'job',
-          select: 'title uniqueId category location experienceLevel experienceRange salary skills education assignedTo',
+          select: 'title uniqueId category subCategory location experienceLevel experienceRange salary skills education assignedTo description requirements responsibilities commission vacancies applicationDeadline expectedJoiningDate employmentType',
           populate: { path: 'assignedTo', select: 'email role' }
         })
         .populate('submittedBy', 'firmName firstName lastName uniqueId metrics')
@@ -594,6 +759,44 @@ router.get(
       }
       */
 
+      const rawBreakdown = candidate.resumeAnalysis?.scoreBreakdown ? (candidate.resumeAnalysis.scoreBreakdown.toObject ? candidate.resumeAnalysis.scoreBreakdown.toObject() : JSON.parse(JSON.stringify(candidate.resumeAnalysis.scoreBreakdown))) : {};
+      const computedRelocate = candidate.willingToRelocate ?? candidate.profile?.willingToRelocate ?? candidate.resumeAnalysis?.aiData?.profile?.willingToRelocate ?? candidate.resumeAnalysis?.fullAnalysis?.screening?.locationFit?.willingToRelocate ?? candidate.resumeAnalysis?.fullAnalysis?.screening?.locationFit?.relocationWilling ?? null;
+
+      if (rawBreakdown && rawBreakdown.location) {
+        rawBreakdown.location.willingToRelocate = rawBreakdown.location.willingToRelocate ?? computedRelocate;
+      }
+
+      // Dynamic stability backfill for legacy records
+      if (rawBreakdown && candidate.profile) {
+        try {
+          const candidateScoringService = require('../services/candidateScoringService');
+          const computedStab = candidateScoringService._scoreStability({
+            jobHistory: candidate.profile?.jobHistory || candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
+            experience: candidate.profile?.experience || []
+          });
+
+          const needsBackfill = !rawBreakdown.stability || 
+            rawBreakdown.stability.last5YearAverageTenureYears === undefined || 
+            rawBreakdown.stability.detail === 'Requires resume analysis for accurate stability scoring' ||
+            (computedStab.detail !== 'Requires resume analysis for accurate stability scoring' && rawBreakdown.stability.detail?.includes('Requires resume analysis'));
+
+          if (needsBackfill) {
+            rawBreakdown.stability = {
+              score: (candidate.resumeAnalysis?.scoreBreakdown?.stability?.score && candidate.resumeAnalysis.scoreBreakdown.stability.score !== 60) ? candidate.resumeAnalysis.scoreBreakdown.stability.score : computedStab.score,
+              weight: 0.05,
+              totalAverageTenureYears: computedStab.totalAverageTenureYears,
+              last5YearAverageTenureYears: computedStab.last5YearAverageTenureYears,
+              averageTenureYears: computedStab.last5YearAverageTenureYears,
+              isJobHopper: computedStab.isJobHopper,
+              risk: computedStab.risk,
+              detail: computedStab.detail
+            };
+          }
+        } catch (stabErr) {
+          console.error('[ADMIN] Stability backfill failed:', stabErr.message);
+        }
+      }
+
       res.json({
         success: true,
         data: {
@@ -603,10 +806,11 @@ router.get(
             score: candidate.resumeAnalysis?.profileScore || 0,
             matchLevel: candidate.resumeAnalysis?.matchLevel || 'UNKNOWN',
             recommendation: candidate.resumeAnalysis?.recommendation,
-            breakdown: candidate.resumeAnalysis?.scoreBreakdown,
+            breakdown: rawBreakdown,
             flags: candidate.resumeAnalysis?.flags || [],
             advice: candidate.resumeAnalysis?.advice || [],
             aiParsedData: candidate.resumeAnalysis?.aiData,
+            parsed: candidate.resumeAnalysis?.parsed || false,
             resumeParsed: candidate.resumeAnalysis?.parsed || false
           }
         }
@@ -668,7 +872,9 @@ router.post(
         skills: candidate.profile?.skills || [],
         education: candidate.profile?.education || [],
         certifications: candidate.profile?.certifications || [],
-        languages: candidate.profile?.languages || []
+        languages: candidate.profile?.languages || [],
+        jobHistory: candidate.profile?.jobHistory || candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
+        experience: candidate.profile?.experience || candidate.profile?.jobHistory || []
       };
 
       const jobData = candidate.job?.toObject ? candidate.job.toObject() : candidate.job;
@@ -775,6 +981,26 @@ router.post(
         }
       };
 
+      // Build flags from validation
+      let flags = [];
+      if (validation.redFlags && validation.redFlags.length > 0) {
+        flags = flags.concat(validation.redFlags.map(f => ({
+          type: 'WARNING',
+          message: f
+        })));
+      }
+      if (validation.greenFlags && validation.greenFlags.length > 0) {
+        flags = flags.concat(validation.greenFlags.map(f => ({
+          type: 'SUCCESS',
+          message: f
+        })));
+      }
+
+      const advice = [
+        ...(rec.suggestedActions || []),
+        ...(rec.interviewFocusAreas || [])
+      ];
+
       // Update candidate's resume analysis
       candidate.resumeAnalysis = {
         parsed: true,
@@ -783,8 +1009,8 @@ router.post(
         matchLevel: fullAnalysis.matchLevel || 'UNKNOWN',
         recommendation: rec.decision || 'HOLD',
         scoreBreakdown,
-        flags: validation.redFlags?.map(msg => ({ type: 'RED', message: msg })) || [],
-        advice: rec.suggestedActions?.map(msg => ({ message: msg })) || []
+        flags,
+        advice
       };
 
       if (candidate.submissionMetadata) {
@@ -800,10 +1026,34 @@ router.post(
         candidate.profile.skills = result.data.profile.skills || candidate.profile.skills;
         candidate.profile.education = result.data.profile.education || candidate.profile.education;
         candidate.profile.languages = result.data.profile.languages || candidate.profile.languages;
-        candidate.profile.certifications = result.data.profile.certifications || candidate.profile.certifications;
+        // Normalize certifications: AI may return objects ({name, certificateId, validTill}), schema expects [String]
+        const rawCerts = result.data.profile.certifications;
+        if (Array.isArray(rawCerts) && rawCerts.length > 0) {
+          candidate.profile.certifications = rawCerts.map(c =>
+            typeof c === 'string' ? c : (c.name || c.title || c.certification || JSON.stringify(c))
+          );
+        }
+        candidate.profile.jobHistory = result.data.profile.jobHistory || candidate.profile.jobHistory;
+        candidate.profile.experience = result.data.profile.experience || candidate.profile.experience;
       }
 
       await candidate.save();
+
+      // Job history & analysis logging for manual re-score
+      const candidateProfile = result.data?.profile || {};
+      const jobHistory = candidateProfile.jobHistory || candidate.profile?.jobHistory || [];
+      console.log(`[RE-SCORE] 📋 Job History: ${jobHistory.length} job(s) found`);
+      jobHistory.forEach((jobItem, idx) => {
+        console.log(`   Job ${idx + 1}: ${jobItem.company || 'Unknown'} | ${jobItem.designation || 'Role'} | ${jobItem.fromYear || ''}-${jobItem.toYear || ''} (${jobItem.durationMonths || 0}mo)`);
+      });
+
+      console.log(`[RE-SCORE] ✅ AI Re-Scoring Complete:`);
+      console.log(`   📊 Final Score: ${scoring.finalAdjustedScore || 0}/100`);
+      console.log(`   🎯 Match Level: ${fullAnalysis.matchLevel || 'UNKNOWN'}`);
+      console.log(`   💡 Decision: ${rec.decision || 'HOLD'}`);
+      console.log(`   🔧 Skills Coverage: ${scoring.skillCoveragePercent || 0}%`);
+      console.log(`   ⚠️  Risk Penalty: ${scoring.riskPenalty || 0}`);
+      console.log(`[RE-SCORE] ✅ Candidate ${candidate._id} updated with new score`);
 
       // Return fully populated candidate details
       const updatedCandidate = await Candidate.findById(candidate._id)
@@ -997,5 +1247,9 @@ router.get('/pipeline/audit-log', adminGetPipelineAuditLog);
 // Resend interview consent (WhatsApp + Email) – Admin/Sub-admin
 const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
 router.post('/candidates/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
+
+// Screening Questions Admin endpoint
+const { getJobScreeningQuestionsForAdmin } = require('../controllers/adminController');
+router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForAdmin);
 
 module.exports = router;
