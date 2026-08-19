@@ -1333,6 +1333,46 @@ router.post(
 );
 
 /**
+ * @route  POST /api/admin/candidates/batch-run-ai-match
+ * @desc   Batch trigger AI resume matching for up to 5 candidates against JD1.
+ * @access Admin | Sub-Admin
+ */
+router.post(
+  '/candidates/batch-run-ai-match',
+  async (req, res) => {
+    try {
+      const { candidateIds, jobId } = req.body;
+
+      if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'candidateIds array (1 to 5 candidates) is required'
+        });
+      }
+
+      const candidateQueueService = require('../services/candidateQueueService');
+      const result = await candidateQueueService.runAIMatchForMultipleCandidates(
+        candidateIds,
+        jobId,
+        req.user._id
+      );
+
+      res.json({
+        success: true,
+        message: 'Batch AI matching completed successfully',
+        data: result
+      });
+    } catch (error) {
+      console.error('[ADMIN] batch-run-ai-match error:', error.message);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Batch AI matching failed'
+      });
+    }
+  }
+);
+
+/**
  * @route  GET /api/admin/candidates/:id/prescreen
  * @desc   Fetch pre-screen result for a candidate (standalone endpoint for detail panels).
  * @access Admin | Sub-Admin

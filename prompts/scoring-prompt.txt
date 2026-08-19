@@ -1,23 +1,29 @@
 RULES: Output ONLY valid JSON. Zero text outside JSON. All skill matching is derived from jobRequirements only. Never assume a default tech stack.
 COMPREHENSIVE CANDIDATE DATA: You MUST consider both the partner-reported Candidate Form Data (including skills, education, experience, languages, certifications, and write-up) and the extracted Resume Text. If a skill, certification, or language is listed in the form data or write-up, it MUST be counted as a candidate competency even if it is missing from the raw resume text.
 VERIFICATION & DISCREPANCY DETECTOR: Cross-verify all form data against the extracted resume. If there are major discrepancies (e.g. self-reported 5 years experience but resume shows only 2 years; self-reported certifications or degrees not appearing in the resume; or conflicting skills), list them under "inconsistencies" or "redFlags" in the validation object.
+
 # SKILL ALIAS MATCHING - apply to ALL domains:
 NOTE: All skills extracted from the JD only. Do NOT assume any default technology stack.
-1. IDENTICAL matches: React=ReactJS=React.js | Node.js=NodeJS=Node | MongoDB=Mongo=Mongoose | PostgreSQL=Postgres=pg | JavaScript=JS | MS Excel=Excel=Google Sheets | Tally=Tally ERP | Recruitment=Talent Acquisition=Hiring=Sourcing | Salesforce=SFDC | HRMS=HRM=HR Software | TypeScript=TS | C#=CSharp | AWS=Amazon Web Services | GCP=Google Cloud | CRM=Customer Relationship Management | SEO=Search Engine Optimization | B2B Sales=B2B | CA=Chartered Accountant | Payroll=Payroll Processing | Supply Chain=SCM
-2. SUPERSET (full match): Next.js=>React | NestJS=>Node.js+Express | TypeScript=>JavaScript
-3. PARTIAL match (0.7x for that skill only): PostgreSQL for MongoDB | Angular for React | LinkedIn Recruiter for CRM
-4. NEVER match: Java!=JavaScript | Angular!=React | Manual testing!=Automation testing | C!=C# | C!=C++
+1. IDENTICAL matches: React=ReactJS=React.js | Node.js=NodeJS=Node | MongoDB=Mongo=Mongoose | PostgreSQL=Postgres=pg | JavaScript=JS | MS Excel=Excel=Google Sheets | Tally=Tally ERP | Recruitment=Talent Acquisition=Hiring=Sourcing | Salesforce=SFDC | HRMS=HRM=HR Software | TypeScript=TS | C#=CSharp | AWS=Amazon Web Services | GCP=Google Cloud | CRM=Customer Relationship Management | SEO=Search Engine Optimization | B2B Sales=B2B | CA=Chartered Accountant | Payroll=Payroll Processing | Supply Chain=SCM | Python=Py | Java=J2EE | Docker=Containers | Kubernetes=K8s | CI/CD=DevOps | Azure=Microsoft Azure | Angular=AngularJS | Figma=UI/UX Design | REST API=Microservices
+2. SUPERSET (full match): Next.js=>React | NestJS=>Node.js+Express | TypeScript=>JavaScript | Express.js=>Node.js | PyTorch=>Python | Spring Boot=>Java | TailwindCSS=>CSS
+3. PARTIAL match (0.7x for that skill only): PostgreSQL for MongoDB | Angular for React | LinkedIn Recruiter for CRM | MySQL for PostgreSQL | Vue.js for React
+4. NEVER match: Java!=JavaScript | Angular!=React | Manual testing!=Automation testing | C!=C# | C!=C++ | Python!=PHP | PHP!=Ruby | Swift!=Kotlin
+
 # COMPREHENSIVE SKILL EXTRACTION & MATCHING PROTOCOL:
 1. CANDIDATE SKILL EXTRACTION: Scan entire Resume Text AND Candidate Form Data. Extract ALL skills, tools, frameworks, and technologies into candidateProfile.skills.
 2. For EVERY skill in the Job Description, classify into: rankingSignals.mustHaveSkillsMatched: Must-have skills found in candidate profile (alias rules apply), rankingSignals.mustHaveSkillsMissing: Must-have skills NOT found, rankingSignals.shouldHaveSkillsMatched: Preferred / should-have skills found, rankingSignals.niceToHaveSkillsMatched: Nice-to-have skills found.
 # JOB HISTORY EXTRACTION:
 For EACH role in jobHistory, extract: company, designation, fromYear, fromMonth (1-12), toYear, toMonth (1-12), ongoing (true/false), and domain. (The backend calculates exact durations and stability deterministically from these dates).
-# Candidate:
+
+# TARGET JOB DESCRIPTION (SPECIFICATION):
+{{jobDescription}}
+
+# CANDIDATE DATA & RESUME TO EVALUATE:
 name: {{firstName}} {{lastName}} | email: {{email}} | mobile: {{mobile}}
 location: {{location}} | relocate: {{willingToRelocate}},totalExp:{{totalExperience}}yr | relevantExp:{{relevantExperience}}yr | notice:{{noticePeriod}},currentSalary: {{currentSalary}} | expectedSalary: {{expectedSalary}},skills: {{partnerReportedSkills}},education: {{partnerReportedEducation}},certifications: {{partnerReportedCertifications}},languages: {{partnerReportedLanguages}},writeup: {{candidateWriteup}}
 # Resume:{{resumeText}}
-# Job Description: {{jobDescription}}
-# OUTPUT JSON (strict - no extra keys, no comments):
+
+# OUTPUT JSON (strict):
 {"candidateProfile":{
  "extractedName":"name or Not Found","extractedEmail":"email or Not Found","extractedMobile":"mobile or Not Found","currentCompany":"company or Not Found","currentDesignation":"title or Not Found",
  "skills":["skill1","skill2"],

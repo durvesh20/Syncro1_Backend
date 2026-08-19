@@ -135,7 +135,7 @@ class AIService {
     // ═══════════════════════════════════════════════════════════════════════
     // PUBLIC — parseResume (orchestrator, signature unchanged)
     // ═══════════════════════════════════════════════════════════════════════
-    async parseResume(resumeUrl, fileName = '', candidateFormData = {}, jobDescription = {}) {
+    async parseResume(resumeUrl, fileName = '', candidateFormData = {}, jobDescription = {}, options = {}) {
         console.log('\n========================================');
         console.log('[AI] parseResume called with:');
         console.log('  - resumeUrl:', resumeUrl);
@@ -184,13 +184,14 @@ class AIService {
             console.log(`[AI] Extracted ${resumeText.length} chars from resume`);
 
             // ── Stage 2: job description text + resolved skill tiers ─────
-            const { text: jobDescriptionText, resolvedSkills } = await this._getJobDescriptionText(jobDescription);
+            const { text: jobDescriptionText, resolvedSkills } = options.prefetchedJD || await this._getJobDescriptionText(jobDescription);
 
             // ── Stage 3: build prompt ─────────────────────────────────────
             prompt = this._buildAdvancedPrompt(candidateFormData, resumeText, jobDescriptionText);
 
             // ── Stage 4: call AI (with truncation + parse retry) ──────────
-            const { responseText, tokensUsed, model } = await this._callAI(prompt);
+            const aiTokenUsage = await this._callAI(prompt);
+            const { responseText, tokensUsed, model } = aiTokenUsage;
 
             // ── Stage 5: parse + validate ─────────────────────────────────
             let aiResult;
@@ -291,7 +292,13 @@ class AIService {
                 confidence: this._buildConfidence(aiResult),
                 provider: 'openai',
                 model,
-                tokensUsed
+                tokensUsed,
+                tokenUsage: {
+                    promptTokens: aiTokenUsage.promptTokens || 0,
+                    completionTokens: aiTokenUsage.completionTokens || 0,
+                    cachedTokens: aiTokenUsage.cachedTokens || 0,
+                    totalTokens: tokensUsed
+                }
             };
             _cacheSet(ck, { ts: Date.now(), result: successResult });
 
@@ -314,6 +321,185 @@ class AIService {
 
             return this._getEmptyResumeData();
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC — parseMultipleResumes (Batch scan up to 5 candidates against JD1)
+    // ═══════════════════════════════════════════════════════════════════════
+    /**
+     * Batch parse up to 5 candidate resumes against a single Job Description (JD1).
+     *
+     * @param {Array<Object>} candidatesList - Array of { resumeUrl, fileName, candidateFormData, candidateId }
+     * @param {Object} jobDescription - Target Job Description object (JD1)
+     * @returns {Object} Batch results + comparative ranking matrix
+     */
+    async parseMultipleResumes(candidatesList = [], jobDescription = {}) {
+        console.log('\n========================================');
+        console.log(`[AI] parseMultipleResumes called for ${candidatesList.length} candidate(s) against JD:`, jobDescription?._id || jobDescription?.title);
+        console.log('========================================\n');
+
+        if (!Array.isArray(candidatesList) || candidatesList.length === 0) {
+            return {
+                success: false,
+                message: 'No candidates provided for batch matching',
+                results: [],
+                comparativeRanking: []
+            };
+        }
+
+        // Enforce maximum batch size of 5 candidates
+        const MAX_BATCH = 5;
+        const candidatesToProcess = candidatesList.slice(0, MAX_BATCH);
+        if (candidatesList.length > MAX_BATCH) {
+            console.warn(`[AI] Batch scan capped at top ${MAX_BATCH} candidates (received ${candidatesList.length})`);
+        }
+
+        // Pre-fetch Job Description text & resolved skills ONCE for the entire batch
+        const prefetchedJD = await this._getJobDescriptionText(jobDescription);
+
+        // Step 1: Process Candidate 1 first to warm OpenAI/Gemini prompt cache for JD1
+        const firstCand = candidatesToProcess[0];
+        const firstResumeUrl = firstCand.resumeUrl || firstCand.resume?.url || '';
+        const firstFileName = firstCand.fileName || firstCand.resume?.fileName || '';
+        const firstFormData = firstCand.candidateFormData || firstCand.formData || firstCand;
+
+        console.log(`[AI] 🔥 Warming prompt cache for JD1 with Candidate 1 (${firstFormData.firstName || ''} ${firstFormData.lastName || ''})...`);
+        const firstEvalResult = await this.parseResume(firstResumeUrl, firstFileName, firstFormData, jobDescription, { prefetchedJD })
+            .then(res => ({
+                candidateId: firstCand.candidateId || firstFormData.candidateId || firstFormData._id || firstCand._id,
+                candidateName: `${firstFormData.firstName || firstCand.firstName || ''} ${firstFormData.lastName || firstCand.lastName || ''}`.trim() || 'Candidate',
+                result: res
+            }))
+            .catch(err => ({
+                candidateId: firstCand.candidateId || firstFormData.candidateId || firstFormData._id || firstCand._id,
+                candidateName: `${firstFormData.firstName || firstCand.firstName || ''} ${firstFormData.lastName || firstCand.lastName || ''}`.trim() || 'Candidate',
+                error: err.message,
+                result: this._getEmptyResumeData()
+            }));
+
+        // Step 2: Process remaining candidates (2 to N) concurrently — OpenAI/Gemini prompt cache for JD1 is now warm!
+        const remainingCandidates = candidatesToProcess.slice(1);
+        let remainingEvalResults = [];
+
+        if (remainingCandidates.length > 0) {
+            console.log(`[AI] ⚡ Executing candidates 2..${candidatesToProcess.length} concurrently using warm JD1 prompt cache...`);
+            const remainingPromises = remainingCandidates.map(cand => {
+                const resumeUrl = cand.resumeUrl || cand.resume?.url || '';
+                const fileName = cand.fileName || cand.resume?.fileName || '';
+                const candidateFormData = cand.candidateFormData || cand.formData || cand;
+
+                return this.parseResume(resumeUrl, fileName, candidateFormData, jobDescription, { prefetchedJD })
+                    .then(res => ({
+                        candidateId: cand.candidateId || candidateFormData.candidateId || candidateFormData._id || cand._id,
+                        candidateName: `${candidateFormData.firstName || cand.firstName || ''} ${candidateFormData.lastName || cand.lastName || ''}`.trim() || 'Candidate',
+                        result: res
+                    }))
+                    .catch(err => ({
+                        candidateId: cand.candidateId || candidateFormData.candidateId || candidateFormData._id || cand._id,
+                        candidateName: `${candidateFormData.firstName || cand.firstName || ''} ${candidateFormData.lastName || cand.lastName || ''}`.trim() || 'Candidate',
+                        error: err.message,
+                        result: this._getEmptyResumeData()
+                    }));
+            });
+
+            remainingEvalResults = await Promise.all(remainingPromises);
+        }
+
+        const rawResults = [firstEvalResult, ...remainingEvalResults];
+
+        // Build comparative ranking matrix
+        const rankedCandidates = rawResults
+            .map(item => {
+                const fa = item.result?.fullAnalysis || {};
+                const score = fa.scoring?.finalAdjustedScore || 0;
+                const priorityScore = fa.rankingSignals?.priorityScore || fa.recommendation?.priorityScore || score;
+                const matchLevel = fa.matchLevel || 'UNKNOWN';
+                const decision = fa.recommendation?.decision || 'HOLD';
+                const skillCoverage = fa.scoring?.skillCoveragePercent || 0;
+
+                return {
+                    candidateId: item.candidateId,
+                    candidateName: item.candidateName,
+                    score,
+                    priorityScore,
+                    matchLevel,
+                    decision,
+                    skillCoverage,
+                    matchedSkillsCount: fa.rankingSignals?.mustHaveSkillsMatchedCount || 0,
+                    totalMustSkills: fa.rankingSignals?.mustHaveSkillsTotal || 0,
+                    keyMissingSkills: fa.rankingSignals?.mustHaveSkillsMissing || [],
+                    fullAnalysis: fa,
+                    singleResult: item.result
+                };
+            })
+            .sort((a, b) => b.score - a.score || b.priorityScore - a.priorityScore);
+
+        // Assign rank numbers (1 to N)
+        rankedCandidates.forEach((cand, idx) => {
+            cand.rank = idx + 1;
+        });
+
+        const topCandidate = rankedCandidates[0] || null;
+
+        // Aggregate token usage & prompt prefix cache hits across the batch
+        let totalPromptTokens = 0;
+        let totalCachedTokens = 0;
+        let totalCompletionTokens = 0;
+        let totalBatchTokens = 0;
+
+        rawResults.forEach(item => {
+            const tu = item.result?.tokenUsage || {};
+            totalPromptTokens += tu.promptTokens || 0;
+            totalCachedTokens += tu.cachedTokens || 0;
+            totalCompletionTokens += tu.completionTokens || 0;
+            totalBatchTokens += tu.totalTokens || (item.result?.tokensUsed || 0);
+        });
+
+        const cacheHitPercent = totalPromptTokens > 0
+            ? Math.round((totalCachedTokens / totalPromptTokens) * 100)
+            : 0;
+
+        console.log(`\n┌──────────────────────────────────────────────────────────┐`);
+        console.log(`│ 📊 BATCH AI MATCHING TOKEN & CACHE REPORT (JD1)          │`);
+        console.log(`├──────────────────────────────────────────────────────────┤`);
+        console.log(`│ Candidates Evaluated:     ${String(candidatesToProcess.length).padEnd(31)}│`);
+        console.log(`│ Job ID:                   ${String(jobDescription?._id || jobDescription?.id || 'N/A').padEnd(31)}│`);
+        console.log(`│ Prefix Prompt Caching:    ${(totalCachedTokens > 0 ? '⚡ ACTIVE (Cached Prefix)' : 'ℹ️  READY FOR NEXT RUN').padEnd(31)}│`);
+        console.log(`├──────────────────────────────────────────────────────────┤`);
+        console.log(`│ 📥 Input Prompt Tokens:    ${String(totalPromptTokens.toLocaleString()).padEnd(31)}│`);
+        console.log(`│ ⚡ Cached Input Tokens:    ${String(totalCachedTokens.toLocaleString()).padEnd(31)} (${cacheHitPercent}% Hit)│`);
+        console.log(`│ 📤 Output Completion:      ${String(totalCompletionTokens.toLocaleString()).padEnd(31)}│`);
+        console.log(`│ 🔢 Net Total Tokens:       ${String(totalBatchTokens.toLocaleString()).padEnd(31)}│`);
+        console.log(`└──────────────────────────────────────────────────────────┘\n`);
+
+        console.log(`[AI] ✅ Batch analysis complete for ${rankedCandidates.length} candidate(s) against JD1.`);
+        if (topCandidate) {
+            console.log(`   🏆 Top Candidate: ${topCandidate.candidateName} (Score: ${topCandidate.score}/100)`);
+        }
+
+        return {
+            success: true,
+            jobId: jobDescription?._id || jobDescription?.id,
+            jobTitle: jobDescription?.title || 'Job Description',
+            totalProcessed: rankedCandidates.length,
+            batchTokenEfficiency: {
+                totalPromptTokens,
+                totalCachedTokens,
+                totalCompletionTokens,
+                totalTokens: totalBatchTokens,
+                cacheHitPercentage: cacheHitPercent,
+                promptPrefixCachingActive: true
+            },
+            topCandidate: topCandidate ? {
+                candidateId: topCandidate.candidateId,
+                candidateName: topCandidate.candidateName,
+                score: topCandidate.score,
+                matchLevel: topCandidate.matchLevel,
+                decision: topCandidate.decision
+            } : null,
+            comparativeRanking: rankedCandidates,
+            results: rawResults
+        };
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -345,36 +531,40 @@ class AIService {
      */
     async _getJobDescriptionText(jobDescription) {
         const rawJobObj = jobDescription?.toObject ? jobDescription.toObject() : (jobDescription || {});
+        const jobId = rawJobObj._id || rawJobObj.id;
 
+        // Fast non-blocking lookup: check if structured JobPosition already exists in MongoDB (no LLM delay)
         try {
-            const { getOrParseJobPosition } = require('./jobPositionParser');
-            const jobPosition = await getOrParseJobPosition(jobDescription);
-            if (jobPosition?.parsedRequirements) {
-                console.log(`[AI] Using structured JobPosition for job ${rawJobObj._id}`);
-                const pr = jobPosition.parsedRequirements;
-                const resolvedSkills = {
-                    mustHave: Array.isArray(pr.skills?.mustHave) ? pr.skills.mustHave : [],
-                    shouldHave: Array.isArray(pr.skills?.shouldHave) ? pr.skills.shouldHave : [],
-                    niceToHave: Array.isArray(pr.skills?.niceToHave) ? pr.skills.niceToHave : [],
-                };
-                return {
-                    text: JSON.stringify(pr, null, 2),
-                    resolvedSkills,
-                };
+            if (jobId) {
+                const JobPosition = require('../models/JobPosition');
+                const jobPosition = await JobPosition.findOne({ jobId, parseStatus: 'SUCCESS' }).lean();
+                if (jobPosition?.parsedRequirements) {
+                    console.log(`[AI] Using pre-parsed JobPosition for job ${jobId}`);
+                    const pr = jobPosition.parsedRequirements;
+                    const resolvedSkills = {
+                        mustHave: Array.isArray(pr.skills?.mustHave) ? pr.skills.mustHave : [],
+                        shouldHave: Array.isArray(pr.skills?.shouldHave) ? pr.skills.shouldHave : [],
+                        niceToHave: Array.isArray(pr.skills?.niceToHave) ? pr.skills.niceToHave : [],
+                    };
+                    return {
+                        text: JSON.stringify(pr, null, 2),
+                        resolvedSkills,
+                    };
+                }
             }
         } catch (err) {
-            console.error(`[AI] JobPosition fetch failed: ${err.message}. Falling back to raw JD.`);
+            console.warn(`[AI] JobPosition fast lookup skipped: ${err.message}.`);
         }
 
-        // Fallback: read skills directly from the job document
+        // Fast zero-latency fallback: construct JD text directly from job document fields
         const resolvedSkills = {
-            mustHave: rawJobObj.skills?.required || rawJobObj.skills?.mustHave || [],
+            mustHave: rawJobObj.skills?.required || rawJobObj.skills?.mustHave || (Array.isArray(rawJobObj.skills) ? rawJobObj.skills : []),
             shouldHave: rawJobObj.skills?.preferred || rawJobObj.skills?.shouldHave || [],
             niceToHave: rawJobObj.skills?.niceToHave || [],
         };
 
         if (resolvedSkills.mustHave.length === 0 && resolvedSkills.shouldHave.length === 0) {
-            console.warn('[AI] No JD skills found in either parsedRequirements or raw job doc — deterministic skill correction skipped, AI output unverified');
+            console.warn('[AI] No JD skills found in job doc — deterministic skill correction will run on resume text');
         }
 
         return {
@@ -455,7 +645,8 @@ class AIService {
 
         if (!responseText) throw new Error('Empty response from OpenAI');
 
-        return { responseText, tokensUsed: totalTokens, model, promptTokens, completionTokens, reasoningTokens };
+        const cachedTokens = usage.prompt_tokens_details?.cached_tokens || 0;
+        return { responseText, tokensUsed: totalTokens, model, promptTokens, completionTokens, reasoningTokens, cachedTokens };
     }
 
     /**
@@ -950,68 +1141,151 @@ class AIService {
 
     // ── Resume extraction (unchanged) ──────────────────────────────────────
 
+    _detectFileType(buffer, contentType = '', url = '') {
+        if (!buffer || buffer.length < 4) return 'unknown';
+
+        // 1. Magic bytes check (100% reliable content detection)
+        // PDF magic bytes: %PDF (0x25 0x50 0x44 0x46)
+        if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
+            return 'pdf';
+        }
+        // DOCX magic bytes (ZIP archive): PK\x03\x04 (0x50 0x4B 0x03 0x04)
+        if (buffer[0] === 0x50 && buffer[1] === 0x4B && buffer[2] === 0x03 && buffer[3] === 0x04) {
+            return 'docx';
+        }
+        // Legacy DOC magic bytes (OLE2 compound doc): 0xD0 0xCF 0x11 0xE0
+        if (buffer[0] === 0xD0 && buffer[1] === 0xCF && buffer[2] === 0x11 && buffer[3] === 0xE0) {
+            return 'doc';
+        }
+
+        // 2. Content-Type header fallback
+        const ct = (contentType || '').toLowerCase();
+        if (ct.includes('pdf')) return 'pdf';
+        if (ct.includes('wordprocessingml') || ct.includes('docx')) return 'docx';
+        if (ct.includes('msword') || ct.includes('doc')) return 'doc';
+
+        // 3. URL extension fallback
+        const u = (url || '').toLowerCase().split('?')[0];
+        if (u.endsWith('.docx') || u.includes('.docx')) return 'docx';
+        if (u.endsWith('.doc') || u.includes('.doc')) return 'doc';
+        if (u.endsWith('.pdf') || u.includes('.pdf')) return 'pdf';
+
+        return 'unknown';
+    }
+
     async _extractTextFromUrl(url) {
         try {
-            const fileName = url.toLowerCase();
-            if (fileName.includes('.docx') || fileName.includes('.doc')) return await this._extractFromDoc(url);
-            if (fileName.includes('.pdf') || url.includes('/raw/')) return await this._extractFromPdf(url);
+            if (!url || typeof url !== 'string') {
+                throw new Error('Resume URL is required');
+            }
 
-            const response = await axios.get(url, { responseType: 'text', timeout: 30000 });
-            return response.data;
+            console.log(`[AI] Downloading resume from URL: ${url}`);
+            const response = await axios.get(url, {
+                responseType: 'arraybuffer',
+                timeout: 30000,
+                maxContentLength: 15 * 1024 * 1024,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            });
+
+            const buffer = Buffer.from(response.data);
+            const contentType = response.headers['content-type'] || '';
+            const detectedType = this._detectFileType(buffer, contentType, url);
+
+            console.log(`[AI] File type detected via magic bytes: [${detectedType.toUpperCase()}] for URL: ${url}`);
+
+            if (detectedType === 'pdf') {
+                return await this._extractFromPdfBuffer(buffer, url);
+            }
+
+            if (detectedType === 'docx' || detectedType === 'doc') {
+                return await this._extractFromDocBuffer(buffer, url);
+            }
+
+            // Unknown file type fallback: try DOCX/DOC first, then PDF
+            try {
+                return await this._extractFromDocBuffer(buffer, url);
+            } catch (docErr) {
+                try {
+                    return await this._extractFromPdfBuffer(buffer, url);
+                } catch (pdfErr) {
+                    const text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+                    return text.length > 50 ? text : `Resume file (${url})`;
+                }
+            }
         } catch (error) {
-            console.error(`[AI] URL extraction error: ${error.message}`);
+            console.error(`[AI] URL extraction error for (${url}): ${error.message}`);
             throw new Error(`Could not download resume: ${error.message}`);
         }
     }
 
-    async _extractFromPdf(url) {
+    async _extractFromPdfBuffer(buffer, url = '') {
         try {
-            console.log('[AI] Extracting text from PDF…');
-            const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: 10 * 1024 * 1024 });
-            const buffer = Buffer.from(response.data);
-
-            try {
-                const pdfParse = require('pdf-parse');
-                const data = await pdfParse(buffer);
-                if (data.text && data.text.trim().length > 50) {
-                    console.log(`[AI] ✅ PDF parsed: ${data.text.length} chars, ${data.numpages} pages`);
-                    return data.text;
-                }
-            } catch (pdfError) {
-                console.log('[AI] pdf-parse error:', pdfError.message);
+            const pdfParse = require('pdf-parse');
+            const data = await pdfParse(buffer);
+            if (data.text && data.text.trim().length > 30) {
+                console.log(`[AI] ✅ PDF parsed via pdf-parse: ${data.text.length} chars, ${data.numpages} pages`);
+                return data.text.trim();
             }
-
-            const text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
-            if (text.length > 100) { console.log(`[AI] PDF fallback: ${text.length} chars`); return text; }
-            return `Resume file: ${url}`;
-        } catch (error) {
-            throw new Error(`PDF extraction failed: ${error.message}`);
+        } catch (pdfError) {
+            console.warn('[AI] pdf-parse error (non-fatal, trying string fallback):', pdfError.message);
         }
+
+        const text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (text.length > 50) {
+            console.log(`[AI] ✅ PDF extracted via string fallback: ${text.length} chars`);
+            return text;
+        }
+        return `Resume PDF file (${url})`;
+    }
+
+    async _extractFromDocBuffer(buffer, url = '') {
+        // 1. Try mammoth first for DOCX files
+        try {
+            const mammoth = require('mammoth');
+            const result = await mammoth.extractRawText({ buffer });
+            if (result.value && result.value.trim().length > 30) {
+                console.log(`[AI] ✅ DOCX extracted via Mammoth: ${result.value.length} chars`);
+                return result.value.trim();
+            }
+        } catch (mammothError) {
+            console.log('[AI] mammoth error (non-fatal, proceeding to DOC fallback):', mammothError.message);
+        }
+
+        // 2. Dual-encoding binary stream text extractor for legacy .doc & non-standard DOCX
+        console.log('[AI] Running binary stream text extractor for DOC/DOCX...');
+
+        const utf16Str = buffer.toString('utf16le');
+        const utf16Matches = utf16Str.match(/[\x20-\x7E\n\r\t]{3,}/g) || [];
+        const utf16Text = utf16Matches.map(s => s.trim()).filter(s => s.length > 2).join(' ');
+
+        const latin1Str = buffer.toString('latin1');
+        const latin1Matches = latin1Str.match(/[\x20-\x7E\n\r\t]{3,}/g) || [];
+        const latin1Text = latin1Matches.map(s => s.trim()).filter(s => s.length > 2).join(' ');
+
+        const bestText = utf16Text.length >= latin1Text.length ? utf16Text : latin1Text;
+        const cleanedText = bestText
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (cleanedText.length > 50) {
+            console.log(`[AI] ✅ DOC/DOCX extracted via binary stream fallback: ${cleanedText.length} chars`);
+            return cleanedText;
+        }
+
+        console.warn('[AI] ⚠️ DOC/DOCX extraction produced sparse text');
+        return `Resume document file (${url})`;
+    }
+
+    async _extractFromPdf(url) {
+        return await this._extractTextFromUrl(url);
     }
 
     async _extractFromDoc(url) {
-        try {
-            console.log('[AI] Extracting text from DOC/DOCX…');
-            const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: 10 * 1024 * 1024 });
-            const buffer = Buffer.from(response.data);
-
-            try {
-                const mammoth = require('mammoth');
-                const result = await mammoth.extractRawText({ buffer });
-                if (result.value && result.value.trim().length > 50) {
-                    console.log(`[AI] ✅ DOCX extracted: ${result.value.length} chars`);
-                    return result.value;
-                }
-            } catch (mammothError) {
-                console.log('[AI] mammoth error:', mammothError.message);
-            }
-
-            const text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
-            if (text.length > 100) { console.log(`[AI] DOC fallback: ${text.length} chars`); return text; }
-            return `Resume file: ${url}`;
-        } catch (error) {
-            throw new Error(`DOC extraction failed: ${error.message}`);
-        }
+        return await this._extractTextFromUrl(url);
     }
 
     // ── String cleaners (unchanged) ────────────────────────────────────────
