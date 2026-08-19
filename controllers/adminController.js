@@ -9,6 +9,7 @@ const { parseJobPosition } = require('../services/jobPositionParser');
 const { PERMISSIONS } = require('../utils/permissions');
 const emailService = require('../services/emailService');
 const auditService = require('../services/auditService');
+const notifyCRM = require('../utils/notifyCRM');
 const hasPermission = (user, permission) => {
   if (!user) return false;
   if (user.role === 'admin') return true;
@@ -493,6 +494,19 @@ exports.verifyPartner = async (req, res) => {
     await partner.save();
     await user.save();
 
+    // ── CRM: Partner Approved / Rejected ─────────────────────────────
+    try {
+        const partnerUser = await User.findById(partner.user)
+        if (partnerUser) {
+            if (action === 'approve') {
+                notifyCRM.partnerApproved(partnerUser, partner)
+            } else {
+                notifyCRM.partnerRejected(partnerUser, partner, rejectionReason)
+            }
+        }
+    } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
+
     await auditService.log({
       actor: req.user._id,
       actorRole: req.user.role,
@@ -597,6 +611,20 @@ exports.verifyCompany = async (req, res) => {
 
     await company.save();
     await user.save();
+
+    // ── CRM: Company Approved / Rejected ─────────────────────────────
+    try {
+        const companyUser = await User.findById(company.user)
+        if (companyUser) {
+            if (action === 'approve') {
+                notifyCRM.companyApproved(companyUser, company)
+            } else {
+                notifyCRM.companyRejected(companyUser, company, rejectionReason)
+            }
+        }
+    } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
+
     await auditService.log({
       actor: req.user._id,
       actorRole: req.user.role,

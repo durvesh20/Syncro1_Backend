@@ -2,6 +2,8 @@
 const StaffingPartner = require('../models/StaffingPartner');
 const User = require('../models/User');
 const { validateEmail, validateMobile, validateGST, validatePAN } = require('../utils/validators');
+const notifyCRM = require('../utils/notifyCRM')
+
 
 // Helper function to get completed fields
 const getCompletedFields = (partner, fields) => {
@@ -120,27 +122,45 @@ exports.saveStep = async (req, res) => {
     try {
         const stepNumber = parseInt(req.params.stepNumber);
 
+        let stepResult;
+
         switch (stepNumber) {
             case 1:
-                return exports.updateBasicInfo(req, res);
+                stepResult = await exports.updateBasicInfo(req, res, true);
+                break;
             case 2:
-                return exports.updateFirmDetails(req, res);
+                stepResult = await exports.updateFirmDetails(req, res, true);
+                break;
             case 3:
-                return exports.updateSyncro1Competency(req, res);
+                stepResult = await exports.updateSyncro1Competency(req, res, true);
+                break;
             case 4:
-                return exports.updateGeographicReach(req, res);
+                stepResult = await exports.updateGeographicReach(req, res, true);
+                break;
             case 5:
-                return exports.updateCompliance(req, res);
+                stepResult = await exports.updateCompliance(req, res, true);
+                break;
             case 6:
-                return exports.updateCommercialDetails(req, res);
+                stepResult = await exports.updateCommercialDetails(req, res, true);
+                break;
             case 7:
-                return exports.updateDocuments(req, res);
+                stepResult = await exports.updateDocuments(req, res, true);
+                break;
             default:
                 return res.status(400).json({
                     success: false,
                     message: 'Invalid step number'
                 });
         }
+
+        // ── CRM: Profile Step Saved ───────────────────────────────
+        if (stepResult && stepResult.partner) {
+            try {
+                notifyCRM.partnerProfileStep(req.user, stepResult.partner)
+            } catch (e) { /* non-critical */ }
+        }
+        // ─────────────────────────────────────────────────────────
+
     } catch (error) {
         res.status(500).json({
             success: false,
@@ -151,7 +171,7 @@ exports.saveStep = async (req, res) => {
 };
 
 // Step 1: Update Basic Info
-exports.updateBasicInfo = async (req, res) => {
+exports.updateBasicInfo = async (req, res, internal = false) => {
     try {
         const { firstName, lastName, firmName, designation, linkedinProfile, city, state } = req.body;
 
@@ -170,6 +190,10 @@ exports.updateBasicInfo = async (req, res) => {
             { new: true }
         );
 
+        if (internal) {
+            return { partner };
+        }
+
         res.json({
             success: true,
             message: 'Basic information saved',
@@ -185,7 +209,7 @@ exports.updateBasicInfo = async (req, res) => {
 };
 
 // Step 2: Update Firm Details
-exports.updateFirmDetails = async (req, res) => {
+exports.updateFirmDetails = async (req, res, internal = false) => {
     try {
         const partner = await StaffingPartner.findOneAndUpdate(
             { user: req.user._id },
@@ -195,6 +219,10 @@ exports.updateFirmDetails = async (req, res) => {
             },
             { new: true }
         );
+
+        if (internal) {
+            return { partner };
+        }
 
         res.json({
             success: true,
@@ -211,7 +239,7 @@ exports.updateFirmDetails = async (req, res) => {
 };
 
 // Step 3: Update Syncro1 Competency
-exports.updateSyncro1Competency = async (req, res) => {
+exports.updateSyncro1Competency = async (req, res, internal = false) => {
     try {
         const partner = await StaffingPartner.findOneAndUpdate(
             { user: req.user._id },
@@ -221,6 +249,10 @@ exports.updateSyncro1Competency = async (req, res) => {
             },
             { new: true }
         );
+
+        if (internal) {
+            return { partner };
+        }
 
         res.json({
             success: true,
@@ -237,7 +269,7 @@ exports.updateSyncro1Competency = async (req, res) => {
 };
 
 // Step 4: Update Geographic Reach
-exports.updateGeographicReach = async (req, res) => {
+exports.updateGeographicReach = async (req, res, internal = false) => {
     try {
         const partner = await StaffingPartner.findOneAndUpdate(
             { user: req.user._id },
@@ -247,6 +279,10 @@ exports.updateGeographicReach = async (req, res) => {
             },
             { new: true }
         );
+
+        if (internal) {
+            return { partner };
+        }
 
         res.json({
             success: true,
@@ -263,7 +299,7 @@ exports.updateGeographicReach = async (req, res) => {
 };
 
 // Step 5: Update Compliance
-exports.updateCompliance = async (req, res) => {
+exports.updateCompliance = async (req, res, internal = false) => {
     try {
         const {
             syncrotechAgreement,
@@ -315,6 +351,10 @@ exports.updateCompliance = async (req, res) => {
             { new: true }
         );
 
+        if (internal) {
+            return { partner };
+        }
+
         res.json({
             success: true,
             message: 'Compliance details saved',
@@ -330,7 +370,7 @@ exports.updateCompliance = async (req, res) => {
 };
 
 // Step 6: Update Commercial Details
-exports.updateCommercialDetails = async (req, res) => {
+exports.updateCommercialDetails = async (req, res, internal = false) => {
     try {
         const partner = await StaffingPartner.findOneAndUpdate(
             { user: req.user._id },
@@ -340,6 +380,10 @@ exports.updateCommercialDetails = async (req, res) => {
             },
             { new: true }
         );
+
+        if (internal) {
+            return { partner };
+        }
 
         res.json({
             success: true,
@@ -356,7 +400,7 @@ exports.updateCommercialDetails = async (req, res) => {
 };
 
 // Step 7: Update Documents
-exports.updateDocuments = async (req, res) => {
+exports.updateDocuments = async (req, res, internal = false) => {
     try {
         const partner = await StaffingPartner.findOneAndUpdate(
             { user: req.user._id },
@@ -366,6 +410,10 @@ exports.updateDocuments = async (req, res) => {
             },
             { new: true }
         );
+
+        if (internal) {
+            return { partner };
+        }
 
         res.json({
             success: true,

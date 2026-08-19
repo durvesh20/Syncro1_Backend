@@ -12,6 +12,7 @@ const JobInterest = require('../models/JobInterest');
 const InterviewSlot = require('../models/InterviewSlot');
 const candidateQueueService = require('../services/candidateQueueService');
 const whatsappService = require('../services/whatsappService');
+const notifyCRM = require('../utils/notifyCRM');
 const { transition, ACTIONS, PIPELINE_STATES } = require('../services/pipelineStateMachine');
 
 // ============================================================
@@ -317,7 +318,7 @@ exports.updateCompliance = async (req, res) => {
       'candidateConsentPolicy',
       'nonCircumventionClause',
       'commissionPayoutTerms',
-      'replacementBackoutLiability'   
+      'replacementBackoutLiability'
     ];
 
     const allAccepted = requiredClauses.every(
@@ -846,9 +847,14 @@ exports.submitProfile = async (req, res) => {
     partner.verificationStatus = 'UNDER_REVIEW';
     partner.submittedAt = new Date();
     await partner.save();
-
     user.status = 'UNDER_VERIFICATION';
     await user.save();
+
+    // ── CRM: Partner Profile Submitted ─────────────────────────────
+    try {
+      notifyCRM.partnerProfileSubmitted(user, partner)
+    } catch (e) { /* non-critical */ }
+    // ─────────────────────────────────────────────────────────
 
     // Send agreement copy email (fire and forget)
     const sendAgreementEmail = async () => {
@@ -1281,7 +1287,7 @@ exports.submitCandidate = async (req, res) => {
         success: false,
         message: 'Invalid file type. Only PDF, DOC and DOCX are allowed.',
         receivedType: resumeFile.mimetype
-      }); 
+      });
     }
 
     // Validate file size (max 10MB)
@@ -2031,11 +2037,11 @@ exports.assignCandidateToSlot = async (req, res) => {
     if (activeInfo && slot.roundType) {
       const sType = slot.roundType.trim().toUpperCase();
       const cType = (activeInfo.round.roundType || '').trim().toUpperCase();
-      
+
       const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
       const isSlotHr = hrNames.includes(sType);
       const isCandHr = hrNames.includes(cType);
-      
+
       if (!(isSlotHr && isCandHr) && sType !== cType) {
         return res.status(400).json({
           success: false,
