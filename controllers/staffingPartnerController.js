@@ -2916,13 +2916,9 @@ exports.resendConsent = async (req, res) => {
     // Allow resend if:
     //  • consent is pending / never responded
     //  • draft (consent never sent)
-    //  • WITHDRAWN because the link expired (whatsappConsent.status === 'EXPIRED')
-    const isExpiredWithdrawal =
-      candidate.status === 'WITHDRAWN' &&
-      candidate.whatsappConsent?.status === 'EXPIRED';
-
-    const allowedResendStatuses = ['CONSENT_PENDING', 'DRAFT'];
-    if (!allowedResendStatuses.includes(candidate.status) && !isExpiredWithdrawal) {
+    //  • WITHDRAWN (link expired or withdrawn)
+    const allowedResendStatuses = ['CONSENT_PENDING', 'DRAFT', 'WITHDRAWN'];
+    if (!allowedResendStatuses.includes(candidate.status)) {
       return res.status(400).json({
         success: false,
         message: candidate.status === 'CONSENT_CONFIRMED'
@@ -2937,15 +2933,12 @@ exports.resendConsent = async (req, res) => {
 
     const company = await Company.findById(candidate.job?.company || candidate.company).select('companyName');
     const companyName = company?.companyName || 'a leading company';
-    let consentToken = candidate.whatsappConsent?.token;
 
-    // For DRAFT candidates or expired WITHDRAWN candidates, generate a fresh token & reset expiry
-    if (!consentToken || isExpiredWithdrawal) {
-      consentToken = crypto.randomBytes(32).toString('hex');
-      if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
-      candidate.whatsappConsent.token = consentToken;
-      candidate.whatsappConsent.sentTo = candidate.mobile;
-    }
+    // Always generate a fresh token on resend to invalidate any old/expired WhatsApp links
+    const consentToken = crypto.randomBytes(32).toString('hex');
+    if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
+    candidate.whatsappConsent.token = consentToken;
+    candidate.whatsappConsent.sentTo = candidate.mobile;
 
     // Set/refresh consent expiration to 48 hours from now
     const consentExpiry = new Date(Date.now() + 48 * 60 * 60 * 1000);
