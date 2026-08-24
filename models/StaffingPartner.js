@@ -301,8 +301,9 @@ const staffingPartnerSchema = new mongoose.Schema({
     pdfUrl: String,
     pdfPublicId: String,
     generatedAt: Date,
-    regeneratedAt: Date
   },
+}, {
+  timestamps: true
 });
 
 staffingPartnerSchema.virtual('fullName').get(function () {
