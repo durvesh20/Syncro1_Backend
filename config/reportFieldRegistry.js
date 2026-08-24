@@ -118,7 +118,13 @@ const PARTNER_CONTEXT_SECTION = {
     { key: 'tp_sectors', label: 'Hiring Sectors', path: 'partnerInfo.Syncro1Competency.primaryHiringSectors', type: 'array', default: false },
     { key: 'tp_verificationStatus', label: 'Verification Status', path: 'partnerInfo.verificationStatus', type: 'string', default: false },
     { key: 'tp_totalSubmissions', label: 'Total Submissions', path: 'partnerInfo.metrics.totalSubmissions', type: 'number', default: false },
-    { key: 'tp_totalPlacements', label: 'Total Placements', path: 'partnerInfo.metrics.totalPlacements', type: 'number', default: false }
+    { key: 'tp_totalPlacements', label: 'Total Placements', path: 'partnerInfo.metrics.totalPlacements', type: 'number', default: false },
+    { key: 'tp_panCard', label: 'PAN Card Document', path: 'partnerInfo.documents.panCard', type: 'string', default: false },
+    { key: 'tp_gstCertificate', label: 'GST Certificate Document', path: 'partnerInfo.documents.gstCertificate', type: 'string', default: false },
+    { key: 'tp_incorporationCertificate', label: 'Incorporation Certificate Document', path: 'partnerInfo.documents.incorporationCertificate', type: 'string', default: false },
+    { key: 'tp_cancelledCheque', label: 'Cancelled Cheque Document', path: 'partnerInfo.documents.cancelledCheque', type: 'string', default: false },
+    { key: 'tp_authorizedSignatoryProof', label: 'Authorized Signatory Proof', path: 'partnerInfo.documents.authorizedSignatoryProof', type: 'string', default: false },
+    { key: 'tp_addressProof', label: 'Address Proof Document', path: 'partnerInfo.documents.addressProof', type: 'string', default: false }
   ]
 };
 
@@ -198,7 +204,9 @@ const reportFieldRegistry = {
     allowedRoles: ['admin', 'sub_admin'],
     base: 'staffingpartners',
     scope: null,
-    lookups: [],
+    lookups: [
+      { from: 'users', localField: 'user', foreignField: '_id', as: 'userInfo' }
+    ],
     sections: [
       {
         sectionKey: 'partnerDetails',
@@ -208,23 +216,37 @@ const reportFieldRegistry = {
           { key: 'tp_uniqueId', label: 'Partner ID', path: 'uniqueId', type: 'string', default: false },
           { key: 'tp_firstName', label: 'First Name', path: 'firstName', type: 'string', default: false },
           { key: 'tp_lastName', label: 'Last Name', path: 'lastName', type: 'string', default: false },
+          { key: 'tp_email', label: 'Email', path: 'userInfo.email', type: 'string', default: true },
+          { key: 'tp_mobile', label: 'Phone / Mobile', path: 'userInfo.mobile', type: 'string', default: true },
           { key: 'tp_designation', label: 'Designation', path: 'designation', type: 'string', default: false },
           { key: 'tp_city', label: 'City', path: 'city', type: 'string', default: false },
           { key: 'tp_state', label: 'State', path: 'state', type: 'string', default: false },
           { key: 'tp_entityType', label: 'Entity Type', path: 'firmDetails.entityType', type: 'string', default: false },
           { key: 'tp_website', label: 'Website', path: 'firmDetails.website', type: 'string', default: false },
-          { key: 'tp_sectors', label: 'Hiring Sectors', path: 'Syncro1Competency.primaryHiringSectors', type: 'array', default: true },
+          { key: 'tp_sectors', label: 'Hiring Sectors', path: 'Syncro1Competency.primaryHiringSectors', type: 'array', default: false },
           { key: 'tp_plan', label: 'Subscription Plan', path: 'subscription.plan', type: 'string', default: false },
-          { key: 'tp_verificationStatus', label: 'Verification Status', path: 'verificationStatus', type: 'string', default: true },
-          { key: 'tp_createdAt', label: 'Registered At', path: 'createdAt', type: 'date', default: true }
+          { key: 'tp_verificationStatus', label: 'Verification Status', path: 'verificationStatus', type: 'string', default: false },
+          { key: 'tp_createdAt', label: 'Registered At', path: 'createdAt', type: 'date', default: false }
+        ]
+      },
+      {
+        sectionKey: 'partnerDocuments',
+        label: 'Partner Documents',
+        fields: [
+          { key: 'tp_panCard', label: 'PAN Card Document', path: 'documents.panCard', type: 'string', default: false },
+          { key: 'tp_gstCertificate', label: 'GST Certificate Document', path: 'documents.gstCertificate', type: 'string', default: false },
+          { key: 'tp_incorporationCertificate', label: 'Incorporation Certificate Document', path: 'documents.incorporationCertificate', type: 'string', default: false },
+          { key: 'tp_cancelledCheque', label: 'Cancelled Cheque Document', path: 'documents.cancelledCheque', type: 'string', default: false },
+          { key: 'tp_authorizedSignatoryProof', label: 'Authorized Signatory Proof', path: 'documents.authorizedSignatoryProof', type: 'string', default: false },
+          { key: 'tp_addressProof', label: 'Address Proof Document', path: 'documents.addressProof', type: 'string', default: false }
         ]
       },
       {
         sectionKey: 'partnerMetrics',
         label: 'Performance Metrics',
         fields: [
-          { key: 'tp_totalSubmissions', label: 'Total Submissions', path: 'metrics.totalSubmissions', type: 'number', default: true },
-          { key: 'tp_totalPlacements', label: 'Total Placements', path: 'metrics.totalPlacements', type: 'number', default: true },
+          { key: 'tp_totalSubmissions', label: 'Total Submissions', path: 'metrics.totalSubmissions', type: 'number', default: false },
+          { key: 'tp_totalPlacements', label: 'Total Placements', path: 'metrics.totalPlacements', type: 'number', default: false },
           {
             key: 'tp_submissionToHireRatio', label: 'Submission → Hire Ratio', path: null,
             type: 'number', default: false, compute: 'submissionToHireRatio'
@@ -248,7 +270,9 @@ const reportFieldRegistry = {
     allowedRoles: ['admin', 'sub_admin'],
     base: 'companies',
     scope: null,
-    lookups: [],
+    lookups: [
+      { from: 'users', localField: 'user', foreignField: '_id', as: 'userInfo' }
+    ],
     sections: [
       {
         sectionKey: 'companyDetails',
@@ -257,24 +281,41 @@ const reportFieldRegistry = {
           { key: 'co_companyName', label: 'Company Name', path: 'companyName', type: 'string', default: true },
           { key: 'co_uniqueId', label: 'Company ID', path: 'uniqueId', type: 'string', default: false },
           { key: 'co_decisionMaker', label: 'Decision Maker', path: 'decisionMakerName', type: 'string', default: false },
+          { key: 'co_email', label: 'Email', path: 'userInfo.email', type: 'string', default: true },
+          { key: 'co_mobile', label: 'Phone / Mobile', path: 'userInfo.mobile', type: 'string', default: true },
           { key: 'co_designation', label: 'Designation', path: 'designation', type: 'string', default: false },
           { key: 'co_department', label: 'Department', path: 'department', type: 'string', default: false },
           { key: 'co_city', label: 'City', path: 'city', type: 'string', default: false },
           { key: 'co_state', label: 'State', path: 'state', type: 'string', default: false },
-          { key: 'co_industry', label: 'Industry', path: 'kyc.industry', type: 'string', default: true },
+          { key: 'co_industry', label: 'Industry', path: 'kyc.industry', type: 'string', default: false },
           { key: 'co_companyType', label: 'Company Type', path: 'kyc.companyType', type: 'string', default: false },
           { key: 'co_website', label: 'Website', path: 'kyc.website', type: 'string', default: false },
-          { key: 'co_verificationStatus', label: 'Verification Status', path: 'verificationStatus', type: 'string', default: true },
-          { key: 'co_createdAt', label: 'Registered At', path: 'createdAt', type: 'date', default: true }
+          { key: 'co_verificationStatus', label: 'Verification Status', path: 'verificationStatus', type: 'string', default: false },
+          { key: 'co_createdAt', label: 'Registered At', path: 'createdAt', type: 'date', default: false }
+        ]
+      },
+      {
+        sectionKey: 'companyDocuments',
+        label: 'Company Documents',
+        fields: [
+          { key: 'co_gstCertificate', label: 'GST Certificate Document', path: 'documents.gstCertificate', type: 'string', default: false },
+          { key: 'co_panCard', label: 'PAN Card Document', path: 'documents.panCard', type: 'string', default: false },
+          { key: 'co_incorporationCertificate', label: 'Incorporation Certificate Document', path: 'documents.incorporationCertificate', type: 'string', default: false },
+          { key: 'co_authorizedSignatoryProof', label: 'Authorized Signatory Proof', path: 'documents.authorizedSignatoryProof', type: 'string', default: false },
+          { key: 'co_addressProof', label: 'Address Proof Document', path: 'documents.addressProof', type: 'string', default: false },
+          { key: 'co_msme', label: 'MSME Certificate Document', path: 'documents.msme', type: 'string', default: false },
+          { key: 'co_udyamCertificate', label: 'Udyam Certificate Document', path: 'documents.udyamCertificate', type: 'string', default: false },
+          { key: 'co_cinDocument', label: 'CIN Document / Number', path: 'documents.cinNumber', type: 'string', default: false },
+          { key: 'co_otherDocument', label: 'Other Document', path: 'documents.otherCompanyDocument', type: 'string', default: false }
         ]
       },
       {
         sectionKey: 'companyMetrics',
         label: 'Hiring Metrics',
         fields: [
-          { key: 'co_totalJobsPosted', label: 'Total Jobs Posted', path: 'metrics.totalJobsPosted', type: 'number', default: true },
-          { key: 'co_activeJobs', label: 'Active Jobs', path: 'metrics.activeJobs', type: 'number', default: true },
-          { key: 'co_totalHires', label: 'Total Hires', path: 'metrics.totalHires', type: 'number', default: true },
+          { key: 'co_totalJobsPosted', label: 'Total Jobs Posted', path: 'metrics.totalJobsPosted', type: 'number', default: false },
+          { key: 'co_activeJobs', label: 'Active Jobs', path: 'metrics.activeJobs', type: 'number', default: false },
+          { key: 'co_totalHires', label: 'Total Hires', path: 'metrics.totalHires', type: 'number', default: false },
           { key: 'co_totalSpent', label: 'Total Spent', path: 'metrics.totalSpent', type: 'number', default: false }
         ]
       }

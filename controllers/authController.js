@@ -8,7 +8,6 @@ const emailService = require('../services/emailService');
 const whatsappService = require('../services/whatsappService');
 const otpService = require('../services/otpService');
 const sendTokenResponse = require('../utils/sendTokenResponse');
-const { validateEmail, validateMobile } = require('../utils/validators');
 const notifyCRM = require('../utils/notifyCRM')
 const { validateEmail, validateMobile, isWorkEmail } = require('../utils/validators');
 
