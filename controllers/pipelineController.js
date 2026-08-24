@@ -751,7 +751,13 @@ exports.partnerGetPipeline = async (req, res) => {
 function getActiveRoundInfo(candidate) {
   const status = candidate.status;
 
-  if (status === PIPELINE_STATES.SHORTLISTED || status === PIPELINE_STATES.REJECTED) {
+  const terminalRejectionStates = [
+    PIPELINE_STATES.SHORTLISTED,
+    PIPELINE_STATES.REJECTED,
+    PIPELINE_STATES.ROUND_REJECTED,
+    PIPELINE_STATES.ASSESSMENT_FAILED
+  ];
+  if (terminalRejectionStates.includes(status)) {
     return null;
   }
 
@@ -771,11 +777,11 @@ function getActiveRoundInfo(candidate) {
     if (idx !== -1) return { index: idx, round: candidate.rounds[idx] };
   }
 
-  // Assessment states
+  // Assessment states (active in-progress assessment states)
   const assessmentStates = [
     PIPELINE_STATES.ASSESSMENT_PENDING,
-    PIPELINE_STATES.ASSESSMENT_PASSED,
-    PIPELINE_STATES.ASSESSMENT_FAILED
+    PIPELINE_STATES.ASSESSMENT_LINK_SENT,
+    PIPELINE_STATES.ASSESSMENT_LINK_COMPLETE
   ];
   if (assessmentStates.includes(status)) {
     const idx = candidate.rounds.findIndex(r => {
@@ -815,6 +821,72 @@ function getActiveRoundInfo(candidate) {
 
   return null;
 }
+
+// ─── POST /api/companies/candidates/:id/pipeline/assessment/link-sent ────────────────
+exports.pipelineAssessmentLinkSent = async (req, res) => {
+  try {
+    const role = roleFromReq(req);
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+
+    const fsm = transition({ currentState: fromState, action: ACTIONS.ASSESSMENT_LINK_SENT, role });
+    if (!fsm.ok) return handleFsmError(fsm, res);
+
+    const activeInfo = getActiveRoundInfo(candidate);
+    if (activeInfo) {
+      activeInfo.round.status = fsm.nextState;
+    }
+
+    candidate.status = fsm.nextState;
+    candidate.statusHistory.push({ status: fsm.nextState, changedBy: req.user._id, changedAt: new Date(), notes: 'Assessment Link Sent' });
+    writeAudit(candidate, {
+      actorId: req.user._id,
+      actorRole: role,
+      action: ACTIONS.ASSESSMENT_LINK_SENT,
+      fromState,
+      toState: fsm.nextState,
+      roundIndex: activeInfo ? activeInfo.index : null
+    });
+
+    await candidate.save();
+    res.json({ success: true, message: 'Assessment link marked as sent', candidate });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── POST /api/companies/candidates/:id/pipeline/assessment/link-complete ────────────────
+exports.pipelineAssessmentLinkComplete = async (req, res) => {
+  try {
+    const role = roleFromReq(req);
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+
+    const fsm = transition({ currentState: fromState, action: ACTIONS.ASSESSMENT_LINK_COMPLETE, role });
+    if (!fsm.ok) return handleFsmError(fsm, res);
+
+    const activeInfo = getActiveRoundInfo(candidate);
+    if (activeInfo) {
+      activeInfo.round.status = fsm.nextState;
+    }
+
+    candidate.status = fsm.nextState;
+    candidate.statusHistory.push({ status: fsm.nextState, changedBy: req.user._id, changedAt: new Date(), notes: 'Assessment Link Complete' });
+    writeAudit(candidate, {
+      actorId: req.user._id,
+      actorRole: role,
+      action: ACTIONS.ASSESSMENT_LINK_COMPLETE,
+      fromState,
+      toState: fsm.nextState,
+      roundIndex: activeInfo ? activeInfo.index : null
+    });
+
+    await candidate.save();
+    res.json({ success: true, message: 'Assessment link marked as complete', candidate });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 // ─── POST /api/companies/candidates/:id/pipeline/assessment/pass ────────────────
 exports.pipelineAssessmentPass = async (req, res) => {
@@ -909,7 +981,32 @@ exports.pipelineAssessmentFail = async (req, res) => {
     });
 
     await candidate.save();
-    res.json({ success: true, message: 'Assessment failed', data: { candidateId: candidate._id, status: candidate.status } });
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'PIPELINE_ASSESSMENT_FAIL',
+      entityType: 'Candidate',
+      entityId: candidate._id,
+      description: `Candidate failed assessment round: ${reason}`,
+      ipAddress: req.ip
+    });
+
+    await sendPipelineEmail('partner', candidate._id, `❌ Candidate Assessment Failed - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Assessment Failed</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Unfortunately, your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has failed the assessment round for the <strong>${candidate.job?.title}</strong> role and has been rejected.</p>
+          <p><strong>Reason / Feedback:</strong> ${reason}</p>
+        </div>
+      </div>`
+    );
+
+    res.json({ success: true, message: 'Assessment failed and candidate rejected', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
     console.error('[PIPELINE] assessment fail error:', err);

@@ -70,6 +70,8 @@ const {
   defineJobPipelineTemplate,
   getJobPipelineTemplate,
   getPipelinePreview,
+  pipelineAssessmentLinkSent,
+  pipelineAssessmentLinkComplete,
   pipelineAssessmentPass,
   pipelineAssessmentFail,
   pipelinePublishSlots,
@@ -385,6 +387,8 @@ router.post('/jobs/:jobId/pipeline/template',        ...PIPELINE_MW, defineJobPi
 router.get('/jobs/:jobId/pipeline/template',         checkCompanyPermission('VIEW_CANDIDATES'), getJobPipelineTemplate);
 
 // Phase 3
+router.post('/candidates/:id/pipeline/assessment/link-sent', ...PIPELINE_MW, pipelineAssessmentLinkSent);
+router.post('/candidates/:id/pipeline/assessment/link-complete', ...PIPELINE_MW, pipelineAssessmentLinkComplete);
 router.post('/candidates/:id/pipeline/assessment/pass',   ...PIPELINE_MW, pipelineAssessmentPass);
 router.post('/candidates/:id/pipeline/assessment/fail',   ...PIPELINE_MW, pipelineAssessmentFail);
 router.post('/candidates/:id/pipeline/publish-slots',     ...PIPELINE_MW, pipelinePublishSlots);

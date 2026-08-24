@@ -1794,13 +1794,13 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
           // Helper to identify the current active round info based on candidate status
           const getActiveRoundInfo = (cand) => {
             const status = cand.status;
-            if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+            if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
             const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
             if (hrStates.includes(status)) {
               const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
               if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
             }
-            const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+            const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
             if (assessmentStates.includes(status)) {
               const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
               if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
@@ -1902,13 +1902,13 @@ exports.assignCandidateToSlot = async (req, res) => {
       const assignedSlotDoc = await InterviewSlot.findById(candidate.assignedSlot);
       const getActiveRoundInfoForCheck = (cand) => {
         const status = cand.status;
-        if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+        if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
         const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
         if (hrStates.includes(status)) {
           const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
           if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
         }
-        const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+        const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
         if (assessmentStates.includes(status)) {
           const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
           if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
@@ -2004,13 +2004,13 @@ exports.assignCandidateToSlot = async (req, res) => {
     // ── Check if candidate active round matches slot roundType ──────────
     const getActiveRoundInfoForValidation = (cand) => {
       const status = cand.status;
-      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
       const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
       if (hrStates.includes(status)) {
         const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
         if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
       }
-      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
       if (assessmentStates.includes(status)) {
         const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
         if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
@@ -2071,13 +2071,13 @@ exports.assignCandidateToSlot = async (req, res) => {
     // Helper to identify the current active round info based on candidate status
     const getActiveRoundInfo = (c) => {
       const status = c.status;
-      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
       const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
       if (hrStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
       }
-      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
       if (assessmentStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
@@ -2340,13 +2340,13 @@ exports.removeCandidateFromSlot = async (req, res) => {
 
     const getActiveRoundInfo = (c) => {
       const status = c.status;
-      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
       const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
       if (hrStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
       }
-      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
       if (assessmentStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
@@ -2518,12 +2518,17 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all' } = req.query;
+    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all', jobId, job: jobParam } = req.query;
     const parsedPage = parseInt(page, 10) || 1;
     const parsedLimit = parseInt(limit, 10) || 10;
     const skip = (parsedPage - 1) * parsedLimit;
 
     const query = { submittedBy: partner._id };
+
+    const targetJobId = jobId || jobParam;
+    if (targetJobId) {
+      query.job = targetJobId;
+    }
 
     if (tab === 'consent_pending' || status === 'CONSENT_PENDING') {
       query.status = 'CONSENT_PENDING';

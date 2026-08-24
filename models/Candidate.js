@@ -175,6 +175,8 @@ const candidateSchema = new mongoose.Schema({
 
       // ── Pipeline FSM states (§1.7) ──────────────────────────────────────
       'ASSESSMENT_PENDING',
+      'ASSESSMENT_LINK_SENT',
+      'ASSESSMENT_LINK_COMPLETE',
       'ASSESSMENT_PASSED',
       'ASSESSMENT_FAILED',
       'SLOTS_NOT_PUBLISHED',
