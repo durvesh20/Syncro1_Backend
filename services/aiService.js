@@ -10,55 +10,7 @@ const { EDU_LEVELS, getEduLevel } = require('./educationUtils');
 // ── Constants ──────────────────────────────────────────────────────────────
 const AI_MAX_TOKENS = 20000;
 
-// ── Caching for efficient AI use (Change E) ─────────────────────────────────
-const crypto = require('crypto');
-const WEIGHTS_VERSION = 2;
-// Bump this to invalidate all persistent DB cache entries on algorithm changes
-const PERSISTENT_CACHE_VERSION = 2;
-const _scoreCache = new Map();
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_CACHE_ENTRIES = 500; // hard memory bound: evict oldest when full
 
-// Bounded insert — once we hit the cap, evict the oldest entry (Map preserves
-// insertion order) so the cache can NEVER grow unbounded and exhaust memory.
-// Each entry holds the full AI analysis (~10–50KB), so 500 ≈ ≤12MB max.
-function _cacheSet(key, value) {
-    if (_scoreCache.size >= MAX_CACHE_ENTRIES) {
-        const oldest = _scoreCache.keys().next().value;
-        if (oldest !== undefined) _scoreCache.delete(oldest);
-    }
-    _scoreCache.set(key, value);
-}
-
-// Periodic sweep: drop expired entries so the Map doesn't accumulate dead
-// weight. .unref() so this timer never keeps the Node process alive on its own.
-const _cacheSweep = setInterval(() => {
-    const now = Date.now();
-    for (const [k, v] of _scoreCache) {
-        if (now - v.ts > CACHE_TTL_MS) _scoreCache.delete(k);
-    }
-}, 30 * 60 * 1000);
-if (_cacheSweep && typeof _cacheSweep.unref === 'function') _cacheSweep.unref();
-
-function _scoreCacheKey(resumeUrl, candidateFormData = {}, jobDescription = {}) {
-    const candidateId = candidateFormData?.candidateId || candidateFormData?._id || candidateFormData?.email || '';
-    const rawJob = jobDescription?.toObject ? jobDescription.toObject() : (jobDescription || {});
-    const jobId = rawJob._id || rawJob.id || '';
-    const jobUpdatedAt = rawJob.updatedAt ? new Date(rawJob.updatedAt).getTime() : '';
-
-    const candidatePayload = JSON.stringify({
-        skills: candidateFormData?.skills || [],
-        exp: candidateFormData?.totalExperience ?? candidateFormData?.relevantExperience ?? '',
-        salary: candidateFormData?.expectedSalary ?? '',
-        loc: candidateFormData?.location ?? '',
-        notice: candidateFormData?.noticePeriod ?? '',
-        relocate: candidateFormData?.willingToRelocate ?? null
-    });
-
-    return crypto.createHash('sha256')
-        .update(`${resumeUrl}|${candidateId}|${jobId}|${jobUpdatedAt}|${candidatePayload}|v${WEIGHTS_VERSION}`)
-        .digest('hex');
-}
 
 // ── Deterministic skill-sweep precompiled term list (Change A perf + safety) ──
 // Built ONCE (module lifetime). Skips ambiguous short tokens (_ambiguousTokens)
@@ -168,12 +120,7 @@ class AIService {
             return this._getEmptyResumeData();
         }
 
-        const ck = _scoreCacheKey(resumeUrl, candidateFormData, jobDescription);
-        const _cached = _scoreCache.get(ck);
-        if (_cached && (Date.now() - _cached.ts) < CACHE_TTL_MS) {
-            console.log('⚡ [AI MATCHING ENGINE COMPLETED] Cache hit — returned prior score for:', candidateFormData.firstName, candidateFormData.lastName);
-            return _cached.result;
-        }
+
 
         let prompt;
         try {
@@ -309,13 +256,6 @@ class AIService {
                     totalTokens: tokensUsed
                 }
             };
-            _cacheSet(ck, { ts: Date.now(), result: successResult });
-
-            // Also persist to DB cache so batch lookups can find this score
-            const _jobId = jobDescription?._id || jobDescription?.id;
-            const _candId = candidateFormData?.candidateId || candidateFormData?._id;
-            const _jobUpdatedAt = jobDescription?.updatedAt ? new Date(jobDescription.updatedAt) : null;
-            await this._setPersistentCache(_candId, _jobId, _jobUpdatedAt, successResult, 'single');
 
             return successResult;
 
@@ -341,18 +281,15 @@ class AIService {
     // ═══════════════════════════════════════════════════════════════════════
     // PUBLIC — parseMultipleResumes
     //   True batch: ONE AI call for all N candidates + JD, not N parallel calls.
-    //   Also checks/writes persistent MongoDB cache (AiScoreCache) so repeat
-    //   evaluations of the same (candidate, JD) pair cost zero tokens.
+    //   Every candidate is always scored fresh — no persistent caching.
     // ═══════════════════════════════════════════════════════════════════════
     /**
      * Batch parse up to 5 candidate resumes against a single Job Description.
      *
      * Token strategy:
-     *   1. Check persistent DB cache per candidate → skip AI for cached ones.
-     *   2. For uncached candidates: ONE AI call with all resumes + JD in one prompt
-     *      (JD sent once, not N times → ~68-78% token reduction vs parallel calls).
-     *   3. Run deterministic post-processing on every result (skills, exp, salary…).
-     *   4. Persist results to AiScoreCache (7-day TTL).
+     *   1. For all candidates: ONE AI call with all resumes + JD in one prompt
+     *      (JD sent once, not N times → significant token reduction vs parallel calls).
+     *   2. Run deterministic post-processing on every result (skills, exp, salary…).
      *
      * @param {Array<Object>} candidatesList - Array of { resumeUrl, fileName, candidateFormData, candidateId }
      * @param {Object} jobDescription - Target Job Description object
@@ -381,70 +318,22 @@ class AIService {
         const jobId = jobDescription?._id || jobDescription?.id;
         const jobUpdatedAt = jobDescription?.updatedAt ? new Date(jobDescription.updatedAt) : null;
 
-        // ── Phase 1: Prefetch JD + check in-memory cache per candidate ──────
+        // ── Phase 1: Prefetch JD ──────────────────────────────────────────────
         const prefetchedJD = await this._getJobDescriptionText(jobDescription);
 
-        // Normalise each entry and check both in-memory + DB cache
+        // Normalise each entry — all candidates go through AI (no caching)
         const normalized = candidatesToProcess.map(cand => {
             const resumeUrl = cand.resumeUrl || cand.resume?.url || '';
             const fileName = cand.fileName || cand.resume?.fileName || '';
             const formData = cand.candidateFormData || cand.formData || cand;
             const candidateId = cand.candidateId || formData.candidateId || formData._id || cand._id;
             const name = `${formData.firstName || cand.firstName || ''} ${formData.lastName || cand.lastName || ''}`.trim() || 'Candidate';
-            // In-memory cache key (same key as parseResume uses)
-            const memCacheKey = _scoreCacheKey(resumeUrl, formData, jobDescription);
-            const memCached = _scoreCache.get(memCacheKey);
-            const memHit = memCached && (Date.now() - memCached.ts) < CACHE_TTL_MS;
-            return { resumeUrl, fileName, formData, candidateId, name, memCacheKey, memHit, memResult: memHit ? memCached.result : null };
+            return { resumeUrl, fileName, formData, candidateId, name };
         });
 
-        // ── Phase 2: DB cache lookup for candidates that missed in-memory cache
-        const needDbCheck = normalized.filter(c => !c.memHit && jobId);
-        const dbCacheMap = new Map(); // candidateId.toString() → cached result
-
-        if (needDbCheck.length > 0) {
-            try {
-                const AiScoreCache = require('../models/AiScoreCache');
-                const dbHits = await AiScoreCache.find({
-                    candidateId: { $in: needDbCheck.map(c => c.candidateId).filter(Boolean) },
-                    jobId,
-                    scoreVersion: PERSISTENT_CACHE_VERSION,
-                }).lean();
-
-                for (const hit of dbHits) {
-                    // Invalidate if the job was updated after the score was computed
-                    if (jobUpdatedAt && hit.computedAt && new Date(hit.computedAt) < jobUpdatedAt) {
-                        console.log(`[AI] DB cache stale for candidate ${hit.candidateId} (job updated after score)`);
-                        continue;
-                    }
-                    if (hit.fullResult) {
-                        dbCacheMap.set(String(hit.candidateId), hit.fullResult);
-                        console.log(`⚡ [AI] DB cache hit for candidate ${hit.candidateId}`);
-                    }
-                }
-            } catch (dbErr) {
-                console.warn('[AI] DB cache lookup failed (non-fatal):', dbErr.message);
-            }
-        }
-
-        // ── Phase 3: Determine which candidates actually need AI ─────────────
-        const cached = [];    // { candidateId, name, result, fromCache: 'memory'|'db' }
-        const needAI = [];    // normalized entries that need AI scoring
-
-        for (const c of normalized) {
-            if (c.memHit) {
-                cached.push({ candidateId: c.candidateId, name: c.name, result: c.memResult, fromCache: 'memory' });
-            } else if (dbCacheMap.has(String(c.candidateId))) {
-                const res = dbCacheMap.get(String(c.candidateId));
-                // Also warm in-memory cache
-                _cacheSet(c.memCacheKey, { ts: Date.now(), result: res });
-                cached.push({ candidateId: c.candidateId, name: c.name, result: res, fromCache: 'db' });
-            } else {
-                needAI.push(c);
-            }
-        }
-
-        console.log(`[AI] Batch cache summary: ${cached.length} cached (${cached.filter(c => c.fromCache === 'memory').length} memory, ${cached.filter(c => c.fromCache === 'db').length} db), ${needAI.length} need AI`);
+        // ── Phase 2: All candidates need AI (caching removed) ───────────────
+        const needAI = normalized; // every candidate is always scored fresh
+        console.log(`[AI] Batch: ${needAI.length} candidate(s) queued for AI scoring (no cache).`);
 
         // ── Phase 4: True batch AI call (ONE prompt for all uncached candidates)
         const aiResults = []; // { candidateId, name, result }
@@ -463,8 +352,6 @@ class AIService {
                     batchTokenUsage.completionTokens += tu.completionTokens || 0;
                     batchTokenUsage.cachedTokens += tu.cachedTokens || 0;
                     batchTokenUsage.totalTokens += tu.totalTokens || (res.tokensUsed || 0);
-                    // Persist to DB
-                    await this._setPersistentCache(c.candidateId, jobId, jobUpdatedAt, res, 'single');
                 } catch (err) {
                     console.error(`[AI] Single parse failed for ${c.name}:`, err.message);
                     aiResults.push({ candidateId: c.candidateId, name: c.name, result: this._getEmptyResumeData() });
@@ -581,11 +468,6 @@ class AIService {
                                 tokenUsage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, totalTokens: 0 }
                             };
 
-                            // Warm in-memory cache
-                            _cacheSet(c.memCacheKey, { ts: Date.now(), result: fullResult });
-                            // Persist to DB
-                            await this._setPersistentCache(c.candidateId, jobId, jobUpdatedAt, fullResult, 'batch');
-
                             aiResults.push({ candidateId: c.candidateId, name: c.name, result: fullResult });
 
                             console.log(`[AI] ✅ Batch result [${i}] ${c.name}: score=${aiResult.scoring?.finalAdjustedScore}/100 (${aiResult.matchLevel})`);
@@ -611,9 +493,8 @@ class AIService {
             }
         }
 
-        // ── Phase 5: Merge cached + AI results, preserving original order ────
+        // ── Phase 5: Map AI results by candidateId, preserving original order ─
         const allResultsMap = new Map();
-        for (const r of cached) allResultsMap.set(String(r.candidateId), { candidateId: r.candidateId, candidateName: r.name, result: r.result, fromCache: r.fromCache });
         for (const r of aiResults) allResultsMap.set(String(r.candidateId), { candidateId: r.candidateId, candidateName: r.name, result: r.result, fromCache: null });
 
         const rawResults = normalized.map(c => allResultsMap.get(String(c.candidateId)) || { candidateId: c.candidateId, candidateName: c.name, result: this._getEmptyResumeData(), fromCache: null });
@@ -640,8 +521,7 @@ class AIService {
                     totalMustSkills: fa.rankingSignals?.mustHaveSkillsTotal || 0,
                     keyMissingSkills: fa.rankingSignals?.mustHaveSkillsMissing || [],
                     fullAnalysis: fa,
-                    singleResult: item.result,
-                    fromCache: item.fromCache
+                    singleResult: item.result
                 };
             })
             .sort((a, b) => b.score - a.score || b.priorityScore - a.priorityScore);
@@ -650,24 +530,18 @@ class AIService {
 
         const topCandidate = rankedCandidates[0] || null;
 
-        // ── Phase 7: Log token efficiency ────────────────────────────────────
-        const dbCacheHits = cached.filter(c => c.fromCache === 'db').length;
-        const memCacheHits = cached.filter(c => c.fromCache === 'memory').length;
+        // ── Phase 7: Log token usage ─────────────────────────────────────────
         const totalCandidates = candidatesToProcess.length;
-        const savedTokenEstimate = cached.length * 5000; // ~5000 tokens per saved individual call
 
         console.log(`\n┌──────────────────────────────────────────────────────────────┐`);
-        console.log(`│ 📊 BATCH AI MATCHING — TOKEN EFFICIENCY REPORT               │`);
+        console.log(`│ 📊 BATCH AI MATCHING — TOKEN USAGE REPORT                    │`);
         console.log(`├──────────────────────────────────────────────────────────────┤`);
         console.log(`│ Total Candidates:          ${String(totalCandidates).padEnd(35)}│`);
-        console.log(`│ ⚡ Memory Cache Hits:       ${String(memCacheHits).padEnd(35)}│`);
-        console.log(`│ 🗄️  DB Cache Hits:          ${String(dbCacheHits).padEnd(35)}│`);
-        console.log(`│ 🤖 AI Calls (batch=1):      ${String(needAI.length > 1 ? '1 batch call' : needAI.length === 1 ? '1 single call' : '0 (all cached)').padEnd(35)}│`);
+        console.log(`│ 🤖 AI Calls (batch=1):      ${String(needAI.length > 1 ? '1 batch call' : needAI.length === 1 ? '1 single call' : '0').padEnd(35)}│`);
         console.log(`├──────────────────────────────────────────────────────────────┤`);
         console.log(`│ 📥 Prompt Tokens Used:      ${String(batchTokenUsage.promptTokens.toLocaleString()).padEnd(35)}│`);
         console.log(`│ 📤 Completion Tokens Used:  ${String(batchTokenUsage.completionTokens.toLocaleString()).padEnd(35)}│`);
         console.log(`│ 🔢 Total Tokens Used:       ${String(batchTokenUsage.totalTokens.toLocaleString()).padEnd(35)}│`);
-        console.log(`│ 💰 Est. Tokens Saved:       ${String('~' + savedTokenEstimate.toLocaleString() + ' (vs N×single)').padEnd(35)}│`);
         console.log(`└──────────────────────────────────────────────────────────────┘\n`);
 
         console.log(`[AI] ✅ Batch complete: ${rankedCandidates.length} candidate(s) ranked.`);
@@ -678,16 +552,12 @@ class AIService {
             jobId,
             jobTitle: jobDescription?.title || 'Job Description',
             totalProcessed: rankedCandidates.length,
-            batchTokenEfficiency: {
+            batchTokenUsage: {
                 totalPromptTokens: batchTokenUsage.promptTokens,
-                totalCachedTokens: batchTokenUsage.cachedTokens,
                 totalCompletionTokens: batchTokenUsage.completionTokens,
                 totalTokens: batchTokenUsage.totalTokens,
-                memoryCacheHits: memCacheHits,
-                dbCacheHits,
                 aiCandidatesProcessed: needAI.length,
-                estimatedTokensSaved: savedTokenEstimate,
-                batchMode: needAI.length > 1 ? 'true_batch' : needAI.length === 1 ? 'single' : 'all_cached'
+                batchMode: needAI.length > 1 ? 'true_batch' : needAI.length === 1 ? 'single' : 'none'
             },
             topCandidate: topCandidate ? {
                 candidateId: topCandidate.candidateId,
@@ -700,43 +570,6 @@ class AIService {
             results: rawResults
         };
     }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // PRIVATE — Persistent DB cache helpers
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Persist a scoring result to MongoDB AiScoreCache.
-     * Upserts so re-runs overwrite stale entries cleanly.
-     */
-    async _setPersistentCache(candidateId, jobId, jobUpdatedAt, result, source = 'single') {
-        if (!candidateId || !jobId) return;
-        try {
-            const AiScoreCache = require('../models/AiScoreCache');
-            const fa = result?.fullAnalysis || {};
-            await AiScoreCache.findOneAndUpdate(
-                { candidateId, jobId, scoreVersion: PERSISTENT_CACHE_VERSION },
-                {
-                    $set: {
-                        jobUpdatedAt: jobUpdatedAt || null,
-                        score: fa.scoring?.finalAdjustedScore || 0,
-                        matchLevel: fa.matchLevel || 'UNKNOWN',
-                        decision: fa.recommendation?.decision || 'HOLD',
-                        skillCoveragePercent: fa.scoring?.skillCoveragePercent || 0,
-                        tokensUsed: result.tokensUsed || 0,
-                        fullResult: result,
-                        source,
-                        computedAt: new Date()
-                    }
-                },
-                { upsert: true, new: true }
-            );
-            console.log(`[AI] 🗄️  Persisted score to DB cache: candidate=${candidateId}, job=${jobId}`);
-        } catch (err) {
-            console.warn('[AI] DB cache write failed (non-fatal):', err.message);
-        }
-    }
-
     // ═══════════════════════════════════════════════════════════════════════
     // PRIVATE — True batch prompt builder
     // ═══════════════════════════════════════════════════════════════════════

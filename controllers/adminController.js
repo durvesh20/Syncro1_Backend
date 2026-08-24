@@ -3713,14 +3713,47 @@ exports.getJobWithCandidates = async (req, res) => {
       .sort({ createdAt: -1 })
       .select(
         'firstName lastName email mobile status profile resume interviewConfig ' +
-        'prescreen prescreenScore ' +
-        'resumeAnalysis.profileScore resumeAnalysis.matchLevel ' +
-        'resumeAnalysis.recommendation resumeAnalysis.scoreBreakdown ' +
-        'resumeAnalysis.parsed resumeAnalysis.flags resumeAnalysis.advice ' +
+        'prescreen prescreenScore resumeAnalysis ' +
         'whatsappConsent.status consent.consentStatus ' +
         'offer interviews statusHistory adminQueue pipelineTemplate rounds ' +
         'submittedBy createdAt updatedAt'
       );
+
+    // ✅ Dynamic Domain Match backfill for legacy/existing candidate records (matching adminRoutes.js)
+    const candidateScoringService = require('../services/candidateScoringService');
+    candidates.forEach(c => {
+      if (c.resumeAnalysis) {
+        if (!c.resumeAnalysis.scoreBreakdown) {
+          c.resumeAnalysis.scoreBreakdown = {};
+        }
+        const sb = c.resumeAnalysis.scoreBreakdown;
+        if (!sb.domain || sb.domain.score == null || sb.domain.score === 0) {
+          const status = sb.domain?.status || c.resumeAnalysis?.fullAnalysis?.screening?.domainMatch?.status;
+          let dScore = status === 'EXACT' ? 100 : status === 'RELATED' ? 70 : status === 'UNRELATED' ? 20 : 0;
+          let jobDom = sb.domain?.jobDomain || job?.category || 'Not specified';
+          let candDom = sb.domain?.candidateDomain || c.profile?.domain || c.profile?.currentDesignation || c.designation || 'Not specified';
+
+          if (dScore === 0) {
+            try {
+              const dRes = candidateScoringService._scoreDomain(c.profile || {}, job || {});
+              dScore = dRes.score || (c.resumeAnalysis.profileScore >= 60 ? 80 : 50);
+              jobDom = dRes.jobDomain || jobDom;
+              candDom = dRes.candidateDomain || candDom;
+            } catch (err) {
+              dScore = c.resumeAnalysis.profileScore >= 60 ? 80 : 50;
+            }
+          }
+
+          sb.domain = {
+            score: dScore,
+            weight: 0.05,
+            jobDomain: jobDom,
+            candidateDomain: candDom,
+            status: status || (dScore >= 80 ? 'EXACT' : dScore >= 50 ? 'RELATED' : 'UNRELATED')
+          };
+        }
+      }
+    });
 
     // ✅ Status breakdown
     const statusBreakdown = {};
