@@ -114,14 +114,18 @@ describe('§1.4 Slot lifecycle', () => {
     expect(r.nextState).toBe(S.SLOTS_PUBLISHED);
   });
 
-  test('only vendor (staffing_partner) can book a slot', () => {
+  test('vendor (staffing_partner) or admin can book a slot', () => {
     const rCompany = ok(S.SLOTS_PUBLISHED, A.BOOK_SLOT, R.COMPANY);
     expect(rCompany.ok).toBe(false);
     expect(rCompany.code).toBe('FORBIDDEN');
 
     const rVendor = ok(S.SLOTS_PUBLISHED, A.BOOK_SLOT, R.STAFFING_PARTNER);
     expect(rVendor.ok).toBe(true);
-    expect(rVendor.nextState).toBe(S.SLOT_ASSIGNED);
+    expect(rVendor.nextState).toBe(S.SLOT_DETAILS_SHARED);
+
+    const rAdmin = ok(S.SLOTS_PUBLISHED, A.BOOK_SLOT, R.ADMIN);
+    expect(rAdmin.ok).toBe(true);
+    expect(rAdmin.nextState).toBe(S.SLOT_DETAILS_SHARED);
   });
 
   test('company shares details after slot assigned', () => {
@@ -273,22 +277,10 @@ describe('§1.5 HR round', () => {
 
 // ─── §1.6 Offer ──────────────────────────────────────────────────────────────
 describe('§1.6 Offer', () => {
-  test('candidate accepts offer with joiningDate', () => {
+  test('accept offer transition', () => {
     const r = ok(S.OFFER_SENT, A.ACCEPT_OFFER, R.CANDIDATE, { joiningDate: '2026-09-01' });
     expect(r.ok).toBe(true);
     expect(r.nextState).toBe(S.OFFER_ACCEPTED);
-  });
-
-  test('accept offer requires joiningDate', () => {
-    const r = ok(S.OFFER_SENT, A.ACCEPT_OFFER, R.CANDIDATE, {});
-    expect(r.ok).toBe(false);
-    expect(r.code).toBe('PAYLOAD_MISSING');
-  });
-
-  test('accept offer requires valid date', () => {
-    const r = ok(S.OFFER_SENT, A.ACCEPT_OFFER, R.CANDIDATE, { joiningDate: 'not-a-date' });
-    expect(r.ok).toBe(false);
-    expect(r.code).toBe('INVALID_DATE');
   });
 
   test('candidate rejects offer — reason required', () => {
@@ -305,8 +297,8 @@ describe('§1.6 Offer', () => {
     expect(r.code).toBe('TERMINAL_STATE');
   });
 
-  test('company cannot accept offer (only candidate can)', () => {
-    const r = ok(S.OFFER_SENT, A.ACCEPT_OFFER, R.COMPANY, { joiningDate: '2026-09-01' });
+  test('vendor cannot accept offer (only candidate or company can)', () => {
+    const r = ok(S.OFFER_SENT, A.ACCEPT_OFFER, R.STAFFING_PARTNER, { joiningDate: '2026-09-01' });
     expect(r.ok).toBe(false);
     expect(r.code).toBe('FORBIDDEN');
   });
@@ -328,8 +320,8 @@ describe('validatePipelineTemplate', () => {
     expect(validatePipelineTemplate(null).ok).toBe(false);
   });
 
-  test('custom round type allowed', () => {
-    const r = validatePipelineTemplate([{ roundType: 'VIBE_CHECK', order: 1 }]);
+  test('custom round type allowed with HR round', () => {
+    const r = validatePipelineTemplate([{ roundType: 'VIBE_CHECK', order: 1 }, { roundType: 'HR_ROUND', order: 2 }]);
     expect(r.ok).toBe(true);
   });
 

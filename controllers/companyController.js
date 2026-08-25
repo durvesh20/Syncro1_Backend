@@ -1556,7 +1556,7 @@ exports.getAllCandidates = async (req, res) => {
 
     // ✅ FIX #10: Sanitize pagination
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
-    const { status } = req.query;
+    const { status, search, job, jobId } = req.query;
 
     const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
 
@@ -1564,6 +1564,33 @@ exports.getAllCandidates = async (req, res) => {
       company: company._id,
       status: status ? status : { $nin: HIDDEN_STATUSES }
     };
+
+    const targetJob = job || jobId;
+    if (targetJob && targetJob !== 'ALL') {
+      query.job = targetJob;
+    }
+
+    if (search && search.trim()) {
+      const s = search.trim();
+      const regex = new RegExp(s, 'i');
+      query.$or = [
+        { firstName: regex },
+        { lastName: regex },
+        { email: regex },
+        { mobile: regex },
+        { uniqueId: regex },
+        { 'profile.currentDesignation': regex },
+        {
+          $expr: {
+            $regexMatch: {
+              input: { $concat: ["$firstName", " ", "$lastName"] },
+              regex: s,
+              options: "i"
+            }
+          }
+        }
+      ];
+    }
 
     const skip = (page - 1) * limit;
 
@@ -2089,7 +2116,7 @@ exports.getJobInterviewSlots = async (req, res) => {
     const slots = await InterviewSlot.find(query)
       .populate({
         path: 'bookedCandidates.candidate',
-        select: 'firstName lastName email mobile status profile.currentDesignation',
+        select: 'firstName lastName email mobile status profile.currentDesignation uniqueId interviewConfig',
       })
       .populate({
         path: 'bookedCandidates.partner',

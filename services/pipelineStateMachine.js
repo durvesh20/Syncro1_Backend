@@ -188,34 +188,34 @@ const TRANSITIONS = {
 
   [PIPELINE_STATES.SLOTS_PUBLISHED]: {
     [ACTIONS.BOOK_SLOT]: {
-      allowedRoles: [ROLES.STAFFING_PARTNER],
+      allowedRoles: [ROLES.STAFFING_PARTNER, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
     },
     [ACTIONS.SELECT_DIRECT_HR]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
     },
   },
 
   [PIPELINE_STATES.SLOT_ASSIGNED]: {
     [ACTIONS.SHARE_DETAILS]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
     },
     [ACTIONS.REQUEST_RESCHEDULE]: {
-      allowedRoles: [ROLES.COMPANY, ROLES.STAFFING_PARTNER, ROLES.CANDIDATE],
+      allowedRoles: [ROLES.COMPANY, ROLES.STAFFING_PARTNER, ROLES.CANDIDATE, ROLES.ADMIN],
       nextState: PIPELINE_STATES.RESCHEDULE_REQUESTED,
       requiresReason: true,
     },
     [ACTIONS.SELECT_DIRECT_HR]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
     },
   },
 
   [PIPELINE_STATES.SLOT_DETAILS_SHARED]: {
     [ACTIONS.REQUEST_RESCHEDULE]: {
-      allowedRoles: [ROLES.COMPANY, ROLES.CANDIDATE, ROLES.STAFFING_PARTNER],
+      allowedRoles: [ROLES.COMPANY, ROLES.CANDIDATE, ROLES.STAFFING_PARTNER, ROLES.ADMIN],
       nextState: PIPELINE_STATES.RESCHEDULE_REQUESTED,
       requiresReason: true,
     },
@@ -231,7 +231,7 @@ const TRANSITIONS = {
 
   [PIPELINE_STATES.RESCHEDULE_REQUESTED]: {
     [ACTIONS.CONFIRM_RESCHEDULE]: {
-      allowedRoles: [ROLES.COMPANY, ROLES.STAFFING_PARTNER],
+      allowedRoles: [ROLES.COMPANY, ROLES.STAFFING_PARTNER, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
     },
     [ACTIONS.REJECT_RESCHEDULE]: {
@@ -378,11 +378,6 @@ function _ok(nextState, meta = {}) {
  * @returns {{ ok: boolean, nextState?: string, meta?: object, error?: string, code?: string }}
  */
 function transition({ currentState, action, role, payload = {}, context = {} }) {
-  // ── Admin is never allowed to mutate ────────────────────────────────────
-  if (role === ROLES.ADMIN) {
-    return _err('Admin role has read-only access to the pipeline. No mutations allowed.', 'ADMIN_READONLY');
-  }
-
   // Normalize legacy/top-level status values to pipeline FSM states
   let state = currentState;
   if (state === 'INTERVIEW_SCHEDULED' || state === 'INTERVIEW_CONFIRMED') {
@@ -413,6 +408,11 @@ function transition({ currentState, action, role, payload = {}, context = {} }) 
       `Action "${action}" is not valid from state "${state}". Valid actions: [${validActions.join(', ')}]`,
       'INVALID_ACTION'
     );
+  }
+
+  // ── Admin check ──────────────────────────────────────────────────────────
+  if (role === ROLES.ADMIN && !txn.allowedRoles.includes(ROLES.ADMIN)) {
+    return _err('Admin role has read-only access to the pipeline for this action. No mutations allowed.', 'ADMIN_READONLY');
   }
 
   // ── RBAC check ───────────────────────────────────────────────────────────
