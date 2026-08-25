@@ -184,14 +184,15 @@ const JOB_METRICS_SECTION = {
   ]
 };
 
-// Candidate FSM statuses (subset surfaced as a filter option list)
+// Candidate FSM statuses (surfaced as a multi-select filter option list)
 const CANDIDATE_STATUS_OPTIONS = [
-  'SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED',
-  'INTERVIEWED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED', 'REJECTED', 'WITHDRAWN', 'ON_HOLD'
+  'CONSENT_PENDING', 'SUBMITTED', 'ADMIN_REVIEW', 'SHORTLISTED', 'SLOT_ASSIGNED', 
+  'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'ROUND_SELECTED_NEXT', 
+  'HR_ROUND_PENDING', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED', 'REJECTED', 'WITHDRAWN', 'ON_HOLD'
 ];
 
-const JOB_STATUS_OPTIONS = ['DRAFT', 'ACTIVE', 'PAUSED', 'CLOSED', 'FILLED', 'ON_HOLD'];
-const VERIFICATION_STATUS_OPTIONS = ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED'];
+const JOB_STATUS_OPTIONS = ['DRAFT', 'PENDING_APPROVAL', 'EDIT_REQUESTED', 'ACTIVE', 'PAUSED', 'ON_HOLD', 'FILLED', 'CLOSED', 'REJECTED'];
+const VERIFICATION_STATUS_OPTIONS = ['PENDING', 'EMAIL_VERIFICATION_PENDING', 'UNDER_REVIEW', 'APPROVED', 'ACTIVE', 'REJECTED', 'SUSPENDED'];
 
 // ---------------------------------------------------------------------------
 // REPORT TYPE REGISTRY
@@ -260,7 +261,7 @@ const reportFieldRegistry = {
     ],
     filters: [
       { key: 'dateRange', label: 'Registered Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'verificationStatus', label: 'Verification Status', type: 'select', appliesTo: 'verificationStatus', options: VERIFICATION_STATUS_OPTIONS }
+      { key: 'verificationStatus', label: 'Verification Status', type: 'multiSelectStatus', appliesTo: 'verificationStatus', options: VERIFICATION_STATUS_OPTIONS }
     ]
   },
 
@@ -322,7 +323,7 @@ const reportFieldRegistry = {
     ],
     filters: [
       { key: 'dateRange', label: 'Registered Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'verificationStatus', label: 'Verification Status', type: 'select', appliesTo: 'verificationStatus', options: VERIFICATION_STATUS_OPTIONS }
+      { key: 'verificationStatus', label: 'Verification Status', type: 'multiSelectStatus', appliesTo: 'verificationStatus', options: VERIFICATION_STATUS_OPTIONS }
     ]
   },
 
@@ -336,7 +337,7 @@ const reportFieldRegistry = {
     sections: [JOB_DETAILS_SECTION, JOB_COMPANY_SECTION, JOB_METRICS_SECTION],
     filters: [
       { key: 'dateRange', label: 'Posted Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'status', label: 'Job Status', type: 'select', appliesTo: 'status', options: JOB_STATUS_OPTIONS },
+      { key: 'status', label: 'Job Status', type: 'multiSelectStatus', appliesTo: 'status', options: JOB_STATUS_OPTIONS },
       { key: 'company', label: 'Company', type: 'companySelect', appliesTo: 'company', roles: ['admin', 'sub_admin'] }
     ]
   },
@@ -358,7 +359,7 @@ const reportFieldRegistry = {
       { key: 'job', label: 'Job', type: 'jobSelect', appliesTo: 'job' },
       { key: 'company', label: 'Company', type: 'companySelect', appliesTo: 'company', roles: ['admin', 'sub_admin'] },
       { key: 'dateRange', label: 'Submitted Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'status', label: 'Candidate Stage', type: 'select', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
+      { key: 'status', label: 'Candidate Stage', type: 'multiSelectStatus', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
     ]
   },
 
@@ -381,7 +382,7 @@ const reportFieldRegistry = {
       { key: 'company', label: 'Company (Optional)', type: 'companySelect', appliesTo: 'company', roles: ['admin', 'sub_admin'], optional: true },
       { key: 'job', label: 'Job (Optional)', type: 'jobSelect', appliesTo: 'job', optional: true },
       { key: 'dateRange', label: 'Submitted Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'status', label: 'Candidate Stage', type: 'select', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
+      { key: 'status', label: 'Candidate Stage', type: 'multiSelectStatus', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
     ]
   },
 
@@ -400,7 +401,7 @@ const reportFieldRegistry = {
     ],
     filters: [
       { key: 'dateRange', label: 'Submitted Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'status', label: 'Candidate Stage', type: 'select', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
+      { key: 'status', label: 'Candidate Stage', type: 'multiSelectStatus', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
     ]
   },
 
@@ -419,7 +420,7 @@ const reportFieldRegistry = {
     filters: [
       { key: 'job', label: 'Job(s)', type: 'jobSelect', appliesTo: 'job' },
       { key: 'dateRange', label: 'Submitted Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'status', label: 'Candidate Stage', type: 'select', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
+      { key: 'status', label: 'Candidate Stage', type: 'multiSelectStatus', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
     ]
   },
 
@@ -439,7 +440,7 @@ const reportFieldRegistry = {
     filters: [
       { key: 'job', label: 'Job(s)', type: 'jobSelect', appliesTo: 'job' },
       { key: 'dateRange', label: 'Submitted Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'status', label: 'Candidate Stage', type: 'select', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
+      { key: 'status', label: 'Candidate Stage', type: 'multiSelectStatus', appliesTo: 'status', options: CANDIDATE_STATUS_OPTIONS }
     ]
   }
 };

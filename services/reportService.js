@@ -94,15 +94,25 @@ function buildFilterMatch(def, filters = {}) {
       if (val.from) range.$gte = new Date(val.from);
       if (val.to) range.$lte = endOfDay(val.to);
       if (Object.keys(range).length) match[f.appliesTo] = range;
-    } else if (['multiselect', 'jobSelect', 'companySelect', 'partnerSelect'].includes(f.type)) {
-      const arr = (Array.isArray(val) ? val : [val])
-        .map(toObjectId)
-        .filter(Boolean);
-      // If filter is marked optional and no valid IDs are provided, skip it
-      if (arr.length) match[f.appliesTo] = { $in: arr };
+    } else if (['multiselect', 'multiSelect', 'multiSelectStatus', 'jobSelect', 'companySelect', 'partnerSelect'].includes(f.type)) {
+      if (f.type === 'multiSelectStatus' || f.key === 'status' || f.key === 'verificationStatus') {
+        const arr = (Array.isArray(val) ? val : [val]).filter((v) => v && v !== 'ALL');
+        if (arr.length) match[f.appliesTo] = { $in: arr };
+      } else {
+        const arr = (Array.isArray(val) ? val : [val])
+          .map(toObjectId)
+          .filter(Boolean);
+        if (arr.length) match[f.appliesTo] = { $in: arr };
+      }
     } else {
-      // select
-      match[f.appliesTo] = val;
+      // select (support single or multiple selection)
+      if (Array.isArray(val)) {
+        const arr = val.filter((v) => v && v !== 'ALL');
+        if (arr.length === 1) match[f.appliesTo] = arr[0];
+        else if (arr.length > 1) match[f.appliesTo] = { $in: arr };
+      } else {
+        match[f.appliesTo] = val;
+      }
     }
   }
   return match;
