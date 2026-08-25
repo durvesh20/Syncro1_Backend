@@ -1221,7 +1221,7 @@ const {
   pipelineShareDetails
 } = require('../controllers/pipelineController');
 const { getJobInterviewSlots } = require('../controllers/companyController');
-const { adminAssignCandidateToSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot } = require('../controllers/adminController');
+const { adminAssignCandidateToSlot, adminRemoveCandidateFromSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot } = require('../controllers/adminController');
 
 router.get('/candidates/:id/pipeline', adminGetPipeline);
 router.get('/jobs/:jobId/pipeline/template', getJobPipelineTemplate);
@@ -1239,6 +1239,7 @@ router.post('/candidates/:id/pipeline/publish-slots', pipelinePublishSlots);
 // Admin candidate assignment access (same as company/partner)
 router.post('/candidates/:id/pipeline/share-details', pipelineShareDetails);
 router.post('/jobs/:jobId/interview-slots/:slotId/assign', adminAssignCandidateToSlot);
+router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', adminRemoveCandidateFromSlot);
 
 // Phase 4: cross-candidate pipeline audit trail
 // GET /api/admin/pipeline/audit-log?page=1&limit=30&search=&action=&status=
