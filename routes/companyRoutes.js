@@ -66,6 +66,9 @@ const {
   pipelineShortlist,
   pipelineReject,
   pipelineReShortlist,
+  pipelineGlobalReject,
+  pipelineClientPortalDuplicate,
+  pipelineCandidateDrop,
   definePipelineTemplate,
   defineJobPipelineTemplate,
   getJobPipelineTemplate,
@@ -80,6 +83,7 @@ const {
   pipelineConfirmReschedule,
   pipelineRejectReschedule,
   pipelineMarkConducted,
+  pipelineMarkNotConducted,
   pipelineSelectNextRound,
   pipelineRejectRound,
   pipelineSelectDirectHR,
@@ -102,7 +106,7 @@ const {
 
 // Apply auth middleware to all routes
 router.use(protect);
-router.use(authorize('company'));
+router.use(authorize('company', 'admin', 'sub_admin'));
 
 // Middleware to block sub-admins from managing sub-admins
 const blockSubAdmins = (req, res, next) => {
@@ -376,11 +380,15 @@ router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), checkCom
 const PIPELINE_MW = [checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES')];
 
 // Phase 1–2
-router.put('/candidates/:id/pipeline/shortlist',    ...PIPELINE_MW, pipelineShortlist);
-router.put('/candidates/:id/pipeline/reject',       ...PIPELINE_MW, pipelineReject);
-router.put('/candidates/:id/pipeline/re-shortlist', ...PIPELINE_MW, pipelineReShortlist);
-router.post('/candidates/:id/pipeline/template',    ...PIPELINE_MW, definePipelineTemplate);
-router.get('/candidates/:id/pipeline',              checkCompanyPermission('VIEW_CANDIDATES'), getPipelinePreview);
+router.put('/candidates/:id/pipeline/shortlist',              ...PIPELINE_MW, pipelineShortlist);
+router.put('/candidates/:id/pipeline/reject',                 ...PIPELINE_MW, pipelineReject);
+router.put('/candidates/:id/pipeline/re-shortlist',           ...PIPELINE_MW, pipelineReShortlist);
+// Global override actions — available at any active stage for company + admin
+router.put('/candidates/:id/pipeline/global-reject',          ...PIPELINE_MW, pipelineGlobalReject);
+router.put('/candidates/:id/pipeline/client-portal-duplicate',...PIPELINE_MW, pipelineClientPortalDuplicate);
+router.put('/candidates/:id/pipeline/candidate-drop',         ...PIPELINE_MW, pipelineCandidateDrop);
+router.post('/candidates/:id/pipeline/template',              ...PIPELINE_MW, definePipelineTemplate);
+router.get('/candidates/:id/pipeline',                        checkCompanyPermission('VIEW_CANDIDATES'), getPipelinePreview);
 
 // Job-level Pipeline Template Routes
 router.post('/jobs/:jobId/pipeline/template',        ...PIPELINE_MW, defineJobPipelineTemplate);
@@ -397,6 +405,7 @@ router.post('/candidates/:id/pipeline/reschedule',        ...PIPELINE_MW, pipeli
 router.post('/candidates/:id/pipeline/reschedule/confirm', ...PIPELINE_MW, pipelineConfirmReschedule);
 router.post('/candidates/:id/pipeline/reschedule/reject',  ...PIPELINE_MW, pipelineRejectReschedule);
 router.post('/candidates/:id/pipeline/mark-conducted',    ...PIPELINE_MW, pipelineMarkConducted);
+router.post('/candidates/:id/pipeline/mark-not-conducted',...PIPELINE_MW, pipelineMarkNotConducted);
 router.post('/candidates/:id/pipeline/select-next-round', ...PIPELINE_MW, pipelineSelectNextRound);
 router.post('/candidates/:id/pipeline/reject-round',       ...PIPELINE_MW, pipelineRejectRound);
 router.post('/candidates/:id/pipeline/select-direct-hr',  ...PIPELINE_MW, pipelineSelectDirectHR);

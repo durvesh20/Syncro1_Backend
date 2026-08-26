@@ -1264,7 +1264,29 @@ const {
   definePipelineTemplate,
   defineJobPipelineTemplate,
   pipelinePublishSlots,
-  pipelineShareDetails
+  pipelineShareDetails,
+  pipelineGlobalReject,
+  pipelineClientPortalDuplicate,
+  pipelineCandidateDrop,
+  pipelineReShortlist,
+  pipelineAssessmentLinkSent,
+  pipelineAssessmentLinkComplete,
+  pipelineAssessmentPass,
+  pipelineAssessmentFail,
+  pipelineRequestReschedule,
+  pipelineConfirmReschedule,
+  pipelineRejectReschedule,
+  pipelineMarkConducted,
+  pipelineMarkNotConducted,
+  pipelineSelectNextRound,
+  pipelineRejectRound,
+  pipelineSelectDirectHR,
+  pipelineHoldRound,
+  pipelineResolveHold,
+  pipelineHRSelect,
+  pipelineHRReject,
+  pipelineHRHold,
+  pipelineHRResolveHold,
 } = require('../controllers/pipelineController');
 const { getJobInterviewSlots } = require('../controllers/companyController');
 const { adminAssignCandidateToSlot, adminRemoveCandidateFromSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot } = require('../controllers/adminController');
@@ -1279,11 +1301,33 @@ router.delete('/jobs/:jobId/interview-slots/:slotId', adminCancelJobInterviewSlo
 router.post('/candidates/:id/pipeline/template', definePipelineTemplate);
 router.post('/jobs/:jobId/pipeline/template', defineJobPipelineTemplate);
 
-// Admin slot creation access (same as company)
-router.post('/candidates/:id/pipeline/publish-slots', pipelinePublishSlots);
+// Admin global reject & re-shortlist actions
+router.put('/candidates/:id/pipeline/global-reject',           pipelineGlobalReject);
+router.put('/candidates/:id/pipeline/client-portal-duplicate', pipelineClientPortalDuplicate);
+router.put('/candidates/:id/pipeline/candidate-drop',         pipelineCandidateDrop);
+router.put('/candidates/:id/pipeline/re-shortlist',           pipelineReShortlist);
 
-// Admin candidate assignment access (same as company/partner)
-router.post('/candidates/:id/pipeline/share-details', pipelineShareDetails);
+// Admin pipeline actions
+router.post('/candidates/:id/pipeline/assessment/link-sent',     pipelineAssessmentLinkSent);
+router.post('/candidates/:id/pipeline/assessment/link-complete', pipelineAssessmentLinkComplete);
+router.post('/candidates/:id/pipeline/assessment/pass',          pipelineAssessmentPass);
+router.post('/candidates/:id/pipeline/assessment/fail',          pipelineAssessmentFail);
+router.post('/candidates/:id/pipeline/publish-slots',            pipelinePublishSlots);
+router.post('/candidates/:id/pipeline/share-details',             pipelineShareDetails);
+router.post('/candidates/:id/pipeline/reschedule',                pipelineRequestReschedule);
+router.post('/candidates/:id/pipeline/reschedule/confirm',        pipelineConfirmReschedule);
+router.post('/candidates/:id/pipeline/reschedule/reject',         pipelineRejectReschedule);
+router.post('/candidates/:id/pipeline/mark-conducted',            pipelineMarkConducted);
+router.post('/candidates/:id/pipeline/mark-not-conducted',        pipelineMarkNotConducted);
+router.post('/candidates/:id/pipeline/select-next',               pipelineSelectNextRound);
+router.post('/candidates/:id/pipeline/reject-round',              pipelineRejectRound);
+router.post('/candidates/:id/pipeline/select-direct-hr',          pipelineSelectDirectHR);
+router.post('/candidates/:id/pipeline/hold-round',                pipelineHoldRound);
+router.post('/candidates/:id/pipeline/resolve-hold',             pipelineResolveHold);
+router.post('/candidates/:id/pipeline/hr/select',                 pipelineHRSelect);
+router.post('/candidates/:id/pipeline/hr/reject',                 pipelineHRReject);
+router.post('/candidates/:id/pipeline/hr/hold',                   pipelineHRHold);
+router.post('/candidates/:id/pipeline/hr/resolve-hold',            pipelineHRResolveHold);
 router.post('/jobs/:jobId/interview-slots/:slotId/assign', adminAssignCandidateToSlot);
 router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', adminRemoveCandidateFromSlot);
 

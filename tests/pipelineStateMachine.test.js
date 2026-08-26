@@ -89,6 +89,12 @@ describe('§1.3 Assessment round', () => {
     expect(r.nextState).toBe(S.ASSESSMENT_PASSED);
   });
 
+  test('company marks assessment link sent from SHORTLISTED', () => {
+    const r = ok(S.SHORTLISTED, A.ASSESSMENT_LINK_SENT, R.COMPANY);
+    expect(r.ok).toBe(true);
+    expect(r.nextState).toBe(S.ASSESSMENT_LINK_SENT);
+  });
+
   test('company fails assessment — reason required', () => {
     const r1 = ok(S.ASSESSMENT_PENDING, A.ASSESSMENT_FAIL, R.COMPANY, {});
     expect(r1.ok).toBe(false);
@@ -166,6 +172,12 @@ describe('§1.4 Slot lifecycle', () => {
     const r = ok(S.SLOT_DETAILS_SHARED, A.MARK_CONDUCTED, R.COMPANY);
     expect(r.ok).toBe(true);
     expect(r.nextState).toBe(S.INTERVIEW_CONDUCTED);
+  });
+
+  test('company marks interview not conducted', () => {
+    const r = ok(S.SLOT_DETAILS_SHARED, A.MARK_NOT_CONDUCTED, R.COMPANY, { reason: 'Interviewer call dropped' });
+    expect(r.ok).toBe(true);
+    expect(r.nextState).toBe(S.SLOTS_NOT_PUBLISHED);
   });
 });
 
@@ -364,10 +376,10 @@ describe('getInitialRoundState', () => {
 
 // ─── Error: invalid / unknown states ─────────────────────────────────────────
 describe('Edge cases', () => {
-  test('unknown current state returns UNKNOWN_STATE', () => {
-    const r = ok('NONEXISTENT_STATE', A.REJECT, R.COMPANY, { reason: 'some reason here' });
-    expect(r.ok).toBe(false);
-    expect(r.code).toBe('UNKNOWN_STATE');
+  test('top-level status SUBMITTED normalizes to SHORTLISTED for assessment link sent', () => {
+    const r = ok('SUBMITTED', A.ASSESSMENT_LINK_SENT, R.COMPANY);
+    expect(r.ok).toBe(true);
+    expect(r.nextState).toBe(S.ASSESSMENT_LINK_SENT);
   });
 
   test('invalid action for valid state returns INVALID_ACTION', () => {

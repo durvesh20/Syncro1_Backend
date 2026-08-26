@@ -51,6 +51,8 @@ const PIPELINE_STATES = {
 
   // General (kept from existing flow for re-shortlist support)
   REJECTED: 'REJECTED',
+  CLIENT_PORTAL_DUPLICATE: 'CLIENT_PORTAL_DUPLICATE',
+  CANDIDATE_DROP: 'CANDIDATE_DROP',
   JOINED: 'JOINED',
 };
 
@@ -77,6 +79,7 @@ const ACTIONS = {
   CONFIRM_RESCHEDULE: 'CONFIRM_RESCHEDULE',
   REJECT_RESCHEDULE: 'REJECT_RESCHEDULE',
   MARK_CONDUCTED: 'MARK_CONDUCTED',
+  MARK_NOT_CONDUCTED: 'MARK_NOT_CONDUCTED',
 
   // §1.4 Step E — outcomes
   SELECT_NEXT_ROUND: 'SELECT_NEXT_ROUND',
@@ -97,6 +100,11 @@ const ACTIONS = {
   REJECT_OFFER: 'REJECT_OFFER',
   MARK_JOINED: 'MARK_JOINED',
   MARK_NOT_JOINED: 'MARK_NOT_JOINED',
+
+  // §1.7 Global override actions (bypass FSM transitions, handled directly in controller)
+  GLOBAL_REJECT: 'GLOBAL_REJECT',                         // Company/Admin reject at any active stage
+  CLIENT_PORTAL_DUPLICATE: 'CLIENT_PORTAL_DUPLICATE',     // Reject with fixed reason: duplicate in client portal
+  CANDIDATE_DROP: 'CANDIDATE_DROP',                       // Reject with fixed reason: Candidate Drop
 };
 
 // ─── Role constants ───────────────────────────────────────────────────────────
@@ -119,14 +127,75 @@ const TRANSITIONS = {
     },
     [ACTIONS.DEFINE_PIPELINE]: {
       allowedRoles: [ROLES.COMPANY],
-      nextState: PIPELINE_STATES.SHORTLISTED, // status stays SHORTLISTED; pipeline sub-doc is set
+      nextState: PIPELINE_STATES.SHORTLISTED,
       meta: { sideEffect: 'SET_PIPELINE_TEMPLATE' },
+    },
+    [ACTIONS.ASSESSMENT_LINK_SENT]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_LINK_SENT,
+    },
+    [ACTIONS.ASSESSMENT_LINK_COMPLETE]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_LINK_COMPLETE,
+    },
+    [ACTIONS.ASSESSMENT_PASS]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_PASSED,
+    },
+    [ACTIONS.ASSESSMENT_FAIL]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_FAILED,
+      requiresReason: true,
+    },
+    [ACTIONS.PUBLISH_SLOTS]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
+    },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
     },
   },
 
   [PIPELINE_STATES.REJECTED]: {
     [ACTIONS.RE_SHORTLIST]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SHORTLISTED,
+    },
+  },
+  [PIPELINE_STATES.CLIENT_PORTAL_DUPLICATE]: {
+    [ACTIONS.RE_SHORTLIST]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SHORTLISTED,
+    },
+  },
+  [PIPELINE_STATES.CANDIDATE_DROP]: {
+    [ACTIONS.RE_SHORTLIST]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SHORTLISTED,
+    },
+  },
+  [PIPELINE_STATES.ROUND_REJECTED]: {
+    [ACTIONS.RE_SHORTLIST]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SHORTLISTED,
+    },
+  },
+  [PIPELINE_STATES.HR_REJECTED]: {
+    [ACTIONS.RE_SHORTLIST]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SHORTLISTED,
+    },
+  },
+  [PIPELINE_STATES.ASSESSMENT_FAILED]: {
+    [ACTIONS.RE_SHORTLIST]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SHORTLISTED,
+    },
+  },
+  [PIPELINE_STATES.OFFER_REJECTED]: {
+    [ACTIONS.RE_SHORTLIST]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SHORTLISTED,
     },
   },
@@ -134,55 +203,118 @@ const TRANSITIONS = {
   // ── Assessment round ─────────────────────────────────────────────────────
   [PIPELINE_STATES.ASSESSMENT_PENDING]: {
     [ACTIONS.ASSESSMENT_LINK_SENT]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ASSESSMENT_LINK_SENT,
     },
-    [ACTIONS.ASSESSMENT_PASS]: {
-      allowedRoles: [ROLES.COMPANY],
-      nextState: PIPELINE_STATES.ASSESSMENT_PASSED,
-    },
-    [ACTIONS.ASSESSMENT_FAIL]: {
-      allowedRoles: [ROLES.COMPANY],
-      nextState: PIPELINE_STATES.ASSESSMENT_FAILED,
-      requiresReason: true,
-    },
-  },
-  [PIPELINE_STATES.ASSESSMENT_LINK_SENT]: {
     [ACTIONS.ASSESSMENT_LINK_COMPLETE]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ASSESSMENT_LINK_COMPLETE,
     },
     [ACTIONS.ASSESSMENT_PASS]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ASSESSMENT_PASSED,
     },
     [ACTIONS.ASSESSMENT_FAIL]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ASSESSMENT_FAILED,
+      requiresReason: true,
+    },
+    [ACTIONS.REJECT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_REJECTED,
+      requiresReason: true,
+    },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
+  },
+  [PIPELINE_STATES.ASSESSMENT_LINK_SENT]: {
+    [ACTIONS.ASSESSMENT_LINK_SENT]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_LINK_SENT,
+    },
+    [ACTIONS.ASSESSMENT_LINK_COMPLETE]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_LINK_COMPLETE,
+    },
+    [ACTIONS.ASSESSMENT_PASS]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_PASSED,
+    },
+    [ACTIONS.ASSESSMENT_FAIL]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_FAILED,
+      requiresReason: true,
+    },
+    [ACTIONS.REJECT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_REJECTED,
       requiresReason: true,
     },
   },
   [PIPELINE_STATES.ASSESSMENT_LINK_COMPLETE]: {
+    [ACTIONS.ASSESSMENT_LINK_SENT]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_LINK_SENT,
+    },
+    [ACTIONS.ASSESSMENT_LINK_COMPLETE]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_LINK_COMPLETE,
+    },
     [ACTIONS.ASSESSMENT_PASS]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ASSESSMENT_PASSED,
     },
     [ACTIONS.ASSESSMENT_FAIL]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ASSESSMENT_FAILED,
       requiresReason: true,
+    },
+    [ACTIONS.REJECT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_REJECTED,
+      requiresReason: true,
+    },
+  },
+  [PIPELINE_STATES.ASSESSMENT_PASSED]: {
+    [ACTIONS.PUBLISH_SLOTS]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
+    },
+    [ACTIONS.SELECT_NEXT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_NEXT,
+    },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
+    [ACTIONS.HR_SELECT]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.HR_SELECTED,
     },
   },
 
   // ── L-round slot lifecycle ────────────────────────────────────────────────
   [PIPELINE_STATES.SLOTS_NOT_PUBLISHED]: {
     [ACTIONS.PUBLISH_SLOTS]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
     },
     [ACTIONS.SELECT_DIRECT_HR]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
+    [ACTIONS.REJECT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_REJECTED,
+      requiresReason: true,
+    },
+    [ACTIONS.HOLD_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_ON_HOLD,
+      requiresReason: true,
     },
   },
 
@@ -195,6 +327,16 @@ const TRANSITIONS = {
       allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
     },
+    [ACTIONS.REJECT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_REJECTED,
+      requiresReason: true,
+    },
+    [ACTIONS.HOLD_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_ON_HOLD,
+      requiresReason: true,
+    },
   },
 
   [PIPELINE_STATES.SLOT_ASSIGNED]: {
@@ -202,14 +344,33 @@ const TRANSITIONS = {
       allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
     },
+    [ACTIONS.MARK_CONDUCTED]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.INTERVIEW_CONDUCTED,
+    },
     [ACTIONS.REQUEST_RESCHEDULE]: {
       allowedRoles: [ROLES.COMPANY, ROLES.STAFFING_PARTNER, ROLES.CANDIDATE, ROLES.ADMIN],
       nextState: PIPELINE_STATES.RESCHEDULE_REQUESTED,
       requiresReason: true,
     },
+    [ACTIONS.MARK_NOT_CONDUCTED]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
+      requiresReason: true,
+    },
     [ACTIONS.SELECT_DIRECT_HR]: {
       allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
+    [ACTIONS.REJECT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_REJECTED,
+      requiresReason: true,
+    },
+    [ACTIONS.HOLD_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_ON_HOLD,
+      requiresReason: true,
     },
   },
 
@@ -220,12 +381,27 @@ const TRANSITIONS = {
       requiresReason: true,
     },
     [ACTIONS.MARK_CONDUCTED]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.INTERVIEW_CONDUCTED,
     },
+    [ACTIONS.MARK_NOT_CONDUCTED]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
+      requiresReason: true,
+    },
     [ACTIONS.SELECT_DIRECT_HR]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
+    [ACTIONS.REJECT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_REJECTED,
+      requiresReason: true,
+    },
+    [ACTIONS.HOLD_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_ON_HOLD,
+      requiresReason: true,
     },
   },
 
@@ -235,39 +411,106 @@ const TRANSITIONS = {
       nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
     },
     [ACTIONS.REJECT_RESCHEDULE]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
     },
+    [ACTIONS.MARK_NOT_CONDUCTED]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
+      requiresReason: true,
+    },
     [ACTIONS.SELECT_DIRECT_HR]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
+    [ACTIONS.REJECT_ROUND]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_REJECTED,
+      requiresReason: true,
     },
   },
 
   [PIPELINE_STATES.INTERVIEW_CONDUCTED]: {
     [ACTIONS.SELECT_NEXT_ROUND]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_NEXT,
     },
     [ACTIONS.REJECT_ROUND]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_REJECTED,
       requiresReason: true,
     },
     [ACTIONS.SELECT_DIRECT_HR]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
     },
     [ACTIONS.HOLD_ROUND]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ROUND_ON_HOLD,
       requiresReason: true,
     },
   },
 
+  [PIPELINE_STATES.ROUND_SELECTED_NEXT]: {
+    [ACTIONS.PUBLISH_SLOTS]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
+    },
+    [ACTIONS.ASSESSMENT_LINK_SENT]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_LINK_SENT,
+    },
+    [ACTIONS.ASSESSMENT_LINK_COMPLETE]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_LINK_COMPLETE,
+    },
+    [ACTIONS.ASSESSMENT_PASS]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_PASSED,
+    },
+    [ACTIONS.ASSESSMENT_FAIL]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ASSESSMENT_FAILED,
+      requiresReason: true,
+    },
+    [ACTIONS.SELECT_DIRECT_HR]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+    },
+    [ACTIONS.HR_SELECT]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.HR_SELECTED,
+    },
+  },
+
+  [PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR]: {
+    [ACTIONS.HR_SELECT]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.HR_SELECTED,
+    },
+    [ACTIONS.HR_REJECT]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.HR_REJECTED,
+      requiresReason: true,
+    },
+    [ACTIONS.HR_HOLD]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.HR_ON_HOLD,
+      requiresReason: true,
+    },
+    [ACTIONS.SEND_OFFER]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.OFFER_SENT,
+    },
+    [ACTIONS.PUBLISH_SLOTS]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
+    },
+  },
+
   [PIPELINE_STATES.ROUND_ON_HOLD]: {
     [ACTIONS.RESOLVE_HOLD]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: 'DYNAMIC', // resolved from payload.resolution
       requiresPayload: ['resolution'], // 'NEXT_ROUND'|'SELECTED_DIRECT_HR'|'REJECTED'
       requiresReason: false,
@@ -277,24 +520,28 @@ const TRANSITIONS = {
   // ── HR round ─────────────────────────────────────────────────────────────
   [PIPELINE_STATES.HR_ROUND_PENDING]: {
     [ACTIONS.HR_SELECT]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.HR_SELECTED,
     },
     [ACTIONS.HR_REJECT]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.HR_REJECTED,
       requiresReason: true,
     },
     [ACTIONS.HR_HOLD]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.HR_ON_HOLD,
       requiresReason: true,
+    },
+    [ACTIONS.PUBLISH_SLOTS]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.SLOTS_PUBLISHED,
     },
   },
 
   [PIPELINE_STATES.HR_ON_HOLD]: {
     [ACTIONS.HR_RESOLVE_HOLD]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: 'DYNAMIC', // payload.resolution: 'SELECTED'|'REJECTED'
       requiresPayload: ['resolution'],
     },
@@ -302,19 +549,23 @@ const TRANSITIONS = {
 
   [PIPELINE_STATES.HR_SELECTED]: {
     [ACTIONS.SEND_OFFER]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.OFFER_SENT,
+    },
+    [ACTIONS.ACCEPT_OFFER]: {
+      allowedRoles: [ROLES.CANDIDATE, ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.OFFER_ACCEPTED,
     },
   },
 
   // ── Offer ─────────────────────────────────────────────────────────────────
   [PIPELINE_STATES.OFFER_SENT]: {
     [ACTIONS.ACCEPT_OFFER]: {
-      allowedRoles: [ROLES.CANDIDATE, ROLES.COMPANY],
+      allowedRoles: [ROLES.CANDIDATE, ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.OFFER_ACCEPTED,
     },
     [ACTIONS.REJECT_OFFER]: {
-      allowedRoles: [ROLES.CANDIDATE, ROLES.COMPANY],
+      allowedRoles: [ROLES.CANDIDATE, ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.OFFER_REJECTED,
       requiresReason: true,
     },
@@ -322,15 +573,15 @@ const TRANSITIONS = {
 
   [PIPELINE_STATES.OFFER_ACCEPTED]: {
     [ACTIONS.SELECT_NEXT_ROUND]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.ONBOARDING,
     },
     [ACTIONS.MARK_JOINED]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: 'JOINED',
     },
     [ACTIONS.MARK_NOT_JOINED]: {
-      allowedRoles: [ROLES.COMPANY],
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
       nextState: PIPELINE_STATES.REJECTED,
       requiresReason: true,
     },
@@ -378,6 +629,7 @@ function _ok(nextState, meta = {}) {
  * @returns {{ ok: boolean, nextState?: string, meta?: object, error?: string, code?: string }}
  */
 function transition({ currentState, action, role, payload = {}, context = {} }) {
+  console.log(`[FSM transition()] Invoked with: currentState="${currentState}", action="${action}", role="${role}"`);
   // Normalize legacy/top-level status values to pipeline FSM states
   let state = currentState;
   if (state === 'INTERVIEW_SCHEDULED' || state === 'INTERVIEW_CONFIRMED') {
@@ -388,6 +640,12 @@ function transition({ currentState, action, role, payload = {}, context = {} }) 
     state = PIPELINE_STATES.OFFER_SENT;
   } else if (state === 'JOINED') {
     state = PIPELINE_STATES.ONBOARDING;
+  }
+
+  // Fallback: If state is not recognized in TRANSITIONS and is not a terminal state, normalize to SHORTLISTED
+  if (!TRANSITIONS[state] && !_isTerminalState(state)) {
+    console.log(`[FSM transition()] State "${currentState}" not in TRANSITIONS & not terminal; normalized to SHORTLISTED`);
+    state = PIPELINE_STATES.SHORTLISTED;
   }
 
   // ── Validate state exists ────────────────────────────────────────────────
@@ -403,6 +661,10 @@ function transition({ currentState, action, role, payload = {}, context = {} }) 
   // ── Validate action exists for this state ────────────────────────────────
   const txn = stateTransitions[action];
   if (!txn) {
+    const isTerminal = _isTerminalState(state);
+    if (isTerminal) {
+      return _err(`State "${state}" is terminal — no further transitions allowed.`, 'TERMINAL_STATE');
+    }
     const validActions = Object.keys(stateTransitions);
     return _err(
       `Action "${action}" is not valid from state "${state}". Valid actions: [${validActions.join(', ')}]`,
@@ -503,10 +765,49 @@ function _isTerminalState(state) {
     PIPELINE_STATES.OFFER_REJECTED,
     PIPELINE_STATES.ONBOARDING,
     PIPELINE_STATES.REJECTED,
+    PIPELINE_STATES.CLIENT_PORTAL_DUPLICATE,
+    PIPELINE_STATES.CANDIDATE_DROP,
+    PIPELINE_STATES.JOINED,
   ].includes(state);
 }
 
 // ─── Pipeline template validation ─────────────────────────────────────────────
+
+const ALLOWED_ASSESSMENT_NAMES = ['Assessment', 'Aptitude', 'Test'];
+
+function validateAssessmentRoundName(inputName) {
+  if (!inputName || typeof inputName !== 'string') return { valid: true };
+  const trimmed = inputName.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Check exact match to allowed list (case-insensitive)
+  const isExact = ALLOWED_ASSESSMENT_NAMES.some(a => a.toLowerCase() === lower);
+  if (isExact) {
+    return { valid: true, isAssessment: true, canonicalName: ALLOWED_ASSESSMENT_NAMES.find(a => a.toLowerCase() === lower) };
+  }
+
+  // Detect misspelled assessment terms
+  let suggestion = null;
+
+  if (lower.includes('ass') || lower.includes('mnt') || lower.includes('esment') || lower.includes('ess')) {
+    suggestion = 'Assessment';
+  } else if (lower.includes('apt') || lower.includes('tude')) {
+    suggestion = 'Aptitude';
+  } else if (lower.includes('tst') || lower.includes('tet')) {
+    suggestion = 'Test';
+  }
+
+  if (suggestion) {
+    return {
+      valid: false,
+      isAssessment: true,
+      suggestion,
+      error: `Invalid assessment round name "${trimmed}". Did you mean "${suggestion}"? Allowed assessment names are: Assessment, Aptitude, or Test.`
+    };
+  }
+
+  return { valid: true, isAssessment: false };
+}
 
 /**
  * Validate a proposed pipeline template (ordered round array).
@@ -530,6 +831,12 @@ function validatePipelineTemplate(rounds) {
     if (!r.roundType || typeof r.roundType !== 'string' || r.roundType.trim().length === 0) {
       return { ok: false, error: `Round name at position ${i + 1} cannot be empty.` };
     }
+
+    const assessmentCheck = validateAssessmentRoundName(r.roundType);
+    if (!assessmentCheck.valid) {
+      return { ok: false, error: assessmentCheck.error };
+    }
+
     const normalized = r.roundType.trim().toLowerCase();
     
     const validHrNames = ['hr', 'hr round', 'hr_round', 'human resource', 'human resource round'];
@@ -550,14 +857,22 @@ function validatePipelineTemplate(rounds) {
   return { ok: true };
 }
 
-/**
- * Given the round type, return the initial state.
- * If the roundType starts with or matches 'ASSESSMENT', it is treated as an assessment round (starting at ASSESSMENT_PENDING).
- * All other rounds are treated as interview rounds (starting at SLOTS_NOT_PUBLISHED).
- */
+function isAssessmentRoundType(roundType) {
+  if (!roundType || typeof roundType !== 'string') return false;
+  const rt = roundType.trim().toUpperCase();
+  return (
+    rt === 'ASSESSMENT' ||
+    rt === 'APTITUDE' ||
+    rt === 'TEST' ||
+    rt.includes('ASSESS') ||
+    rt.includes('ASSMNT') ||
+    rt.includes('APT') ||
+    rt.includes('TEST')
+  );
+}
+
 function getInitialRoundState(roundType) {
-  const rt = (roundType || '').toUpperCase();
-  if (rt === 'ASSESSMENT' || rt.startsWith('ASSESSMENT')) {
+  if (isAssessmentRoundType(roundType)) {
     return PIPELINE_STATES.ASSESSMENT_PENDING;
   }
   return PIPELINE_STATES.SLOTS_NOT_PUBLISHED;

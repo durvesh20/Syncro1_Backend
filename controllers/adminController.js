@@ -4818,7 +4818,7 @@ exports.bulkRevokeVerificationAssignment = async (req, res) => {
 // POST /api/admin/jobs/:jobId/interview-slots/:slotId/assign
 exports.adminAssignCandidateToSlot = async (req, res) => {
   try {
-    const { candidateId } = req.body;
+    const { candidateId, sendConsent = true } = req.body;
     const Candidate = require('../models/Candidate');
     const InterviewSlot = require('../models/InterviewSlot');
     const { transition, ACTIONS } = require('../services/pipelineStateMachine');
@@ -5189,7 +5189,12 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
         console.error('[ADMIN ASSIGN] Notification error:', err.message);
       }
     };
-    notifyCandidate();
+    const shouldSendConsent = sendConsent !== false && sendConsent !== 'false';
+    if (shouldSendConsent) {
+      notifyCandidate();
+    } else {
+      console.log(`[ADMIN ASSIGN] sendConsent is false for candidate ${candidate._id}, skipping candidate consent notification.`);
+    }
 
     res.json({
       success: true,

@@ -168,6 +168,8 @@ const candidateSchema = new mongoose.Schema({
       'OFFER_DECLINED',
       'JOINED',
       'REJECTED',
+      'CLIENT_PORTAL_DUPLICATE',
+      'CANDIDATE_DROP',
       'WITHDRAWN',
       'ON_HOLD',
       'SLOT_ASSIGNED',
@@ -700,7 +702,7 @@ const candidateSchema = new mongoose.Schema({
       outcome: {
         decision: {
           type: String,
-          enum: ['SELECTED_NEXT_ROUND', 'REJECTED', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'ON_HOLD']
+          enum: ['SELECTED_NEXT_ROUND', 'REJECTED', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'ON_HOLD']
         },
         reason: String,
         decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -735,14 +737,17 @@ const candidateSchema = new mongoose.Schema({
   // Immutable audit trail — one entry per FSM transition
   auditTrail: [
     {
-      actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      actorRole: String,
-      action: String,
-      fromState: String,
-      toState: String,
-      reason: String,
-      roundIndex: Number, // which round this pertains to (null for top-level actions)
-      timestamp: { type: Date, default: Date.now }
+      actorId:        { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      actorRole:      String,
+      actorEmail:     String,   // Actor's email at time of action (self-contained, no join needed)
+      actorFirstName: String,   // Actor's first name at time of action
+      actorLastName:  String,   // Actor's last name at time of action
+      action:         String,
+      fromState:      String,
+      toState:        String,
+      reason:         String,
+      roundIndex:     Number, // which round this pertains to (null for top-level actions)
+      timestamp:      { type: Date, default: Date.now }
     }
   ],
 

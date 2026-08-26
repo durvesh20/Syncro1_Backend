@@ -1897,49 +1897,27 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    // Candidate must not already be assigned to a slot in the current round
+    // Auto-unassign from previous slot if candidate is re-booking / changing slot in this round
     if (candidate.assignedSlot) {
-      const assignedSlotDoc = await InterviewSlot.findById(candidate.assignedSlot);
-      const getActiveRoundInfoForCheck = (cand) => {
-        const status = cand.status;
-        if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
-        const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
-        if (hrStates.includes(status)) {
-          const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
-          if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
-        }
-        const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
-        if (assessmentStates.includes(status)) {
-          const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
-          if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
-        }
-        const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
-        if (offerStates.includes(status)) return null;
-        for (let i = 0; i < cand.rounds.length; i++) {
-          const r = cand.rounds[i];
-          const L_STATES = [
-            'SLOTS_NOT_PUBLISHED',
-            'SLOTS_PUBLISHED',
-            'SLOT_ASSIGNED',
-            'RESCHEDULE_REQUESTED',
-            'SLOT_DETAILS_SHARED',
-            'INTERVIEW_CONDUCTED',
-            'ROUND_ON_HOLD'
-          ];
-          if (L_STATES.includes(r.status)) return { index: i, round: r };
-        }
-        return null;
-      };
-
-      const activeRoundInfo = getActiveRoundInfoForCheck(candidate);
-      if (assignedSlotDoc && activeRoundInfo && assignedSlotDoc.roundType === activeRoundInfo.round.roundType) {
-        return res.status(400).json({
-          success: false,
-          message: 'Candidate is already assigned to a slot in this round',
-          assignedSlotId: candidate.assignedSlot,
-          hint: 'Remove candidate from current slot before reassigning',
+      if (candidate.assignedSlot.toString() === req.params.slotId.toString()) {
+        return res.json({
+          success: true,
+          message: 'Candidate is already assigned to this slot',
+          data: { candidateId: candidate._id, slotId: candidate.assignedSlot }
         });
       }
+      const assignedSlotDoc = await InterviewSlot.findById(candidate.assignedSlot);
+      if (assignedSlotDoc) {
+        assignedSlotDoc.bookedCandidates = assignedSlotDoc.bookedCandidates.filter(
+          b => b.candidate.toString() !== candidate._id.toString()
+        );
+        assignedSlotDoc.availableSpots += 1;
+        if (assignedSlotDoc.status === 'FULL') {
+          assignedSlotDoc.status = 'ACTIVE';
+        }
+        await assignedSlotDoc.save();
+      }
+      candidate.assignedSlot = null;
     }
 
     // ── Validate slot ─────────────────────────────────────────────────
