@@ -192,7 +192,15 @@ const CANDIDATE_STATUS_OPTIONS = [
 ];
 
 const JOB_STATUS_OPTIONS = ['DRAFT', 'PENDING_APPROVAL', 'EDIT_REQUESTED', 'ACTIVE', 'PAUSED', 'ON_HOLD', 'FILLED', 'CLOSED', 'REJECTED'];
-const VERIFICATION_STATUS_OPTIONS = ['PENDING', 'EMAIL_VERIFICATION_PENDING', 'UNDER_REVIEW', 'APPROVED', 'ACTIVE', 'REJECTED', 'SUSPENDED'];
+const VERIFICATION_STATUS_OPTIONS = ['ACTIVE', 'APPROVED', 'PENDING', 'UNDER_REVIEW', 'REJECTED'];
+const UNIFIED_STATUS_OPTIONS = [
+  'REGISTERED',
+  'UNDER_REVIEW',
+  'VERIFIED',
+  'REJECTED',
+  'SUSPENDED',
+  'PENDING_EMAIL_VERIFICATION'
+];
 
 // ---------------------------------------------------------------------------
 // REPORT TYPE REGISTRY
@@ -226,7 +234,7 @@ const reportFieldRegistry = {
           { key: 'tp_website', label: 'Website', path: 'firmDetails.website', type: 'string', default: false },
           { key: 'tp_sectors', label: 'Hiring Sectors', path: 'Syncro1Competency.primaryHiringSectors', type: 'array', default: false },
           { key: 'tp_plan', label: 'Subscription Plan', path: 'subscription.plan', type: 'string', default: false },
-          { key: 'tp_verificationStatus', label: 'Verification Status', path: 'verificationStatus', type: 'string', default: false },
+          { key: 'tp_status', label: 'Status', path: null, type: 'string', compute: 'tp_status', default: true },
           { key: 'tp_createdAt', label: 'Registered At', path: 'createdAt', type: 'date', default: false }
         ]
       },
@@ -261,7 +269,7 @@ const reportFieldRegistry = {
     ],
     filters: [
       { key: 'dateRange', label: 'Registered Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'verificationStatus', label: 'Verification Status', type: 'multiSelectStatus', appliesTo: 'verificationStatus', options: VERIFICATION_STATUS_OPTIONS }
+      { key: 'status', label: 'Status', type: 'multiSelectStatus', appliesTo: 'status', options: UNIFIED_STATUS_OPTIONS }
     ]
   },
 
@@ -291,7 +299,7 @@ const reportFieldRegistry = {
           { key: 'co_industry', label: 'Industry', path: 'kyc.industry', type: 'string', default: false },
           { key: 'co_companyType', label: 'Company Type', path: 'kyc.companyType', type: 'string', default: false },
           { key: 'co_website', label: 'Website', path: 'kyc.website', type: 'string', default: false },
-          { key: 'co_verificationStatus', label: 'Verification Status', path: 'verificationStatus', type: 'string', default: false },
+          { key: 'co_status', label: 'Status', path: null, type: 'string', compute: 'co_status', default: true },
           { key: 'co_createdAt', label: 'Registered At', path: 'createdAt', type: 'date', default: false }
         ]
       },
@@ -323,7 +331,7 @@ const reportFieldRegistry = {
     ],
     filters: [
       { key: 'dateRange', label: 'Registered Between', type: 'dateRange', appliesTo: 'createdAt' },
-      { key: 'verificationStatus', label: 'Verification Status', type: 'multiSelectStatus', appliesTo: 'verificationStatus', options: VERIFICATION_STATUS_OPTIONS }
+      { key: 'status', label: 'Status', type: 'multiSelectStatus', appliesTo: 'status', options: UNIFIED_STATUS_OPTIONS }
     ]
   },
 

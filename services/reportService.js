@@ -15,6 +15,7 @@ const {
 
 const Company = require('../models/Company');
 const StaffingPartner = require('../models/StaffingPartner');
+const User = require('../models/User');
 
 // Map a registry `base` collection name -> Mongoose model
 const BASE_MODEL = {
@@ -80,7 +81,7 @@ async function resolveScope(user, def) {
 
 // ---- filter -> $match builder --------------------------------------------
 
-function buildFilterMatch(def, filters = {}) {
+async function buildFilterMatch(def, filters = {}) {
   const match = {};
   const registryFilters = def.filters || [];
 
@@ -94,20 +95,58 @@ function buildFilterMatch(def, filters = {}) {
       if (val.from) range.$gte = new Date(val.from);
       if (val.to) range.$lte = endOfDay(val.to);
       if (Object.keys(range).length) match[f.appliesTo] = range;
-    } else if (['multiselect', 'multiSelect', 'multiSelectStatus', 'jobSelect', 'companySelect', 'partnerSelect'].includes(f.type)) {
-      if (f.type === 'multiSelectStatus' || f.key === 'status' || f.key === 'verificationStatus') {
-        const arr = (Array.isArray(val) ? val : [val]).filter((v) => v && v !== 'ALL');
-        if (arr.length) match[f.appliesTo] = { $in: arr };
-      } else {
-        const arr = (Array.isArray(val) ? val : [val])
-          .map(toObjectId)
-          .filter(Boolean);
-        if (arr.length) match[f.appliesTo] = { $in: arr };
+    } else if (f.key === 'status' && (def.base === 'staffingpartners' || def.base === 'companies')) {
+      const arr = (Array.isArray(val) ? val : [val]).filter((v) => v && v !== 'ALL' && v !== '');
+      if (arr.length > 0) {
+        const orConditions = [];
+        arr.forEach((v) => {
+          if (v === 'REGISTERED') {
+            orConditions.push({ verificationStatus: { $in: ['PENDING', null] } });
+          } else if (v === 'UNDER_REVIEW') {
+            orConditions.push({ verificationStatus: 'UNDER_REVIEW' });
+          } else if (v === 'VERIFIED' || v === 'APPROVED' || v === 'ACTIVE') {
+            orConditions.push({ verificationStatus: 'APPROVED' });
+          } else if (v === 'REJECTED') {
+            orConditions.push({ verificationStatus: 'REJECTED' });
+          }
+        });
+
+        const userStatuses = [];
+        if (arr.includes('SUSPENDED')) userStatuses.push('SUSPENDED');
+        if (arr.includes('PENDING_EMAIL_VERIFICATION')) userStatuses.push('PENDING_EMAIL_VERIFICATION');
+
+        if (userStatuses.length > 0) {
+          const matchedUsers = await User.find({ status: { $in: userStatuses } }).select('_id').lean();
+          const uIds = matchedUsers.map((u) => u._id);
+          orConditions.push({ user: { $in: uIds } });
+        }
+
+        if (orConditions.length === 1) {
+          Object.assign(match, orConditions[0]);
+        } else if (orConditions.length > 1) {
+          match.$or = orConditions;
+        }
+      }
+    } else if (f.type === 'multiSelectStatus' || f.key === 'status') {
+      const arr = (Array.isArray(val) ? val : [val]).filter((v) => v && v !== 'ALL' && v !== '');
+      if (arr.length === 1) {
+        match[f.appliesTo] = arr[0];
+      } else if (arr.length > 1) {
+        match[f.appliesTo] = { $in: arr };
+      }
+    } else if (['multiselect', 'multiSelect', 'jobSelect', 'companySelect', 'partnerSelect'].includes(f.type)) {
+      const arr = (Array.isArray(val) ? val : [val])
+        .map(toObjectId)
+        .filter(Boolean);
+      if (arr.length === 1) {
+        match[f.appliesTo] = arr[0];
+      } else if (arr.length > 1) {
+        match[f.appliesTo] = { $in: arr };
       }
     } else {
-      // select (support single or multiple selection)
+      // select fallback
       if (Array.isArray(val)) {
-        const arr = val.filter((v) => v && v !== 'ALL');
+        const arr = val.filter((v) => v && v !== 'ALL' && v !== '');
         if (arr.length === 1) match[f.appliesTo] = arr[0];
         else if (arr.length > 1) match[f.appliesTo] = { $in: arr };
       } else {
@@ -122,6 +161,20 @@ function buildFilterMatch(def, filters = {}) {
 
 function computeValue(doc, fieldDef) {
   switch (fieldDef.compute) {
+    case 'tp_status':
+    case 'co_status': {
+      const userStatus = getPath(doc, 'userInfo.status');
+      const verStatus = getPath(doc, 'verificationStatus');
+
+      if (userStatus === 'SUSPENDED') return 'SUSPENDED';
+      if (userStatus === 'REJECTED' || verStatus === 'REJECTED') return 'REJECTED';
+      if (verStatus === 'APPROVED' || userStatus === 'VERIFIED') return 'VERIFIED';
+      if (verStatus === 'UNDER_REVIEW') return 'UNDER_REVIEW';
+      if (userStatus === 'ACTIVE' || userStatus === 'REGISTERED') return 'REGISTERED';
+      if (userStatus === 'PENDING_EMAIL_VERIFICATION') return 'PENDING_EMAIL_VERIFICATION';
+
+      return verStatus || userStatus || 'REGISTERED';
+    }
     case 'submissionToHireRatio': {
       const submitted = getPath(doc, 'metrics.totalSubmissions') || 0;
       const placed = getPath(doc, 'metrics.totalPlacements') || 0;
@@ -222,7 +275,8 @@ async function buildCursor({ reportType, user, selectedFields, filters }) {
     return null;
   }
 
-  const match = { ...scope, ...buildFilterMatch(def, filters) };
+  const filterMatch = await buildFilterMatch(def, filters);
+  const match = { ...scope, ...filterMatch };
 
   console.log(`[reports] buildCursor: base=${def.base}, scope=`, scope, 'match=', match);
 
@@ -353,7 +407,8 @@ async function debugQuery({ reportType, user, selectedFields, filters }) {
   const Model = mongoose.model(BASE_MODEL[def.base]);
   const scope = await resolveScope(user, def);
 
-  const match = { ...(scope || {}), ...buildFilterMatch(def, filters) };
+  const filterMatch = await buildFilterMatch(def, filters);
+  const match = { ...(scope || {}), ...filterMatch };
 
   const pipeline = [{ $match: match }];
 
