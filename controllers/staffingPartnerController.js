@@ -1794,13 +1794,13 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
           // Helper to identify the current active round info based on candidate status
           const getActiveRoundInfo = (cand) => {
             const status = cand.status;
-            if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+            if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
             const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
             if (hrStates.includes(status)) {
               const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
               if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
             }
-            const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+            const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
             if (assessmentStates.includes(status)) {
               const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
               if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
@@ -1897,49 +1897,27 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    // Candidate must not already be assigned to a slot in the current round
+    // Auto-unassign from previous slot if candidate is re-booking / changing slot in this round
     if (candidate.assignedSlot) {
-      const assignedSlotDoc = await InterviewSlot.findById(candidate.assignedSlot);
-      const getActiveRoundInfoForCheck = (cand) => {
-        const status = cand.status;
-        if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
-        const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
-        if (hrStates.includes(status)) {
-          const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
-          if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
-        }
-        const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
-        if (assessmentStates.includes(status)) {
-          const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
-          if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
-        }
-        const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
-        if (offerStates.includes(status)) return null;
-        for (let i = 0; i < cand.rounds.length; i++) {
-          const r = cand.rounds[i];
-          const L_STATES = [
-            'SLOTS_NOT_PUBLISHED',
-            'SLOTS_PUBLISHED',
-            'SLOT_ASSIGNED',
-            'RESCHEDULE_REQUESTED',
-            'SLOT_DETAILS_SHARED',
-            'INTERVIEW_CONDUCTED',
-            'ROUND_ON_HOLD'
-          ];
-          if (L_STATES.includes(r.status)) return { index: i, round: r };
-        }
-        return null;
-      };
-
-      const activeRoundInfo = getActiveRoundInfoForCheck(candidate);
-      if (assignedSlotDoc && activeRoundInfo && assignedSlotDoc.roundType === activeRoundInfo.round.roundType) {
-        return res.status(400).json({
-          success: false,
-          message: 'Candidate is already assigned to a slot in this round',
-          assignedSlotId: candidate.assignedSlot,
-          hint: 'Remove candidate from current slot before reassigning',
+      if (candidate.assignedSlot.toString() === req.params.slotId.toString()) {
+        return res.json({
+          success: true,
+          message: 'Candidate is already assigned to this slot',
+          data: { candidateId: candidate._id, slotId: candidate.assignedSlot }
         });
       }
+      const assignedSlotDoc = await InterviewSlot.findById(candidate.assignedSlot);
+      if (assignedSlotDoc) {
+        assignedSlotDoc.bookedCandidates = assignedSlotDoc.bookedCandidates.filter(
+          b => b.candidate.toString() !== candidate._id.toString()
+        );
+        assignedSlotDoc.availableSpots += 1;
+        if (assignedSlotDoc.status === 'FULL') {
+          assignedSlotDoc.status = 'ACTIVE';
+        }
+        await assignedSlotDoc.save();
+      }
+      candidate.assignedSlot = null;
     }
 
     // ── Validate slot ─────────────────────────────────────────────────
@@ -2004,13 +1982,13 @@ exports.assignCandidateToSlot = async (req, res) => {
     // ── Check if candidate active round matches slot roundType ──────────
     const getActiveRoundInfoForValidation = (cand) => {
       const status = cand.status;
-      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
       const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
       if (hrStates.includes(status)) {
         const idx = cand.rounds.findIndex(r => r.roundType === 'HR_ROUND');
         if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
       }
-      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
       if (assessmentStates.includes(status)) {
         const idx = cand.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
         if (idx !== -1) return { index: idx, round: cand.rounds[idx] };
@@ -2071,13 +2049,13 @@ exports.assignCandidateToSlot = async (req, res) => {
     // Helper to identify the current active round info based on candidate status
     const getActiveRoundInfo = (c) => {
       const status = c.status;
-      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
       const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
       if (hrStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
       }
-      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
       if (assessmentStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
@@ -2340,13 +2318,13 @@ exports.removeCandidateFromSlot = async (req, res) => {
 
     const getActiveRoundInfo = (c) => {
       const status = c.status;
-      if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
+      if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
       const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
       if (hrStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
       }
-      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
       if (assessmentStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
@@ -2518,12 +2496,17 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all' } = req.query;
+    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all', jobId, job: jobParam } = req.query;
     const parsedPage = parseInt(page, 10) || 1;
     const parsedLimit = parseInt(limit, 10) || 10;
     const skip = (parsedPage - 1) * parsedLimit;
 
     const query = { submittedBy: partner._id };
+
+    const targetJobId = jobId || jobParam;
+    if (targetJobId) {
+      query.job = targetJobId;
+    }
 
     if (tab === 'consent_pending' || status === 'CONSENT_PENDING') {
       query.status = 'CONSENT_PENDING';
@@ -2913,8 +2896,11 @@ exports.resendConsent = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Submission not found' });
     }
 
-    // Allow resend if consent is pending or candidate is still in draft (consent never sent)
-    const allowedResendStatuses = ['CONSENT_PENDING', 'DRAFT'];
+    // Allow resend if:
+    //  • consent is pending / never responded
+    //  • draft (consent never sent)
+    //  • WITHDRAWN (link expired or withdrawn)
+    const allowedResendStatuses = ['CONSENT_PENDING', 'DRAFT', 'WITHDRAWN'];
     if (!allowedResendStatuses.includes(candidate.status)) {
       return res.status(400).json({
         success: false,
@@ -2930,18 +2916,16 @@ exports.resendConsent = async (req, res) => {
 
     const company = await Company.findById(candidate.job?.company || candidate.company).select('companyName');
     const companyName = company?.companyName || 'a leading company';
-    let consentToken = candidate.whatsappConsent?.token;
 
-    // For DRAFT candidates, consent was never sent — generate a fresh token
-    if (!consentToken) {
-      if (candidate.status !== 'DRAFT') {
-        return res.status(400).json({ success: false, message: 'Consent token missing. Cannot resend.' });
-      }
-      consentToken = crypto.randomBytes(32).toString('hex');
-      if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
-      candidate.whatsappConsent.token = consentToken;
-      candidate.whatsappConsent.sentTo = candidate.mobile;
-    }
+    // Always generate a fresh token on resend to invalidate any old/expired WhatsApp links
+    const consentToken = crypto.randomBytes(32).toString('hex');
+    if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
+    candidate.whatsappConsent.token = consentToken;
+    candidate.whatsappConsent.sentTo = candidate.mobile;
+
+    // Set/refresh consent expiration to 48 hours from now
+    const consentExpiry = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    candidate.whatsappConsent.expiresAt = consentExpiry;
 
     const result = await whatsappService.sendCandidateConsent(
       candidate.mobile,
@@ -2955,8 +2939,9 @@ exports.resendConsent = async (req, res) => {
       return res.status(500).json({ success: false, message: 'Failed to resend WhatsApp consent', error: result.error });
     }
 
-    // Update consent timestamps and promote DRAFT → CONSENT_PENDING
+    // Update consent timestamps and promote DRAFT / WITHDRAWN → CONSENT_PENDING
     if (!candidate.whatsappConsent) candidate.whatsappConsent = {};
+    candidate.whatsappConsent.status = 'PENDING';
     candidate.whatsappConsent.resentAt = new Date();
     candidate.whatsappConsent.sentAt = new Date();
 
@@ -2969,7 +2954,9 @@ exports.resendConsent = async (req, res) => {
       changedAt: new Date(),
       notes: previousStatus === 'DRAFT'
         ? 'WhatsApp consent sent for the first time (from DRAFT) by partner'
-        : 'WhatsApp consent resent by partner'
+        : previousStatus === 'WITHDRAWN'
+          ? 'WhatsApp consent resent after previous link expired (from WITHDRAWN) by partner'
+          : 'WhatsApp consent resent by partner'
     });
     await candidate.save();
 
@@ -3723,7 +3710,7 @@ exports.getWorkedJobs = async (req, res) => {
     );
 
     const Candidate = require('../models/Candidate');
-    const aggregationResult = await Candidate.aggregate(pipeline);
+    const aggregationResult = await Candidate.aggregate(pipeline).allowDiskUse(true);
 
     const total = aggregationResult[0].metadata[0]?.total || 0;
 

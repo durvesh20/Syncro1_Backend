@@ -86,6 +86,12 @@ async function sendPipelineEmail(role, candidateId, subject, htmlContent) {
 }
 
 function handleFsmError(fsmResult, res) {
+  console.error('[PIPELINE FSM ERROR REJECTED]', {
+    ok: fsmResult.ok,
+    code: fsmResult.code,
+    error: fsmResult.error,
+    meta: fsmResult.meta
+  });
   const statusMap = { FORBIDDEN: 403, ADMIN_READONLY: 403, RESCHEDULE_CAP: 422, TERMINAL_STATE: 422 };
   const httpStatus = statusMap[fsmResult.code] || 400;
   return res.status(httpStatus).json({ success: false, message: fsmResult.error, code: fsmResult.code });
@@ -212,6 +218,166 @@ exports.pipelineReject = async (req, res) => {
   }
 };
 
+// ─── Shared helper for global force-reject (used by two endpoints below) ──────
+async function _performGlobalReject({ req, res, reason, action, auditAction, targetState }) {
+  try {
+    const role = roleFromReq(req);
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+
+    // Only block JOINED — candidate has already joined the company
+    if (fromState === 'JOINED') {
+      return res.status(422).json({
+        success: false,
+        message: 'Cannot reject a candidate who has already joined.',
+        code: 'ALREADY_JOINED'
+      });
+    }
+
+    const toState = targetState || PIPELINE_STATES.REJECTED;
+    const actorEmail = req.user.email || '';
+    const actorFirstName = req.user.firstName || '';
+    const actorLastName = req.user.lastName || '';
+
+    candidate.status = toState;
+    candidate.statusHistory.push({
+      status: toState,
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: reason
+    });
+
+    // Update active round in candidate.rounds array to match targetState
+    if (Array.isArray(candidate.rounds)) {
+      for (const r of candidate.rounds) {
+        if (!r.outcome || !r.outcome.decision) {
+          r.status = toState;
+          r.outcome = {
+            decision: toState,
+            decidedBy: req.user._id,
+            decidedAt: new Date(),
+            notes: reason
+          };
+          break;
+        }
+      }
+    }
+
+    // Enriched audit trail entry with full actor identity
+    candidate.auditTrail.push({
+      actorId:        req.user._id,
+      actorRole:      role,
+      actorEmail,
+      actorFirstName,
+      actorLastName,
+      action,
+      fromState,
+      toState,
+      reason,
+      timestamp:      new Date()
+    });
+
+    await candidate.save();
+
+    await auditService.log({
+      actor:       req.user._id,
+      actorRole:   req.user.role,
+      actorEmail,
+      action:      auditAction,
+      entityType:  'CandidateApplication',
+      entityId:    candidate._id,
+      description: `[${actorFirstName} ${actorLastName} | ${actorEmail}] ${auditAction} from ${fromState}. Reason: ${reason}`,
+      notes:       reason,
+      ipAddress:   req.ip,
+      userAgent:   req.headers['user-agent']
+    });
+
+    try {
+      await candidate.populate('job');
+      await sendPipelineEmail('partner', candidate._id, `❌ Candidate Status Update - ${candidate.job?.title}`,
+        `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <div style="background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h2 style="margin: 0; font-size: 20px;">Candidate Status Update</h2>
+          </div>
+          <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+            <p>Hello Team,</p>
+            <p>Your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has been updated for the <strong>${candidate.job?.title}</strong> role.</p>
+            <p><strong>Status:</strong> ${toState.replace(/_/g, ' ')}</p>
+            <p><strong>Reason:</strong> ${reason}</p>
+          </div>
+        </div>`
+      );
+    } catch (emailErr) {
+      console.error('[PIPELINE] Error sending global reject notification email:', emailErr);
+    }
+
+    return res.json({
+      success: true,
+      message: 'Candidate status updated',
+      data: { candidateId: candidate._id, status: candidate.status, fromState, reason }
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
+    console.error(`[PIPELINE] ${action} error:`, err);
+    return res.status(500).json({ success: false, message: 'Failed to update candidate status' });
+  }
+}
+
+// ─── PUT /api/companies/candidates/:id/pipeline/global-reject ─────────────────
+// ─── PUT /api/admin/candidates/:id/pipeline/global-reject ─────────────────────
+// Global reject — forces REJECTED from ANY active stage. Requires reason (min 5 chars).
+// Available to company + admin/sub_admin. Blocked only if candidate has already JOINED.
+exports.pipelineGlobalReject = async (req, res) => {
+  const { reason } = req.body;
+  if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
+    return res.status(400).json({
+      success: false,
+      message: 'A reason is required (minimum 5 characters).',
+      code: 'REASON_REQUIRED'
+    });
+  }
+  return _performGlobalReject({
+    req, res,
+    reason: reason.trim(),
+    action:      ACTIONS.GLOBAL_REJECT,
+    auditAction: 'PIPELINE_GLOBAL_REJECT',
+    targetState: PIPELINE_STATES.REJECTED
+  });
+};
+
+// ─── PUT /api/companies/candidates/:id/pipeline/client-portal-duplicate ───────
+// ─── PUT /api/admin/candidates/:id/pipeline/client-portal-duplicate ───────────
+// Client Portal Duplicate — forces status CLIENT_PORTAL_DUPLICATE with fixed reason.
+// No body required. Available to company + admin/sub_admin. Blocked only if JOINED.
+exports.pipelineClientPortalDuplicate = async (req, res) => {
+  return _performGlobalReject({
+    req, res,
+    reason:      'Duplicate entry in Client Portal',
+    action:      ACTIONS.CLIENT_PORTAL_DUPLICATE,
+    auditAction: 'PIPELINE_CLIENT_PORTAL_DUPLICATE',
+    targetState: PIPELINE_STATES.CLIENT_PORTAL_DUPLICATE
+  });
+};
+
+// ─── PUT /api/companies/candidates/:id/pipeline/candidate-drop ────────────────
+// ─── PUT /api/admin/candidates/:id/pipeline/candidate-drop ────────────────────
+// Candidate Drop — forces status CANDIDATE_DROP with reason (plus optional custom details).
+// Available to company + admin/sub_admin. Blocked only if JOINED.
+exports.pipelineCandidateDrop = async (req, res) => {
+  const customReason = req.body?.reason || req.body?.notes;
+  const finalReason = customReason && typeof customReason === 'string' && customReason.trim()
+    ? `Candidate Drop: ${customReason.trim()}`
+    : 'Candidate Drop';
+
+  return _performGlobalReject({
+    req, res,
+    reason:      finalReason,
+    action:      ACTIONS.CANDIDATE_DROP,
+    auditAction: 'PIPELINE_CANDIDATE_DROP',
+    targetState: PIPELINE_STATES.CANDIDATE_DROP
+  });
+};
+
 // ─── PUT /api/companies/candidates/:id/pipeline/re-shortlist ─────────────────
 exports.pipelineReShortlist = async (req, res) => {
   try {
@@ -222,9 +388,39 @@ exports.pipelineReShortlist = async (req, res) => {
     const fsm = transition({ currentState: fromState, action: ACTIONS.RE_SHORTLIST, role, payload: req.body });
     if (!fsm.ok) return handleFsmError(fsm, res);
 
-    candidate.status = fsm.nextState;
-    candidate.statusHistory.push({ status: fsm.nextState, changedBy: req.user._id, changedAt: new Date(), notes: req.body.notes || 'Re-shortlisted' });
-    writeAudit(candidate, { actorId: req.user._id, actorRole: role, action: ACTIONS.RE_SHORTLIST, fromState, toState: fsm.nextState, reason: req.body.notes });
+    await candidate.populate('job');
+
+    let toState = PIPELINE_STATES.SHORTLISTED;
+    let template = candidate.pipelineTemplate;
+
+    if ((!template || template.length === 0) && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
+      template = candidate.job.pipelineTemplate;
+    }
+
+    if (template && template.length > 0) {
+      const normalized = template.map((r, i) => ({
+        roundType: r.roundType,
+        order: r.order ?? i + 1
+      }));
+      candidate.pipelineTemplate = normalized;
+      candidate.rounds = normalized.map(r => ({
+        roundType: r.roundType,
+        order: r.order,
+        status: getInitialRoundState(r.roundType),
+        slots: [],
+        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+      }));
+      if (candidate.rounds.length > 0) {
+        toState = candidate.rounds[0].status;
+      }
+    }
+
+    candidate.status = toState;
+    candidate.rejectionReason = undefined;
+    candidate.rejectionNotes = undefined;
+    candidate.rejection = undefined;
+    candidate.statusHistory.push({ status: toState, changedBy: req.user._id, changedAt: new Date(), notes: req.body.notes || 'Re-shortlisted' });
+    writeAudit(candidate, { actorId: req.user._id, actorRole: role, action: ACTIONS.RE_SHORTLIST, fromState, toState, reason: req.body.notes });
     await candidate.save();
 
     await auditService.log({ actor: req.user._id, actorRole: req.user.role, actorEmail: req.user.email, action: 'PIPELINE_RE_SHORTLIST', entityType: 'Candidate', entityId: candidate._id, description: 'Candidate re-shortlisted after rejection', ipAddress: req.ip });
@@ -349,31 +545,40 @@ exports.defineJobPipelineTemplate = async (req, res) => {
     job.pipelineTemplate = normalized;
     await job.save();
 
-    // Auto-initialize currently shortlisted candidates or update candidates in initial pipeline states who haven't progressed
+    // Auto-initialize currently shortlisted / active candidates who haven't progressed past round outcomes
+    const nonTerminalStates = [
+      'SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED',
+      'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED',
+      'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'
+    ];
+
     const candidatesToUpdate = await Candidate.find({
       job: job._id,
-      status: { $in: ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING'] }
+      status: { $in: nonTerminalStates }
     });
 
     for (const cand of candidatesToUpdate) {
-      cand.pipelineTemplate = normalized;
-      cand.rounds = normalized.map(r => ({
-        roundType: r.roundType,
-        order: r.order,
-        status: getInitialRoundState(r.roundType),
-        slots: [],
-        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
-      }));
-      if (cand.rounds.length > 0) {
-        cand.status = cand.rounds[0].status;
-        cand.statusHistory.push({
-          status: cand.status,
-          changedBy: req.user._id,
-          changedAt: new Date(),
-          notes: `Job pipeline template applied/updated: started first round (${cand.rounds[0].roundType})`
-        });
+      const hasOutcome = cand.rounds?.some(r => r.outcome && r.outcome.decision);
+      if (!hasOutcome) {
+        cand.pipelineTemplate = normalized;
+        cand.rounds = normalized.map(r => ({
+          roundType: r.roundType,
+          order: r.order,
+          status: getInitialRoundState(r.roundType),
+          slots: [],
+          rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+        }));
+        if (cand.rounds.length > 0 && ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING', 'SLOTS_PUBLISHED'].includes(cand.status)) {
+          cand.status = cand.rounds[0].status;
+          cand.statusHistory.push({
+            status: cand.status,
+            changedBy: req.user._id,
+            changedAt: new Date(),
+            notes: `Job pipeline template applied/updated: started first round (${cand.rounds[0].roundType})`
+          });
+        }
+        await cand.save();
       }
-      await cand.save();
     }
 
     res.status(200).json({
@@ -595,14 +800,54 @@ async function populateRoundsWithJobSlots(candidate) {
   return populatedRounds;
 }
 
+async function syncCandidateRoundsWithJobTemplate(candidate) {
+  if (!candidate || !candidate.job) return;
+
+  const jobObj = candidate.job.toObject ? candidate.job.toObject() : candidate.job;
+  const jobTemplate = jobObj.pipelineTemplate;
+  if (!Array.isArray(jobTemplate) || jobTemplate.length === 0) return;
+
+  const normalizedJobTemplate = jobTemplate.map((r, i) => ({
+    roundType: r.roundType,
+    order: r.order ?? i + 1
+  }));
+
+  const hasOutcome = candidate.rounds?.some(r => r.outcome && r.outcome.decision);
+  const isInitialState = ['SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'].includes(candidate.status);
+
+  if (!hasOutcome && isInitialState) {
+    const jobTemplateStr = JSON.stringify(normalizedJobTemplate.map(r => r.roundType));
+    const candTemplateStr = JSON.stringify((candidate.pipelineTemplate || []).map(r => r.roundType));
+
+    if (jobTemplateStr !== candTemplateStr || !candidate.rounds || candidate.rounds.length === 0) {
+      candidate.pipelineTemplate = normalizedJobTemplate;
+      candidate.rounds = normalizedJobTemplate.map(r => ({
+        roundType: r.roundType,
+        order: r.order,
+        status: getInitialRoundState(r.roundType),
+        slots: [],
+        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+      }));
+      if (candidate.rounds.length > 0 && ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING', 'SLOTS_PUBLISHED'].includes(candidate.status)) {
+        candidate.status = candidate.rounds[0].status;
+      }
+      await candidate.save();
+    }
+  }
+}
+
 // ─── GET /api/companies/candidates/:id/pipeline ───────────────────────────────
 // Returns pipeline template + round statuses for flowchart rendering.
 exports.getPipelinePreview = async (req, res) => {
   try {
     const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
 
+    await syncCandidateRoundsWithJobTemplate(candidate);
+
     let populatedRounds = await populateRoundsWithJobSlots(candidate);
-    let pipelineTemplate = candidate.pipelineTemplate;
+    let pipelineTemplate = candidate.pipelineTemplate && candidate.pipelineTemplate.length > 0 
+      ? candidate.pipelineTemplate 
+      : (candidate.job && candidate.job.pipelineTemplate ? candidate.job.pipelineTemplate : []);
 
     if ((!pipelineTemplate || pipelineTemplate.length === 0) && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
       pipelineTemplate = candidate.job.pipelineTemplate;
@@ -645,8 +890,12 @@ exports.adminGetPipeline = async (req, res) => {
 
     if (!candidate) return res.status(404).json({ success: false, message: 'Candidate not found' });
 
+    await syncCandidateRoundsWithJobTemplate(candidate);
+
     let populatedRounds = await populateRoundsWithJobSlots(candidate);
-    let pipelineTemplate = candidate.pipelineTemplate;
+    let pipelineTemplate = candidate.pipelineTemplate && candidate.pipelineTemplate.length > 0 
+      ? candidate.pipelineTemplate 
+      : (candidate.job && candidate.job.pipelineTemplate ? candidate.job.pipelineTemplate : []);
 
     if ((!pipelineTemplate || pipelineTemplate.length === 0) && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
       pipelineTemplate = candidate.job.pipelineTemplate;
@@ -696,6 +945,8 @@ exports.partnerGetPipeline = async (req, res) => {
       .populate('auditTrail.actorId', 'email role');
 
     if (!candidate) return res.status(404).json({ success: false, message: 'Candidate/submission not found' });
+
+    await syncCandidateRoundsWithJobTemplate(candidate);
 
     let populatedRounds = await populateRoundsWithJobSlots(candidate);
     let pipelineTemplate = candidate.pipelineTemplate;
@@ -751,7 +1002,17 @@ exports.partnerGetPipeline = async (req, res) => {
 function getActiveRoundInfo(candidate) {
   const status = candidate.status;
 
-  if (status === PIPELINE_STATES.SHORTLISTED || status === PIPELINE_STATES.REJECTED) {
+  const terminalRejectionStates = [
+    PIPELINE_STATES.SHORTLISTED,
+    PIPELINE_STATES.REJECTED,
+    PIPELINE_STATES.ROUND_REJECTED,
+    PIPELINE_STATES.HR_REJECTED,
+    PIPELINE_STATES.ASSESSMENT_FAILED,
+    PIPELINE_STATES.OFFER_REJECTED,
+    PIPELINE_STATES.CLIENT_PORTAL_DUPLICATE,
+    PIPELINE_STATES.CANDIDATE_DROP
+  ];
+  if (terminalRejectionStates.includes(status)) {
     return null;
   }
 
@@ -771,16 +1032,26 @@ function getActiveRoundInfo(candidate) {
     if (idx !== -1) return { index: idx, round: candidate.rounds[idx] };
   }
 
-  // Assessment states
+  // Assessment states (active in-progress assessment states)
   const assessmentStates = [
     PIPELINE_STATES.ASSESSMENT_PENDING,
-    PIPELINE_STATES.ASSESSMENT_PASSED,
-    PIPELINE_STATES.ASSESSMENT_FAILED
+    PIPELINE_STATES.ASSESSMENT_LINK_SENT,
+    PIPELINE_STATES.ASSESSMENT_LINK_COMPLETE
   ];
   if (assessmentStates.includes(status)) {
     const idx = candidate.rounds.findIndex(r => {
-      const rt = (r.roundType || '').toUpperCase();
-      return rt === 'ASSESSMENT' || rt.startsWith('ASSESSMENT');
+      if (!r.roundType) return false;
+      const rt = r.roundType.trim().toUpperCase();
+      return (
+        rt.includes('ASSESS') ||
+        rt.includes('ASSMNT') ||
+        rt.includes('TEST') ||
+        rt.includes('QUIZ') ||
+        rt.includes('EXAM') ||
+        rt.includes('PRESCREEN') ||
+        rt.includes('PRE-SCREEN') ||
+        rt.includes('EVALUATION')
+      );
     });
     if (idx !== -1) return { index: idx, round: candidate.rounds[idx] };
   }
@@ -813,8 +1084,96 @@ function getActiveRoundInfo(candidate) {
     }
   }
 
+  // Fallback for SHORTLISTED or un-matched states: find first uncleared round
+  if (candidate.rounds && candidate.rounds.length > 0) {
+    for (let i = 0; i < candidate.rounds.length; i++) {
+      const r = candidate.rounds[i];
+      if (r.status !== 'PASSED' && r.status !== 'REJECTED' && r.outcome?.decision !== 'SELECTED_NEXT_ROUND' && r.outcome?.decision !== 'REJECTED') {
+        return { index: i, round: r };
+      }
+    }
+    return { index: 0, round: candidate.rounds[0] };
+  }
+
   return null;
 }
+
+// ─── POST /api/companies/candidates/:id/pipeline/assessment/link-sent ────────────────
+exports.pipelineAssessmentLinkSent = async (req, res) => {
+  try {
+    const role = roleFromReq(req);
+    console.log(`[PIPELINE pipelineAssessmentLinkSent] req.params.id=${req.params.id}, userId=${req.user?._id}, userRole=${req.user?.role}, mappedRole=${role}`);
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+    console.log(`[PIPELINE pipelineAssessmentLinkSent] candidate found: status="${fromState}", companyId=${candidate.company}`);
+
+    const fsm = transition({ currentState: fromState, action: ACTIONS.ASSESSMENT_LINK_SENT, role });
+    console.log(`[PIPELINE pipelineAssessmentLinkSent] fsm result:`, fsm);
+    if (!fsm.ok) return handleFsmError(fsm, res);
+
+    const activeInfo = getActiveRoundInfo(candidate);
+    if (activeInfo) {
+      activeInfo.round.status = fsm.nextState;
+    }
+
+    candidate.status = fsm.nextState;
+    candidate.statusHistory.push({ status: fsm.nextState, changedBy: req.user._id, changedAt: new Date(), notes: 'Assessment Link Sent' });
+    writeAudit(candidate, {
+      actorId: req.user._id,
+      actorRole: role,
+      action: ACTIONS.ASSESSMENT_LINK_SENT,
+      fromState,
+      toState: fsm.nextState,
+      roundIndex: activeInfo ? activeInfo.index : null
+    });
+
+    await candidate.save();
+    console.log(`[PIPELINE pipelineAssessmentLinkSent] SUCCESS candidate.status updated to "${candidate.status}"`);
+    res.json({ success: true, message: 'Assessment link marked as sent', candidate });
+  } catch (error) {
+    if (error.statusCode) {
+      console.error(`[PIPELINE pipelineAssessmentLinkSent] Known status error ${error.statusCode}: ${error.message}`);
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
+    console.error('[PIPELINE] assessmentLinkSent exception error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to update assessment link' });
+  }
+};
+
+// ─── POST /api/companies/candidates/:id/pipeline/assessment/link-complete ────────────────
+exports.pipelineAssessmentLinkComplete = async (req, res) => {
+  try {
+    const role = roleFromReq(req);
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+
+    const fsm = transition({ currentState: fromState, action: ACTIONS.ASSESSMENT_LINK_COMPLETE, role });
+    if (!fsm.ok) return handleFsmError(fsm, res);
+
+    const activeInfo = getActiveRoundInfo(candidate);
+    if (activeInfo) {
+      activeInfo.round.status = fsm.nextState;
+    }
+
+    candidate.status = fsm.nextState;
+    candidate.statusHistory.push({ status: fsm.nextState, changedBy: req.user._id, changedAt: new Date(), notes: 'Assessment Link Complete' });
+    writeAudit(candidate, {
+      actorId: req.user._id,
+      actorRole: role,
+      action: ACTIONS.ASSESSMENT_LINK_COMPLETE,
+      fromState,
+      toState: fsm.nextState,
+      roundIndex: activeInfo ? activeInfo.index : null
+    });
+
+    await candidate.save();
+    res.json({ success: true, message: 'Assessment link marked as complete', candidate });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    console.error('[PIPELINE] assessmentLinkComplete error:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to update assessment link' });
+  }
+};
 
 // ─── POST /api/companies/candidates/:id/pipeline/assessment/pass ────────────────
 exports.pipelineAssessmentPass = async (req, res) => {
@@ -909,7 +1268,32 @@ exports.pipelineAssessmentFail = async (req, res) => {
     });
 
     await candidate.save();
-    res.json({ success: true, message: 'Assessment failed', data: { candidateId: candidate._id, status: candidate.status } });
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'PIPELINE_ASSESSMENT_FAIL',
+      entityType: 'Candidate',
+      entityId: candidate._id,
+      description: `Candidate failed assessment round: ${reason}`,
+      ipAddress: req.ip
+    });
+
+    await sendPipelineEmail('partner', candidate._id, `❌ Candidate Assessment Failed - ${candidate.job?.title}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Assessment Failed</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Unfortunately, your candidate, <strong>${candidate.firstName} ${candidate.lastName}</strong>, has failed the assessment round for the <strong>${candidate.job?.title}</strong> role and has been rejected.</p>
+          <p><strong>Reason / Feedback:</strong> ${reason}</p>
+        </div>
+      </div>`
+    );
+
+    res.json({ success: true, message: 'Assessment failed and candidate rejected', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
     console.error('[PIPELINE] assessment fail error:', err);
@@ -1656,6 +2040,104 @@ exports.pipelineMarkConducted = async (req, res) => {
     if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
     console.error('[PIPELINE] mark conducted error:', err);
     res.status(500).json({ success: false, message: 'Failed to mark interview conducted' });
+  }
+};
+
+// ─── POST /api/companies/candidates/:id/pipeline/mark-not-conducted ─────────────
+exports.pipelineMarkNotConducted = async (req, res) => {
+  try {
+    const role = roleFromReq(req);
+    const { reason } = req.body;
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'A reason is required (minimum 5 characters).',
+        code: 'REASON_REQUIRED'
+      });
+    }
+
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+    const fromState = candidate.status;
+
+    const fsm = transition({ currentState: fromState, action: ACTIONS.MARK_NOT_CONDUCTED, role, payload: { reason: reason.trim() } });
+    if (!fsm.ok) return handleFsmError(fsm, res);
+
+    const activeInfo = getActiveRoundInfo(candidate);
+    if (activeInfo) {
+      activeInfo.round.status = fsm.nextState;
+      if (Array.isArray(activeInfo.round.slots)) {
+        for (const slot of activeInfo.round.slots) {
+          slot.bookedBy = null;
+          slot.bookedAt = null;
+          slot.details = undefined;
+        }
+      }
+    }
+
+    if (candidate.assignedSlot) {
+      const slotDoc = await InterviewSlot.findById(candidate.assignedSlot);
+      if (slotDoc) {
+        slotDoc.bookedCandidates = slotDoc.bookedCandidates.filter(
+          b => b.candidate.toString() !== candidate._id.toString()
+        );
+        slotDoc.availableSpots += 1;
+        if (slotDoc.status === 'FULL') {
+          slotDoc.status = 'ACTIVE';
+        }
+        await slotDoc.save();
+      }
+      candidate.assignedSlot = null;
+    }
+    candidate.interviewConfig = null;
+
+    const finalReason = reason.trim();
+    candidate.status = fsm.nextState;
+    candidate.statusHistory.push({
+      status: fsm.nextState,
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      notes: `Not Conducted: ${finalReason}`
+    });
+    writeAudit(candidate, {
+      actorId: req.user._id,
+      actorRole: role,
+      action: ACTIONS.MARK_NOT_CONDUCTED,
+      fromState,
+      toState: fsm.nextState,
+      reason: finalReason,
+      roundIndex: activeInfo ? activeInfo.index : null
+    });
+
+    await candidate.save();
+
+    try {
+      await candidate.populate('job');
+      await sendPipelineEmail('partner', candidate._id, `⚠️ Interview Not Conducted - ${candidate.job?.title}`,
+        `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h2 style="margin: 0; font-size: 20px;">Interview Not Conducted</h2>
+          </div>
+          <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+            <p>Hello Team,</p>
+            <p>The scheduled interview for <strong>${candidate.firstName} ${candidate.lastName}</strong> (${candidate.job?.title}) was <strong>not conducted</strong>.</p>
+            <p><strong>Reason:</strong> ${finalReason}</p>
+            <p>The candidate status has been reset to <strong>Slots Pending</strong> for re-scheduling.</p>
+          </div>
+        </div>`
+      );
+    } catch (emailErr) {
+      console.error('[PIPELINE] Error sending not-conducted email:', emailErr);
+    }
+
+    res.json({
+      success: true,
+      message: 'Interview marked as not conducted',
+      data: { candidateId: candidate._id, status: candidate.status, reason: finalReason }
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
+    console.error('[PIPELINE] markNotConducted error:', err);
+    res.status(500).json({ success: false, message: 'Failed to mark interview as not conducted' });
   }
 };
 

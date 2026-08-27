@@ -1900,14 +1900,7 @@ exports.createInterviewSlots = async (req, res) => {
         });
       }
     }
-    if (!job.applicationDeadline) {
-      return res.status(400).json({
-        success: false,
-        message: 'Job must have a deadline before creating interview slots',
-      });
-    }
 
-    const jobDeadline = new Date(job.applicationDeadline);
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Start of today
 
@@ -1954,13 +1947,6 @@ exports.createInterviewSlots = async (req, res) => {
           }
         }
 
-        // 3. Must be on or before job deadline
-        if (slotDate > jobDeadline) {
-          errors.push(
-            `Date ${slot.date} exceeds job deadline (${job.applicationDeadline.toLocaleDateString()})`
-          );
-        }
-
         // 4. Check for overlaps WITHIN the new slots array
         const internalOverlap = slots.find((other, otherIdx) => {
           if (otherIdx === index) return false;
@@ -2003,10 +1989,10 @@ exports.createInterviewSlots = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Some slots have invalid data',
-        jobDeadline: job.deadline,
+        jobDeadline: job.applicationDeadline || null,
         allowedDateRange: {
           from: today.toISOString().split('T')[0],
-          to: jobDeadline.toISOString().split('T')[0],
+          to: job.applicationDeadline ? new Date(job.applicationDeadline).toISOString().split('T')[0] : null,
         },
         invalidSlots,
       });
@@ -2067,10 +2053,10 @@ exports.createInterviewSlots = async (req, res) => {
       data: {
         jobId: job._id,
         jobTitle: job.title,
-        jobDeadline: job.deadline,
+        jobDeadline: job.applicationDeadline || null,
         allowedDateRange: {
           from: today.toISOString().split('T')[0],
-          to: jobDeadline.toISOString().split('T')[0],
+          to: job.applicationDeadline ? new Date(job.applicationDeadline).toISOString().split('T')[0] : null,
         },
         totalSlotsCreated: createdSlots.length,
         slots: createdSlots,
@@ -2293,7 +2279,7 @@ exports.confirmInterviewDetails = async (req, res) => {
         const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
       }
-      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+      const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
       if (assessmentStates.includes(status)) {
         const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };

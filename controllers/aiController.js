@@ -85,3 +85,39 @@ exports.parseResumeFromUpload = async (req, res) => {
         });
     }
 };
+
+// @desc    Batch parse up to 5 resumes against JD
+// @route   POST /api/ai/parse-multiple-resumes
+// @access  Staffing Partner, Admin, Sub-Admin
+exports.parseMultipleResumes = async (req, res) => {
+    try {
+        const { candidates, jobDescription } = req.body;
+
+        if (!Array.isArray(candidates) || candidates.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Candidates array (1 to 5 candidates) is required'
+            });
+        }
+
+        if (candidates.length > 5) {
+            console.warn(`[AI Controller] Trimming candidates list from ${candidates.length} to 5`);
+        }
+
+        const result = await aiService.parseMultipleResumes(candidates.slice(0, 5), jobDescription || {});
+
+        res.json({
+            success: true,
+            message: 'Batch resume scan complete',
+            data: result
+        });
+
+    } catch (error) {
+        console.error('[AI Controller] Batch parse resumes error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to batch parse resumes',
+            error: error.message
+        });
+    }
+};

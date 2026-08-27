@@ -239,6 +239,57 @@ function formatValue(doc, fieldDef) {
 
   const raw = getPath(doc, fieldDef.path);
 
+  // Format Experience fields with 'years' / 'year' suffix
+  const key = (fieldDef.key || '').toLowerCase();
+  const path = (fieldDef.path || '').toLowerCase();
+  const label = (fieldDef.label || '').toLowerCase();
+
+  const isExpField =
+    ['cand_totalexp', 'cand_relexp', 'job_expmin', 'job_expmax'].includes(key) ||
+    key.includes('exp') ||
+    path.includes('experience') ||
+    label.includes('experience');
+
+  if (isExpField) {
+    if (raw === undefined || raw === null || raw === '') return '';
+    const str = String(raw).trim();
+    if (!str) return '';
+    if (/years?|yrs?/i.test(str)) return str;
+    const num = Number(str);
+    if (!isNaN(num)) {
+      return num === 1 ? `${num} year` : `${num} years`;
+    }
+    return `${str} years`;
+  }
+
+  // Format Salary fields with 'LPA' suffix (converting 12,00,000 -> 12 LPA, 7,50,000 -> 7.5 LPA)
+  const isSalaryField =
+    ['cand_currentsalary', 'cand_expectedsalary', 'job_salarymin', 'job_salarymax'].includes(key) ||
+    (key.includes('salary') && !key.includes('currency')) ||
+    (path.includes('salary') && !path.includes('currency')) ||
+    label.includes('ctc') ||
+    (label.includes('salary') && !label.includes('currency'));
+
+  if (isSalaryField) {
+    if (raw === undefined || raw === null || raw === '') return '';
+    const str = String(raw).trim();
+    if (!str) return '';
+    if (/LPA|Lakhs?/i.test(str)) return str;
+
+    const cleanStr = str.replace(/[^0-9.]/g, '');
+    if (!cleanStr) return str;
+
+    let num = Number(cleanStr);
+    if (isNaN(num)) return str;
+
+    if (num > 100) {
+      num = num / 100000;
+    }
+
+    const formattedNum = Number(num.toFixed(2)).toString();
+    return `${formattedNum} LPA`;
+  }
+
   switch (fieldDef.type) {
     case 'date': {
       if (!raw) return '';
@@ -308,7 +359,7 @@ async function buildCursor({ reportType, user, selectedFields, filters }) {
     console.warn(JSON.stringify(pipeline, (k, v) => typeof v === 'function' ? undefined : v, 2));
   }
 
-  return Model.aggregate(pipeline).cursor();
+  return Model.aggregate(pipeline).allowDiskUse(true).cursor();
 }
 
 // ---- preview headers (no DB query) ----------------------------------------
@@ -432,7 +483,7 @@ async function debugQuery({ reportType, user, selectedFields, filters }) {
     pipeline.push({ $limit: limitValue });
   }
 
-  const sampleRows = await Model.aggregate(pipeline);
+  const sampleRows = await Model.aggregate(pipeline).allowDiskUse(true);
   const totalCount = await Model.countDocuments(match);
 
   const fieldMap = getFieldMap(reportType, user?.role);

@@ -3275,7 +3275,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
     const PRE_HR_STATUSES = [
       'INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED',
       'INTERVIEW_CONFIRMED', 'RESCHEDULE_REQUESTED', 'INTERVIEW_CONDUCTED', 'INTERVIEWED',
-      'ROUND_SELECTED_NEXT', 'ROUND_ON_HOLD', 'ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'SLOTS_NOT_PUBLISHED'
+      'ROUND_SELECTED_NEXT', 'ROUND_ON_HOLD', 'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE', 'ASSESSMENT_PASSED', 'SLOTS_NOT_PUBLISHED'
     ];
 
     const HR_AND_ABOVE_STATUSES = [
@@ -3734,19 +3734,53 @@ exports.getJobWithCandidates = async (req, res) => {
 
     // Sub-admins can view candidates for any job
 
-    // ✅ Get ALL candidates for this job with full details
+    // ✅ Get ALL candidates for this job with full details including prescreen
     const candidates = await Candidate.find({ job: job._id })
       .populate('submittedBy', 'firmName firstName lastName uniqueId metrics user')
       .sort({ createdAt: -1 })
       .select(
         'firstName lastName email mobile status profile resume interviewConfig ' +
-        'resumeAnalysis.profileScore resumeAnalysis.matchLevel ' +
-        'resumeAnalysis.recommendation resumeAnalysis.scoreBreakdown ' +
-        'resumeAnalysis.parsed resumeAnalysis.flags resumeAnalysis.advice ' +
+        'prescreen prescreenScore resumeAnalysis ' +
         'whatsappConsent.status consent.consentStatus ' +
         'offer interviews statusHistory adminQueue pipelineTemplate rounds ' +
         'submittedBy createdAt updatedAt'
       );
+
+    // ✅ Dynamic Domain Match backfill for legacy/existing candidate records (matching adminRoutes.js)
+    const candidateScoringService = require('../services/candidateScoringService');
+    candidates.forEach(c => {
+      if (c.resumeAnalysis) {
+        if (!c.resumeAnalysis.scoreBreakdown) {
+          c.resumeAnalysis.scoreBreakdown = {};
+        }
+        const sb = c.resumeAnalysis.scoreBreakdown;
+        if (!sb.domain || sb.domain.score == null || sb.domain.score === 0) {
+          const status = sb.domain?.status || c.resumeAnalysis?.fullAnalysis?.screening?.domainMatch?.status;
+          let dScore = status === 'EXACT' ? 100 : status === 'RELATED' ? 70 : status === 'UNRELATED' ? 20 : 0;
+          let jobDom = sb.domain?.jobDomain || job?.category || 'Not specified';
+          let candDom = sb.domain?.candidateDomain || c.profile?.domain || c.profile?.currentDesignation || c.designation || 'Not specified';
+
+          if (dScore === 0) {
+            try {
+              const dRes = candidateScoringService._scoreDomain(c.profile || {}, job || {});
+              dScore = dRes.score || (c.resumeAnalysis.profileScore >= 60 ? 80 : 50);
+              jobDom = dRes.jobDomain || jobDom;
+              candDom = dRes.candidateDomain || candDom;
+            } catch (err) {
+              dScore = c.resumeAnalysis.profileScore >= 60 ? 80 : 50;
+            }
+          }
+
+          sb.domain = {
+            score: dScore,
+            weight: 0.05,
+            jobDomain: jobDom,
+            candidateDomain: candDom,
+            status: status || (dScore >= 80 ? 'EXACT' : dScore >= 50 ? 'RELATED' : 'UNRELATED')
+          };
+        }
+      }
+    });
 
     // ✅ Status breakdown
     const statusBreakdown = {};
@@ -3791,13 +3825,27 @@ exports.getJobWithCandidates = async (req, res) => {
     const slotsUsed = activeCandidates.length;
     const slotsRemaining = Math.max(0, totalSlots - slotsUsed);
 
-    // ✅ Enrich candidates with additional computed fields
+    // ✅ Enrich candidates with additional computed fields including prescreen
+    const prescreenService = require('../services/prescreenService');
     const enrichedCandidates = candidates.map(c => {
-      const cObj = c.toObject();
+      let cObj = c.toObject();
+      const unprescreenedStatuses = ['CONSENT_PENDING', 'DRAFT', 'CONSENT_DENIED'];
+      if (!unprescreenedStatuses.includes(cObj.status) && (!cObj.prescreen || !cObj.prescreen.status)) {
+        try {
+          cObj.prescreen = prescreenService.runPreScreen(cObj, job.toObject ? job.toObject() : job);
+        } catch (psErr) {
+          console.warn('[AdminController] PreScreen compute error:', psErr.message);
+        }
+      } else if (unprescreenedStatuses.includes(cObj.status)) {
+        cObj.prescreen = null;
+      }
       return {
         ...cObj,
+        prescreen: cObj.prescreen,
         _meta: {
           profileScore: c.resumeAnalysis?.profileScore || 0,
+          prescreen: cObj.prescreen,
+          prescreenScore: cObj.prescreen?.prescreen_score,
           matchLevel: c.resumeAnalysis?.matchLevel || 'UNKNOWN',
           aiDecision: c.resumeAnalysis?.recommendation || 'HOLD',
           aiParsed: c.resumeAnalysis?.parsed || false,
@@ -4770,7 +4818,7 @@ exports.bulkRevokeVerificationAssignment = async (req, res) => {
 // POST /api/admin/jobs/:jobId/interview-slots/:slotId/assign
 exports.adminAssignCandidateToSlot = async (req, res) => {
   try {
-    const { candidateId } = req.body;
+    const { candidateId, sendConsent = true } = req.body;
     const Candidate = require('../models/Candidate');
     const InterviewSlot = require('../models/InterviewSlot');
     const { transition, ACTIONS } = require('../services/pipelineStateMachine');
@@ -5141,7 +5189,12 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
         console.error('[ADMIN ASSIGN] Notification error:', err.message);
       }
     };
-    notifyCandidate();
+    const shouldSendConsent = sendConsent !== false && sendConsent !== 'false';
+    if (shouldSendConsent) {
+      notifyCandidate();
+    } else {
+      console.log(`[ADMIN ASSIGN] sendConsent is false for candidate ${candidate._id}, skipping candidate consent notification.`);
+    }
 
     res.json({
       success: true,

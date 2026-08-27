@@ -24,7 +24,7 @@ class CandidateScoringService {
    * @param {object} job - Job document
    * @returns {object} Score breakdown
    */
-  scoreAgainstJob(profile, job) {
+  scoreAgainstJob(profile, job, prescreenData = null) {
     if (!profile || !job) {
       return { overallScore: 0, matchLevel: 'UNKNOWN', breakdown: {} };
     }
@@ -63,24 +63,42 @@ class CandidateScoringService {
     };
     totalScore += skillsScore * 0.30;
 
-    // 2. Experience Match (20%) — uses AI-calculated experience from resume
-    // Prefer AI-derived actualExperienceMonths (fractional years), fall back to form-reported values
-    const aiExperienceYears = profile.totalExperienceMonths != null
-      ? Math.round((profile.totalExperienceMonths / 12) * 10) / 10  // Round to 1 decimal place
-      : (profile.experienceYears || null);
-    const expScore = this._scoreExperience(aiExperienceYears, job.experienceRange, null);
+    // 2. Experience Match (20%)
+    let expScoreVal = 0;
+    let expDetail = '';
+    let expStatus = 'UNKNOWN';
+    let expActual = 'Not provided';
+    let expRequired = job.experienceRange ? `${job.experienceRange.min}-${job.experienceRange.max} years` : 'Not specified';
+
+    const psExpScore = prescreenData?.experience_score ?? prescreenData?.scores?.experience?.score;
+    if (psExpScore != null) {
+      expScoreVal = psExpScore;
+      expDetail = prescreenData?.experience_detail || prescreenData?.scores?.experience?.detail || '';
+      expStatus = expScoreVal >= 80 ? 'MEETS' : expScoreVal >= 50 ? 'PARTIAL' : 'BELOW';
+      expActual = profile.totalExperience ? `${profile.totalExperience} years` : 'Not provided';
+    } else {
+      const aiExperienceYears = profile.totalExperienceMonths != null
+        ? Math.round((profile.totalExperienceMonths / 12) * 10) / 10
+        : (profile.experienceYears || null);
+      const expScore = this._scoreExperience(aiExperienceYears, job.experienceRange, null);
+      expScoreVal = expScore.score;
+      expDetail = expScore.detail;
+      expStatus = expScore.status;
+      expActual = expScore.usedForScoring ? `${expScore.usedForScoring} years` : 'Not provided';
+    }
+
     scores.experience = {
-      score: expScore.score,
+      score: expScoreVal,
       weight: 20,
       totalExperience: profile.totalExperience ? `${profile.totalExperience} years` : 'Not provided',
       relevantExperience: profile.relevantExperience ? `${profile.relevantExperience} years` : 'Not provided',
-      actual: expScore.usedForScoring ? `${expScore.usedForScoring} years` : 'Not provided',
-      required: job.experienceRange ? `${job.experienceRange.min}-${job.experienceRange.max} years` : 'Not specified',
-      status: expScore.status,
-      detail: expScore.detail,
-      usedForScoringLabel: expScore.usedLabel || 'total'
+      actual: expActual,
+      required: expRequired,
+      status: expStatus,
+      detail: expDetail,
+      source: prescreenData?.scores?.experience ? 'prescreen' : 'calculated'
     };
-    totalScore += expScore.score * 0.20;
+    totalScore += expScoreVal * 0.20;
 
     // 3. Domain Match (5%)
     const domainScore = this._scoreDomain(profile, job);
@@ -123,7 +141,6 @@ class CandidateScoringService {
     totalScore += eduScore.score * 0.05;
 
     // 5. Salary Fit (10%)
-    const salaryScore = this._scoreSalary(profile.expectedSalary, job.salary);
     const formatValueToLPA = (val) => {
       if (val == null || val === '') return 'Not specified';
       const num = Number(val);
@@ -133,45 +150,102 @@ class CandidateScoringService {
       }
       return `${num.toFixed(1).replace(/\.0$/, '')} LPA`;
     };
+
+    let salaryScoreVal = 0;
+    let salaryDetail = '';
+    let salaryStatus = 'UNKNOWN';
+    let salaryWithinBudget = true;
+    let salaryDelta = 0;
+
+    const psSalScore = prescreenData?.salary_score ?? prescreenData?.scores?.salary?.score;
+    if (psSalScore != null) {
+      salaryScoreVal = psSalScore;
+      salaryDetail = prescreenData?.salary_detail || prescreenData?.scores?.salary?.detail || '';
+      salaryStatus = salaryScoreVal >= 80 ? 'WITHIN' : salaryScoreVal >= 50 ? 'SLIGHTLY_OVER' : 'OVER';
+      salaryWithinBudget = salaryScoreVal >= 80;
+    } else {
+      const salaryScore = this._scoreSalary(profile.expectedSalary, job.salary);
+      salaryScoreVal = salaryScore.score;
+      salaryStatus = salaryScore.status;
+      salaryWithinBudget = salaryScore.withinBudget;
+      salaryDelta = salaryScore.deltaPercent || 0;
+    }
+
     scores.salary = {
-      score: salaryScore.score,
+      score: salaryScoreVal,
       weight: 10,
       budget: job.salary ? (job.salary.min && job.salary.max ? `${formatValueToLPA(job.salary.min)} - ${formatValueToLPA(job.salary.max)}` : (job.salary.max ? `<= ${formatValueToLPA(job.salary.max)}` : 'Not specified')) : 'Not specified',
       expected: profile.expectedSalary ? formatValueToLPA(profile.expectedSalary) : 'Not provided',
-      deltaPercent: salaryScore.deltaPercent || 0,
-      status: salaryScore.status,
-      withinBudget: salaryScore.withinBudget
+      deltaPercent: salaryDelta,
+      status: salaryStatus,
+      detail: salaryDetail,
+      source: prescreenData?.scores?.salary ? 'prescreen' : 'calculated',
+      withinBudget: salaryWithinBudget
     };
-    totalScore += salaryScore.score * 0.10;
+    totalScore += salaryScoreVal * 0.10;
 
     // 6. Location Match (10%)
-    const locScore = this._scoreLocation(
-      profile.location,
-      profile.preferredLocations,
-      profile.willingToRelocate,
-      job.location
-    );
+    let locScoreVal = 0;
+    let locStatus = 'UNKNOWN';
+    let locDetail = '';
+
+    const psLocScore = prescreenData?.location_score ?? prescreenData?.scores?.location?.score;
+    if (psLocScore != null) {
+      locScoreVal = psLocScore;
+      locDetail = prescreenData?.location_detail || prescreenData?.scores?.location?.detail || '';
+      locStatus = locScoreVal >= 80 ? 'EXACT' : locScoreVal >= 50 ? 'NEARBY' : 'DIFFERENT';
+    } else {
+      const locScore = this._scoreLocation(
+        profile.location,
+        profile.preferredLocations,
+        profile.willingToRelocate,
+        job.location
+      );
+      locScoreVal = locScore.score;
+      locStatus = locScore.status;
+      locDetail = locScore.detail;
+    }
+
     scores.location = {
-      score: locScore.score,
+      score: locScoreVal,
       weight: 10,
       jobLocation: job.location?.city || 'Not specified',
       candidateLocation: profile.location || 'Not specified',
-      status: locScore.status,
-      detail: locScore.detail,
+      status: locStatus,
+      detail: locDetail,
+      source: prescreenData?.scores?.location ? 'prescreen' : 'calculated',
       willingToRelocate: profile.willingToRelocate ?? null
     };
-    totalScore += locScore.score * 0.10;
+    totalScore += locScoreVal * 0.10;
 
     // 7. Notice Period Fit (10%)
-    const npScore = this._scoreNoticePeriod(profile.noticePeriod, job?.expectedJoiningDate);
+    let npScoreVal = 0;
+    let npStatus = 'UNKNOWN';
+    let npDays = 0;
+    let npDetail = '';
+
+    const psNoticeScore = prescreenData?.notice_score ?? prescreenData?.scores?.notice?.score;
+    if (psNoticeScore != null) {
+      npScoreVal = psNoticeScore;
+      npDetail = prescreenData?.notice_detail || prescreenData?.scores?.notice?.detail || '';
+      npStatus = npScoreVal >= 80 ? 'IMMEDIATE' : npScoreVal >= 50 ? 'ACCEPTABLE' : 'LONG';
+    } else {
+      const npScore = this._scoreNoticePeriod(profile.noticePeriod, job?.expectedJoiningDate);
+      npScoreVal = npScore.score;
+      npStatus = npScore.status;
+      npDays = npScore.days || 0;
+    }
+
     scores.noticePeriod = {
-      score: npScore.score,
+      score: npScoreVal,
       weight: 10,
       actual: profile.noticePeriod || 'Not specified',
-      days: npScore.days,
-      status: npScore.status
+      days: npDays,
+      status: npStatus,
+      detail: npDetail,
+      source: prescreenData?.scores?.notice ? 'prescreen' : 'calculated'
     };
-    totalScore += npScore.score * 0.10;
+    totalScore += npScoreVal * 0.10;
 
     // 8. Stability Score (10%)
     const stabScore = this._scoreStability(profile);

@@ -23,7 +23,7 @@ function getActiveRoundInfo(candidate) {
     if (idx !== -1) return { index: idx, round: candidate.rounds[idx] };
   }
 
-  const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_PASSED', 'ASSESSMENT_FAILED'];
+  const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
   if (assessmentStates.includes(status)) {
     const idx = candidate.rounds.findIndex(r => {
       const rt = (r.roundType || '').toUpperCase();

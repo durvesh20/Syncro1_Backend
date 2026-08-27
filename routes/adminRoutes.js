@@ -766,6 +766,52 @@ router.get(
         rawBreakdown.location.willingToRelocate = rawBreakdown.location.willingToRelocate ?? computedRelocate;
       }
 
+      // Dynamic Notice Period backfill from pre-screen for existing/legacy records
+      if (rawBreakdown) {
+        const psNotice = candidate.prescreen?.notice_score;
+        if (!rawBreakdown.noticePeriod || rawBreakdown.noticePeriod.score == null || rawBreakdown.noticePeriod.score === 0) {
+          const npScoreVal = psNotice != null && psNotice > 0 ? psNotice : (rawBreakdown.noticePeriod?.score || 0);
+          rawBreakdown.noticePeriod = {
+            score: npScoreVal,
+            weight: 0.10,
+            required: rawBreakdown.noticePeriod?.required || candidate.job?.expectedJoiningDate || '',
+            actual: rawBreakdown.noticePeriod?.actual || candidate.profile?.noticePeriod || 'Not specified',
+            status: rawBreakdown.noticePeriod?.status || (npScoreVal >= 80 ? 'IMMEDIATE' : npScoreVal >= 50 ? 'ACCEPTABLE' : 'LONG'),
+            detail: rawBreakdown.noticePeriod?.detail || candidate.prescreen?.notice_detail || ''
+          };
+        }
+      }
+
+      // Dynamic Domain Match backfill for existing/legacy records
+      if (rawBreakdown) {
+        if (!rawBreakdown.domain || rawBreakdown.domain.score == null || rawBreakdown.domain.score === 0) {
+          const status = rawBreakdown.domain?.status || candidate.resumeAnalysis?.fullAnalysis?.screening?.domainMatch?.status;
+          let dScore = status === 'EXACT' ? 100 : status === 'RELATED' ? 70 : status === 'UNRELATED' ? 20 : 0;
+          let jobDom = rawBreakdown.domain?.jobDomain || candidate.job?.category || 'Not specified';
+          let candDom = rawBreakdown.domain?.candidateDomain || candidate.profile?.domain || candidate.profile?.currentDesignation || 'Not specified';
+
+          if (dScore === 0 && candidate.job) {
+            try {
+              const candidateScoringService = require('../services/candidateScoringService');
+              const dRes = candidateScoringService._scoreDomain(candidate.profile || {}, candidate.job || {});
+              dScore = dRes.score;
+              jobDom = dRes.jobDomain || jobDom;
+              candDom = dRes.candidateDomain || candDom;
+            } catch (err) {
+              console.error('[ADMIN] Domain backfill error:', err.message);
+            }
+          }
+
+          rawBreakdown.domain = {
+            score: dScore,
+            weight: 0.05,
+            jobDomain: jobDom,
+            candidateDomain: candDom,
+            status: status || (dScore >= 80 ? 'EXACT' : dScore >= 50 ? 'RELATED' : 'UNRELATED')
+          };
+        }
+      }
+
       // Dynamic stability backfill for legacy records
       if (rawBreakdown && candidate.profile) {
         try {
@@ -911,54 +957,54 @@ router.post(
           missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
           coveragePercent: scoring.skillCoveragePercent || 0
         },
-        experience: {
-          score: scoring.experienceMatch || 0,
-          weight: 0.20,
-          actual: screening.experienceRange?.actual || '',
-          required: screening.experienceRange?.required || '',
-          status: screening.experienceRange?.status || '',
-          detail: validation.experienceDiscrepancyDetail || '',
-          relevancePercent: 100
-        },
-        domain: {
-          score: scoring.domainMatch || 0,
-          weight: 0.15,
-          jobDomain: screening.domainMatch?.jobDomain || '',
-          candidateDomain: screening.domainMatch?.candidateDomain || '',
-          status: screening.domainMatch?.status || ''
-        },
-        education: {
-          score: scoring.educationMatch || 0,
-          weight: 0.10,
-          minimumRequired: screening.educationMatch?.minimumRequired || '',
-          candidateEducation: screening.educationMatch?.candidateEducation || '',
-          status: screening.educationMatch?.status || ''
-        },
-        salary: {
-          score: scoring.salaryFit || 0,
-          weight: 0.10,
-          budget: screening.salaryFit?.budget || '',
-          expected: screening.salaryFit?.expected || '',
-          deltaPercent: screening.salaryFit?.deltaPercent || 0,
-          status: screening.salaryFit?.status || '',
-          withinBudget: ranking.salaryWithinBudget ?? true
-        },
-        location: {
-          score: scoring.locationMatch || 0,
-          weight: 0.05,
-          jobLocation: screening.locationFit?.jobLocation || '',
-          candidateLocation: screening.locationFit?.candidateLocation || '',
-          status: screening.locationFit?.status || '',
-          detail: validation.locationMatch || ''
-        },
-        noticePeriod: {
-          score: scoring.noticePeriodFit || 0,
-          weight: 0.05,
-          required: screening.noticePeriod?.required || '',
-          actual: screening.noticePeriod?.actual || '',
-          days: ranking.noticePeriodDays || 0,
-          status: screening.noticePeriod?.status || ''
-        },
+                            experience: {
+                        score: scoring.experienceMatch || 0,
+                        weight: 0.20,
+                        actualExperienceFromResume: screening.experienceRange?.actualExperienceFromResume || screening.experienceRange?.actual || (candidate.profile?.totalExperience ? `${candidate.profile.totalExperience} Yrs` : 'N/A'),
+                        formReportedExperience: screening.experienceRange?.formReportedExperience || (candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} Yrs` : 'Not specified'),
+                        actual: screening.experienceRange?.actual || (candidate.profile?.totalExperience ? `${candidate.profile.totalExperience} Yrs` : 'N/A'),
+                        required: screening.experienceRange?.required || '',
+                        status: screening.experienceRange?.status || (scoring.experienceMatch >= 80 ? 'MEETS' : scoring.experienceMatch >= 50 ? 'PARTIAL' : 'BELOW'),
+                        detail: screening.experienceRange?.detail || candidate.prescreen?.experience_detail || '',
+                        relevancePercent: 100
+                    },
+                    domain: {
+                        score: scoring.domainMatch ?? (screening.domainMatch?.status === 'EXACT' ? 100 : screening.domainMatch?.status === 'RELATED' ? 70 : screening.domainMatch?.status === 'UNRELATED' ? 20 : 50),
+                        weight: 0.05,
+                        jobDomain: screening.domainMatch?.jobDomain || '',
+                        candidateDomain: screening.domainMatch?.candidateDomain || '',
+                        status: screening.domainMatch?.status || (scoring.domainMatch >= 80 ? 'EXACT' : scoring.domainMatch >= 50 ? 'RELATED' : 'UNRELATED')
+                    },
+                    education: {
+                        score: scoring.educationMatch || 0, weight: 0.05,
+                        minimumRequired: screening.educationMatch?.minimumRequired || '',
+                        candidateEducation: screening.educationMatch?.candidateEducation || '',
+                        status: screening.educationMatch?.status || ''
+                    },
+                    salary: {
+                        score: scoring.salaryFit || 0, weight: 0.10,
+                        budget: screening.salaryFit?.budget || '',
+                        expected: screening.salaryFit?.expected || '',
+                        status: screening.salaryFit?.status || (scoring.salaryFit >= 80 ? 'WITHIN' : scoring.salaryFit >= 50 ? 'SLIGHTLY_OVER' : 'OVER'),
+                        detail: screening.salaryFit?.detail || candidate.prescreen?.salary_detail || '',
+                        withinBudget: ranking.salaryWithinBudget ?? true
+                    },
+                    location: {
+                        score: scoring.locationMatch || 0, weight: 0.10,
+                        jobLocation: screening.locationFit?.jobLocation || '',
+                        candidateLocation: screening.locationFit?.candidateLocation || candidate.profile?.location || '',
+                        status: screening.locationFit?.status || (scoring.locationMatch >= 80 ? 'EXACT' : scoring.locationMatch >= 50 ? 'NEARBY' : 'DIFFERENT'),
+                        detail: screening.locationFit?.detail || candidate.prescreen?.location_detail || '',
+                        willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? null
+                    },
+                    noticePeriod: {
+                        score: scoring.noticePeriodFit ?? candidate.prescreen?.notice_score ?? 0,
+                        weight: 0.10,
+                        required: screening.noticePeriod?.required || candidate.job?.expectedJoiningDate || '',
+                        actual: screening.noticePeriod?.actual || candidate.profile?.noticePeriod || 'Not specified',
+                        status: screening.noticePeriod?.status || (candidate.prescreen?.notice_score >= 80 ? 'IMMEDIATE' : candidate.prescreen?.notice_score >= 50 ? 'ACCEPTABLE' : 'LONG'),
+                        detail: screening.noticePeriod?.detail || candidate.prescreen?.notice_detail || ''
+                    },
         stability: {
           score: scoring.stabilityScore || 0,
           weight: 0.05,
@@ -1218,7 +1264,29 @@ const {
   definePipelineTemplate,
   defineJobPipelineTemplate,
   pipelinePublishSlots,
-  pipelineShareDetails
+  pipelineShareDetails,
+  pipelineGlobalReject,
+  pipelineClientPortalDuplicate,
+  pipelineCandidateDrop,
+  pipelineReShortlist,
+  pipelineAssessmentLinkSent,
+  pipelineAssessmentLinkComplete,
+  pipelineAssessmentPass,
+  pipelineAssessmentFail,
+  pipelineRequestReschedule,
+  pipelineConfirmReschedule,
+  pipelineRejectReschedule,
+  pipelineMarkConducted,
+  pipelineMarkNotConducted,
+  pipelineSelectNextRound,
+  pipelineRejectRound,
+  pipelineSelectDirectHR,
+  pipelineHoldRound,
+  pipelineResolveHold,
+  pipelineHRSelect,
+  pipelineHRReject,
+  pipelineHRHold,
+  pipelineHRResolveHold,
 } = require('../controllers/pipelineController');
 const { getJobInterviewSlots } = require('../controllers/companyController');
 const { adminAssignCandidateToSlot, adminRemoveCandidateFromSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot } = require('../controllers/adminController');
@@ -1233,11 +1301,33 @@ router.delete('/jobs/:jobId/interview-slots/:slotId', adminCancelJobInterviewSlo
 router.post('/candidates/:id/pipeline/template', definePipelineTemplate);
 router.post('/jobs/:jobId/pipeline/template', defineJobPipelineTemplate);
 
-// Admin slot creation access (same as company)
-router.post('/candidates/:id/pipeline/publish-slots', pipelinePublishSlots);
+// Admin global reject & re-shortlist actions
+router.put('/candidates/:id/pipeline/global-reject',           pipelineGlobalReject);
+router.put('/candidates/:id/pipeline/client-portal-duplicate', pipelineClientPortalDuplicate);
+router.put('/candidates/:id/pipeline/candidate-drop',         pipelineCandidateDrop);
+router.put('/candidates/:id/pipeline/re-shortlist',           pipelineReShortlist);
 
-// Admin candidate assignment access (same as company/partner)
-router.post('/candidates/:id/pipeline/share-details', pipelineShareDetails);
+// Admin pipeline actions
+router.post('/candidates/:id/pipeline/assessment/link-sent',     pipelineAssessmentLinkSent);
+router.post('/candidates/:id/pipeline/assessment/link-complete', pipelineAssessmentLinkComplete);
+router.post('/candidates/:id/pipeline/assessment/pass',          pipelineAssessmentPass);
+router.post('/candidates/:id/pipeline/assessment/fail',          pipelineAssessmentFail);
+router.post('/candidates/:id/pipeline/publish-slots',            pipelinePublishSlots);
+router.post('/candidates/:id/pipeline/share-details',             pipelineShareDetails);
+router.post('/candidates/:id/pipeline/reschedule',                pipelineRequestReschedule);
+router.post('/candidates/:id/pipeline/reschedule/confirm',        pipelineConfirmReschedule);
+router.post('/candidates/:id/pipeline/reschedule/reject',         pipelineRejectReschedule);
+router.post('/candidates/:id/pipeline/mark-conducted',            pipelineMarkConducted);
+router.post('/candidates/:id/pipeline/mark-not-conducted',        pipelineMarkNotConducted);
+router.post('/candidates/:id/pipeline/select-next',               pipelineSelectNextRound);
+router.post('/candidates/:id/pipeline/reject-round',              pipelineRejectRound);
+router.post('/candidates/:id/pipeline/select-direct-hr',          pipelineSelectDirectHR);
+router.post('/candidates/:id/pipeline/hold-round',                pipelineHoldRound);
+router.post('/candidates/:id/pipeline/resolve-hold',             pipelineResolveHold);
+router.post('/candidates/:id/pipeline/hr/select',                 pipelineHRSelect);
+router.post('/candidates/:id/pipeline/hr/reject',                 pipelineHRReject);
+router.post('/candidates/:id/pipeline/hr/hold',                   pipelineHRHold);
+router.post('/candidates/:id/pipeline/hr/resolve-hold',            pipelineHRResolveHold);
 router.post('/jobs/:jobId/interview-slots/:slotId/assign', adminAssignCandidateToSlot);
 router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', adminRemoveCandidateFromSlot);
 
@@ -1252,5 +1342,162 @@ router.post('/candidates/:id/pipeline/resend-interview-consent', pipelineResendI
 // Screening Questions Admin endpoint
 const { getJobScreeningQuestionsForAdmin } = require('../controllers/adminController');
 router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForAdmin);
+
+// ==================== PRE-SCREEN & MANUAL AI MATCH ====================
+
+/**
+ * @route  POST /api/admin/candidates/:id/run-ai-match
+ * @desc   Manually trigger AI resume matching for a candidate.
+ *         Accessible by admin and sub-admin (both authorised via authorizeAdminAccess).
+ *         AI matching is NEVER auto-triggered — this is the only way to run it.
+ * @access Admin | Sub-Admin
+ */
+router.post(
+  '/candidates/:id/run-ai-match',
+  async (req, res) => {
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+      const result = await candidateQueueService.runAIMatchForCandidate(
+        req.params.id,
+        req.user._id
+      );
+
+      res.json({
+        success: true,
+        message: 'AI matching completed successfully',
+        data: result
+      });
+    } catch (error) {
+      console.error('[ADMIN] run-ai-match error:', error.message);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'AI matching failed'
+      });
+    }
+  }
+);
+
+/**
+ * @route  POST /api/admin/candidates/batch-run-ai-match
+ * @desc   Batch trigger AI resume matching for up to 5 candidates against JD1.
+ * @access Admin | Sub-Admin
+ */
+router.post(
+  '/candidates/batch-run-ai-match',
+  async (req, res) => {
+    try {
+      const { candidateIds, jobId } = req.body;
+
+      if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'candidateIds array (1 to 5 candidates) is required'
+        });
+      }
+
+      const candidateQueueService = require('../services/candidateQueueService');
+      const result = await candidateQueueService.runAIMatchForMultipleCandidates(
+        candidateIds,
+        jobId,
+        req.user._id
+      );
+
+      res.json({
+        success: true,
+        message: 'Batch AI matching completed successfully',
+        data: result
+      });
+    } catch (error) {
+      console.error('[ADMIN] batch-run-ai-match error:', error.message);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Batch AI matching failed'
+      });
+    }
+  }
+);
+
+/**
+ * @route  GET /api/admin/candidates/:id/prescreen
+ * @desc   Fetch pre-screen result for a candidate (standalone endpoint for detail panels).
+ * @access Admin | Sub-Admin
+ */
+router.get(
+  '/candidates/:id/prescreen',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const candidate = await Candidate.findById(req.params.id)
+        .select('prescreen firstName lastName status job')
+        .populate('job', 'title experienceRange salary expectedJoiningDate location');
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          prescreen: candidate.prescreen || null,
+          candidateName: `${candidate.firstName} ${candidate.lastName}`,
+          candidateStatus: candidate.status,
+          job: candidate.job
+        }
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+);
+
+/**
+ * @route  POST /api/admin/candidates/:id/re-calculate-prescreen
+ * @desc   Re-calculate pre-screening score for a candidate against current job criteria.
+ * @access Admin | Sub-Admin
+ */
+router.post(
+  '/candidates/:id/re-calculate-prescreen',
+  async (req, res) => {
+    try {
+      const Candidate = require('../models/Candidate');
+      const prescreenService = require('../services/prescreenService');
+
+      const candidate = await Candidate.findById(req.params.id)
+        .populate('job');
+
+      if (!candidate) {
+        return res.status(404).json({ success: false, message: 'Candidate not found' });
+      }
+
+      const prescreenResult = prescreenService.runPreScreen(candidate, candidate.job);
+      candidate.prescreen = prescreenResult;
+
+      candidate.statusHistory = candidate.statusHistory || [];
+      candidate.statusHistory.push({
+        status: candidate.status,
+        changedBy: req.user?._id,
+        changedAt: new Date(),
+        notes: `Pre-screening score re-calculated manually by Admin: ${prescreenResult.prescreen_score}% (${prescreenResult.status}).`
+      });
+
+      await candidate.save();
+
+      res.json({
+        success: true,
+        message: 'Pre-screening score re-calculated successfully',
+        data: {
+          prescreen: candidate.prescreen,
+          candidate
+        }
+      });
+    } catch (error) {
+      console.error('[ADMIN] re-calculate-prescreen error:', error.message);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to re-calculate pre-screening score'
+      });
+    }
+  }
+);
 
 module.exports = router;

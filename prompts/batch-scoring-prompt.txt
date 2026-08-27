@@ -1,4 +1,4 @@
-RULES: Output ONLY valid JSON. Zero text outside JSON. All skill matching is derived from jobRequirements only. Never assume a default tech stack.
+RULES: Output ONLY a valid JSON array. Zero text outside the JSON array. Each element is the FULL analysis for one candidate. Array index must match the CANDIDATE INDEX provided (0-based). All skill matching is derived from jobRequirements only. Never assume a default tech stack.
 COMPREHENSIVE CANDIDATE DATA: You MUST consider both the partner-reported Candidate Form Data (including skills, education, experience, languages, certifications, and write-up) and the extracted Resume Text. If a skill, certification, or language is listed in the form data or write-up, it MUST be counted as a candidate competency even if it is missing from the raw resume text.
 VERIFICATION & DISCREPANCY DETECTOR: Cross-verify all form data against the extracted resume. If there are major discrepancies (e.g. self-reported 5 years experience but resume shows only 2 years; self-reported certifications or degrees not appearing in the resume; or conflicting skills), list them under "inconsistencies" or "redFlags" in the validation object.
 
@@ -15,24 +15,30 @@ NOTE: All skills extracted from the JD only. Do NOT assume any default technolog
 # JOB HISTORY EXTRACTION:
 For EACH role in jobHistory, extract: company, designation, fromYear, fromMonth (1-12), toYear, toMonth (1-12), ongoing (true/false), and domain. (The backend calculates exact durations and stability deterministically from these dates).
 
-# TARGET JOB DESCRIPTION (SPECIFICATION):
+# TARGET JOB DESCRIPTION (SPECIFICATION) — SHARED FOR ALL CANDIDATES:
 {{jobDescription}}
 
-# CANDIDATE DATA & RESUME TO EVALUATE:
-name: {{firstName}} {{lastName}} | email: {{email}} | mobile: {{mobile}}
-location: {{location}} | relocate: {{willingToRelocate}},totalExp:{{totalExperience}}yr | relevantExp:{{relevantExperience}}yr | notice:{{noticePeriod}},currentSalary: {{currentSalary}} | expectedSalary: {{expectedSalary}},skills: {{partnerReportedSkills}},education: {{partnerReportedEducation}},certifications: {{partnerReportedCertifications}},languages: {{partnerReportedLanguages}},writeup: {{candidateWriteup}}
-# Resume:{{resumeText}}
+# CANDIDATES TO EVALUATE ({{candidateCount}} total):
+{{candidateBlocks}}
 
-# OUTPUT JSON (strict):
-{"candidateProfile":{
- "extractedName":"name or Not Found","extractedEmail":"email or Not Found","extractedMobile":"mobile or Not Found","currentCompany":"company or Not Found","currentDesignation":"title or Not Found",
- "skills":["skill1","skill2"],
- "domain":"primary domain","standardizedLocation":"City, State",
- "education":[{"degree":"degree","institution":"college","year":2020,"isMinimumMet":true}],"languages":[],"certifications":[],"careerGaps":[],
- "jobHistory":[{"company":"company","designation":"title","fromYear":2023,"fromMonth":1,"toYear":2024,"toMonth":12,"ongoing":false,"domain":"domain"}]},
- "screening":{
- "domainMatch":{"jobDomain":"domain","candidateDomain":"domain","status":"EXACT/RELATED/UNRELATED"},
- "educationMatch":{"minimumRequired":"degree","candidateEducation":"degree","status":"MEETS/BELOW/EXCEEDS"}},
- "rankingSignals":{"mustHaveSkillsMatchedCount":0,"mustHaveSkillsTotal":0,"mustHaveSkillsMatched":[],"mustHaveSkillsMissing":[],"shouldHaveSkillsMatched":[],"niceToHaveSkillsMatched":[],"preferredSkillsMatched":[]},
- "validation":{"experienceDiscrepancy":"MATCH/MINOR_DIFF/MAJOR_DIFF","experienceDiscrepancyDetail":"explanation","redFlags":[],"greenFlags":[],"inconsistencies":[],"dataQuality":"HIGH/MEDIUM/LOW"},
- "recommendation":{"justification":"3-5 sentence summary of candidate fit"}}
+# OUTPUT — JSON OBJECT with a "candidates" key containing an array of {{candidateCount}} analysis objects (index 0 to {{candidateCountMinus1}}):
+IMPORTANT: You MUST wrap the array under the key "candidates". Do NOT return a bare JSON array.
+{"candidates": [
+  {
+    "candidateIndex": 0,
+    "candidateProfile":{
+      "extractedName":"name or Not Found","extractedEmail":"email or Not Found","extractedMobile":"mobile or Not Found","currentCompany":"company or Not Found","currentDesignation":"title or Not Found",
+      "skills":["skill1","skill2"],
+      "domain":"primary domain","standardizedLocation":"City, State",
+      "education":[{"degree":"degree","institution":"college","year":2020,"isMinimumMet":true}],"languages":[],"certifications":[],"careerGaps":[],
+      "jobHistory":[{"company":"company","designation":"title","fromYear":2023,"fromMonth":1,"toYear":2024,"toMonth":12,"ongoing":false,"domain":"domain"}]
+    },
+    "screening":{
+      "domainMatch":{"jobDomain":"domain","candidateDomain":"domain","status":"EXACT/RELATED/UNRELATED"},
+      "educationMatch":{"minimumRequired":"degree","candidateEducation":"degree","status":"MEETS/BELOW/EXCEEDS"}
+    },
+    "rankingSignals":{"mustHaveSkillsMatchedCount":0,"mustHaveSkillsTotal":0,"mustHaveSkillsMatched":[],"mustHaveSkillsMissing":[],"shouldHaveSkillsMatched":[],"niceToHaveSkillsMatched":[],"preferredSkillsMatched":[]},
+    "validation":{"experienceDiscrepancy":"MATCH/MINOR_DIFF/MAJOR_DIFF","experienceDiscrepancyDetail":"explanation","redFlags":[],"greenFlags":[],"inconsistencies":[],"dataQuality":"HIGH/MEDIUM/LOW"},
+    "recommendation":{"justification":"3-5 sentence summary of candidate fit"}
+  }
+]}

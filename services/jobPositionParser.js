@@ -55,8 +55,11 @@ async function parseJobPosition(job) {
     if (!model.includes('gpt-5') && !model.includes('o1') && !model.includes('o3')) {
       params.temperature = 0.1;
     }
+    const startTime = Date.now();
     const completion = await openai.chat.completions.create(params);
-    console.log('[JD-PARSER] Raw OpenAI completion:', JSON.stringify(completion, null, 2));
+    const durationMs = Date.now() - startTime;
+    const { logTokenUsage } = require('./aiService');
+    logTokenUsage(`Job Description Parser (${jobObj.title || jobObj._id})`, model, completion.usage, completion.choices[0]?.finish_reason || 'stop', 1, durationMs);
 
     const responseText = completion.choices[0]?.message?.content;
     if (!responseText) {

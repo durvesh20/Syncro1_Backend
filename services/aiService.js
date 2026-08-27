@@ -10,53 +10,7 @@ const { EDU_LEVELS, getEduLevel } = require('./educationUtils');
 // ── Constants ──────────────────────────────────────────────────────────────
 const AI_MAX_TOKENS = 20000;
 
-// ── Caching for efficient AI use (Change E) ─────────────────────────────────
-const crypto = require('crypto');
-const WEIGHTS_VERSION = 2;
-const _scoreCache = new Map();
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_CACHE_ENTRIES = 500; // hard memory bound: evict oldest when full
 
-// Bounded insert — once we hit the cap, evict the oldest entry (Map preserves
-// insertion order) so the cache can NEVER grow unbounded and exhaust memory.
-// Each entry holds the full AI analysis (~10–50KB), so 500 ≈ ≤12MB max.
-function _cacheSet(key, value) {
-    if (_scoreCache.size >= MAX_CACHE_ENTRIES) {
-        const oldest = _scoreCache.keys().next().value;
-        if (oldest !== undefined) _scoreCache.delete(oldest);
-    }
-    _scoreCache.set(key, value);
-}
-
-// Periodic sweep: drop expired entries so the Map doesn't accumulate dead
-// weight. .unref() so this timer never keeps the Node process alive on its own.
-const _cacheSweep = setInterval(() => {
-    const now = Date.now();
-    for (const [k, v] of _scoreCache) {
-        if (now - v.ts > CACHE_TTL_MS) _scoreCache.delete(k);
-    }
-}, 30 * 60 * 1000);
-if (_cacheSweep && typeof _cacheSweep.unref === 'function') _cacheSweep.unref();
-
-function _scoreCacheKey(resumeUrl, candidateFormData = {}, jobDescription = {}) {
-    const candidateId = candidateFormData?.candidateId || candidateFormData?._id || candidateFormData?.email || '';
-    const rawJob = jobDescription?.toObject ? jobDescription.toObject() : (jobDescription || {});
-    const jobId = rawJob._id || rawJob.id || '';
-    const jobUpdatedAt = rawJob.updatedAt ? new Date(rawJob.updatedAt).getTime() : '';
-
-    const candidatePayload = JSON.stringify({
-        skills: candidateFormData?.skills || [],
-        exp: candidateFormData?.totalExperience ?? candidateFormData?.relevantExperience ?? '',
-        salary: candidateFormData?.expectedSalary ?? '',
-        loc: candidateFormData?.location ?? '',
-        notice: candidateFormData?.noticePeriod ?? '',
-        relocate: candidateFormData?.willingToRelocate ?? null
-    });
-
-    return crypto.createHash('sha256')
-        .update(`${resumeUrl}|${candidateId}|${jobId}|${jobUpdatedAt}|${candidatePayload}|v${WEIGHTS_VERSION}`)
-        .digest('hex');
-}
 
 // ── Deterministic skill-sweep precompiled term list (Change A perf + safety) ──
 // Built ONCE (module lifetime). Skips ambiguous short tokens (_ambiguousTokens)
@@ -80,6 +34,53 @@ function _buildSweepTerms() {
         });
 }
 
+function logTokenUsage(contextName, model, usage = {}, finishReason = 'stop', attempt = 1, durationMs = 0) {
+    const promptTokens = usage.prompt_tokens || 0;
+    const completionTokens = usage.completion_tokens || 0;
+    const cachedTokens = usage.prompt_tokens_details?.cached_tokens || 0;
+    const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens || 0;
+    const totalTokens = usage.total_tokens || (promptTokens + completionTokens);
+
+    let inputRate = 0.0000025;
+    let outputRate = 0.0000100;
+    const m = (model || '').toLowerCase();
+    if (m.includes('gpt-4o-mini') || m.includes('mini')) {
+        inputRate = 0.00000015;
+        outputRate = 0.00000060;
+    } else if (m.includes('gpt-3.5')) {
+        inputRate = 0.00000050;
+        outputRate = 0.00000150;
+    } else if (m.includes('o1') || m.includes('o3')) {
+        inputRate = 0.0000150;
+        outputRate = 0.0000600;
+    }
+
+    const estimatedCost = (promptTokens * inputRate) + (completionTokens * outputRate);
+
+    console.log(`\n┌──────────────────────────────────────────────────────────┐`);
+    console.log(`│ 📊 AI TOKEN USAGE REPORT                                 │`);
+    console.log(`├──────────────────────────────────────────────────────────┤`);
+    console.log(`│ Context:          ${contextName.padEnd(38)}│`);
+    console.log(`│ Model:            ${model.padEnd(38)}│`);
+    console.log(`│ Finish Reason:    ${finishReason.padEnd(38)}│`);
+    console.log(`│ Attempt:          ${String(attempt).padEnd(38)}│`);
+    console.log(`├──────────────────────────────────────────────────────────┤`);
+    console.log(`│ 📥 Prompt (Input) Tokens:      ${String(promptTokens.toLocaleString()).padEnd(25)}│`);
+    if (cachedTokens > 0) {
+        console.log(`│    └─ Cached Input Tokens:     ${String(cachedTokens.toLocaleString()).padEnd(25)}│`);
+    }
+    console.log(`│ 📤 Completion (Output) Tokens: ${String(completionTokens.toLocaleString()).padEnd(25)}│`);
+    if (reasoningTokens > 0) {
+        console.log(`│    └─ Reasoning Tokens:        ${String(reasoningTokens.toLocaleString()).padEnd(25)}│`);
+    }
+    console.log(`│ 🔢 Total Tokens Used:          ${String(totalTokens.toLocaleString()).padEnd(25)}│`);
+    if (durationMs > 0) {
+        console.log(`│ ⏱️  Response Time:              ${(durationMs + ' ms').padEnd(25)}│`);
+    }
+    console.log(`│ 💵 Estimated Cost:             ${('$' + estimatedCost.toFixed(5) + ' USD').padEnd(25)}│`);
+    console.log(`└──────────────────────────────────────────────────────────┘\n`);
+}
+
 class AIService {
     constructor() {
         this.enabled = process.env.AI_ENABLED === 'true';
@@ -88,7 +89,7 @@ class AIService {
     // ═══════════════════════════════════════════════════════════════════════
     // PUBLIC — parseResume (orchestrator, signature unchanged)
     // ═══════════════════════════════════════════════════════════════════════
-    async parseResume(resumeUrl, fileName = '', candidateFormData = {}, jobDescription = {}) {
+    async parseResume(resumeUrl, fileName = '', candidateFormData = {}, jobDescription = {}, options = {}) {
         console.log('\n========================================');
         console.log('[AI] parseResume called with:');
         console.log('  - resumeUrl:', resumeUrl);
@@ -119,12 +120,7 @@ class AIService {
             return this._getEmptyResumeData();
         }
 
-        const ck = _scoreCacheKey(resumeUrl, candidateFormData, jobDescription);
-        const _cached = _scoreCache.get(ck);
-        if (_cached && (Date.now() - _cached.ts) < CACHE_TTL_MS) {
-            console.log('⚡ [AI MATCHING ENGINE COMPLETED] Cache hit — returned prior score for:', candidateFormData.firstName, candidateFormData.lastName);
-            return _cached.result;
-        }
+
 
         let prompt;
         try {
@@ -137,13 +133,14 @@ class AIService {
             console.log(`[AI] Extracted ${resumeText.length} chars from resume`);
 
             // ── Stage 2: job description text + resolved skill tiers ─────
-            const { text: jobDescriptionText, resolvedSkills } = await this._getJobDescriptionText(jobDescription);
+            const { text: jobDescriptionText, resolvedSkills } = options.prefetchedJD || await this._getJobDescriptionText(jobDescription);
 
             // ── Stage 3: build prompt ─────────────────────────────────────
             prompt = this._buildAdvancedPrompt(candidateFormData, resumeText, jobDescriptionText);
 
             // ── Stage 4: call AI (with truncation + parse retry) ──────────
-            const { responseText, tokensUsed, model } = await this._callAI(prompt);
+            const aiTokenUsage = await this._callAI(prompt);
+            const { responseText, tokensUsed, model } = aiTokenUsage;
 
             // ── Stage 5: parse + validate ─────────────────────────────────
             let aiResult;
@@ -177,6 +174,13 @@ class AIService {
             try {
                 const { calculateFromResume, buildExperienceEntries } = require('./experienceCalculator');
                 aiResult.candidateProfile = aiResult.candidateProfile || {};
+                if (!Array.isArray(aiResult.candidateProfile.jobHistory) || aiResult.candidateProfile.jobHistory.length === 0) {
+                    if (Array.isArray(aiResult.jobHistory) && aiResult.jobHistory.length > 0) {
+                        aiResult.candidateProfile.jobHistory = aiResult.jobHistory;
+                    } else if (Array.isArray(aiResult.candidateProfile.experience) && aiResult.candidateProfile.experience.length > 0) {
+                        aiResult.candidateProfile.jobHistory = aiResult.candidateProfile.experience;
+                    }
+                }
                 const calc = calculateFromResume(aiResult.candidateProfile.jobHistory || [], new Date());
                 if (calc.roles.length > 0) {
                     aiResult.candidateProfile.actualTotalMonths = calc.totalMonths;
@@ -244,9 +248,14 @@ class AIService {
                 confidence: this._buildConfidence(aiResult),
                 provider: 'openai',
                 model,
-                tokensUsed
+                tokensUsed,
+                tokenUsage: {
+                    promptTokens: aiTokenUsage.promptTokens || 0,
+                    completionTokens: aiTokenUsage.completionTokens || 0,
+                    cachedTokens: aiTokenUsage.cachedTokens || 0,
+                    totalTokens: tokensUsed
+                }
             };
-            _cacheSet(ck, { ts: Date.now(), result: successResult });
 
             return successResult;
 
@@ -268,6 +277,495 @@ class AIService {
             return this._getEmptyResumeData();
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PUBLIC — parseMultipleResumes
+    //   True batch: ONE AI call for all N candidates + JD, not N parallel calls.
+    //   Every candidate is always scored fresh — no persistent caching.
+    // ═══════════════════════════════════════════════════════════════════════
+    /**
+     * Batch parse up to 5 candidate resumes against a single Job Description.
+     *
+     * Token strategy:
+     *   1. For all candidates: ONE AI call with all resumes + JD in one prompt
+     *      (JD sent once, not N times → significant token reduction vs parallel calls).
+     *   2. Run deterministic post-processing on every result (skills, exp, salary…).
+     *
+     * @param {Array<Object>} candidatesList - Array of { resumeUrl, fileName, candidateFormData, candidateId }
+     * @param {Object} jobDescription - Target Job Description object
+     * @returns {Object} Batch results + comparative ranking matrix
+     */
+    async parseMultipleResumes(candidatesList = [], jobDescription = {}) {
+        console.log('\n========================================');
+        console.log(`[AI] parseMultipleResumes called for ${candidatesList.length} candidate(s) against JD:`, jobDescription?._id || jobDescription?.title);
+        console.log('========================================\n');
+
+        if (!Array.isArray(candidatesList) || candidatesList.length === 0) {
+            return {
+                success: false,
+                message: 'No candidates provided for batch matching',
+                results: [],
+                comparativeRanking: []
+            };
+        }
+
+        const MAX_BATCH = 5;
+        const candidatesToProcess = candidatesList.slice(0, MAX_BATCH);
+        if (candidatesList.length > MAX_BATCH) {
+            console.warn(`[AI] Batch scan capped at ${MAX_BATCH} candidates (received ${candidatesList.length})`);
+        }
+
+        const jobId = jobDescription?._id || jobDescription?.id;
+        const jobUpdatedAt = jobDescription?.updatedAt ? new Date(jobDescription.updatedAt) : null;
+
+        // ── Phase 1: Prefetch JD ──────────────────────────────────────────────
+        const prefetchedJD = await this._getJobDescriptionText(jobDescription);
+
+        // Normalise each entry — all candidates go through AI (no caching)
+        const normalized = candidatesToProcess.map(cand => {
+            const resumeUrl = cand.resumeUrl || cand.resume?.url || '';
+            const fileName = cand.fileName || cand.resume?.fileName || '';
+            const formData = cand.candidateFormData || cand.formData || cand;
+            const candidateId = cand.candidateId || formData.candidateId || formData._id || cand._id;
+            const name = `${formData.firstName || cand.firstName || ''} ${formData.lastName || cand.lastName || ''}`.trim() || 'Candidate';
+            return { resumeUrl, fileName, formData, candidateId, name };
+        });
+
+        // ── Phase 2: All candidates need AI (caching removed) ───────────────
+        const needAI = normalized; // every candidate is always scored fresh
+        console.log(`[AI] Batch: ${needAI.length} candidate(s) queued for AI scoring (no cache).`);
+
+        // ── Phase 4: True batch AI call (ONE prompt for all uncached candidates)
+        const aiResults = []; // { candidateId, name, result }
+        let batchTokenUsage = { promptTokens: 0, completionTokens: 0, cachedTokens: 0, totalTokens: 0 };
+
+        if (needAI.length > 0) {
+            if (needAI.length === 1) {
+                // Single candidate — use normal parseResume (no batch overhead)
+                const c = needAI[0];
+                console.log(`[AI] Single uncached candidate — using standard parseResume for ${c.name}`);
+                try {
+                    const res = await this.parseResume(c.resumeUrl, c.fileName, c.formData, jobDescription, { prefetchedJD });
+                    aiResults.push({ candidateId: c.candidateId, name: c.name, result: res });
+                    const tu = res.tokenUsage || {};
+                    batchTokenUsage.promptTokens += tu.promptTokens || 0;
+                    batchTokenUsage.completionTokens += tu.completionTokens || 0;
+                    batchTokenUsage.cachedTokens += tu.cachedTokens || 0;
+                    batchTokenUsage.totalTokens += tu.totalTokens || (res.tokensUsed || 0);
+                } catch (err) {
+                    console.error(`[AI] Single parse failed for ${c.name}:`, err.message);
+                    aiResults.push({ candidateId: c.candidateId, name: c.name, result: this._getEmptyResumeData() });
+                }
+            } else {
+                // TRUE BATCH — extract resumes in parallel then ONE AI call
+                console.log(`[AI] 🚀 True batch AI call for ${needAI.length} candidates (JD sent once)...`);
+                try {
+                    // Step A: Extract resume texts in parallel (no AI — pure file download)
+                    const resumeTexts = await Promise.all(needAI.map(async c => {
+                        try {
+                            const raw = await this._getResumeText(c.resumeUrl);
+                            return raw && raw.trim().length > 30 ? raw : null;
+                        } catch (e) {
+                            console.warn(`[AI] Resume extraction failed for ${c.name}:`, e.message);
+                            return null;
+                        }
+                    }));
+
+                    // Step B: Build single batch prompt (JD once + all candidates)
+                    const batchPrompt = this._buildBatchPrompt(
+                        needAI.map((c, i) => ({ formData: c.formData, resumeText: resumeTexts[i] || '' })),
+                        prefetchedJD.text
+                    );
+
+                    // Step C: ONE AI call → JSON array
+                    const batchAI = await this._batchCallAI(batchPrompt, needAI.length);
+                    batchTokenUsage = {
+                        promptTokens: batchAI.promptTokens,
+                        completionTokens: batchAI.completionTokens,
+                        cachedTokens: batchAI.cachedTokens,
+                        totalTokens: batchAI.tokensUsed
+                    };
+
+                    // Step D: Post-process each result deterministically
+                    for (let i = 0; i < needAI.length; i++) {
+                        const c = needAI[i];
+                        const rawAI = batchAI.resultsArray[i];
+
+                        if (!rawAI) {
+                            console.warn(`[AI] No batch result for candidate index ${i} (${c.name}) — using empty`);
+                            aiResults.push({ candidateId: c.candidateId, name: c.name, result: this._getEmptyResumeData() });
+                            continue;
+                        }
+
+                        try {
+                            let aiResult = rawAI;
+
+                            // Deterministic skill sweep (same as parseResume)
+                            const swept = this._deterministicSkillSweep(resumeTexts[i] || '', c.formData.skills);
+                            const aiSkills = (aiResult.candidateProfile?.skills || []).filter(Boolean);
+                            aiResult.candidateProfile = aiResult.candidateProfile || {};
+                            aiResult.candidateProfile.skills = [...new Set([...aiSkills, ...swept])];
+
+                            // Deterministic experience recompute
+                            try {
+                                const { calculateFromResume, buildExperienceEntries } = require('./experienceCalculator');
+                                aiResult.candidateProfile = aiResult.candidateProfile || {};
+                                if (!Array.isArray(aiResult.candidateProfile.jobHistory) || aiResult.candidateProfile.jobHistory.length === 0) {
+                                    if (Array.isArray(aiResult.jobHistory) && aiResult.jobHistory.length > 0) {
+                                        aiResult.candidateProfile.jobHistory = aiResult.jobHistory;
+                                    } else if (Array.isArray(aiResult.candidateProfile.experience) && aiResult.candidateProfile.experience.length > 0) {
+                                        aiResult.candidateProfile.jobHistory = aiResult.candidateProfile.experience;
+                                    }
+                                }
+                                const calc = calculateFromResume(aiResult.candidateProfile.jobHistory || [], new Date());
+                                if (calc.roles.length > 0) {
+                                    aiResult.candidateProfile.actualTotalMonths = calc.totalMonths;
+                                    aiResult.candidateProfile.actualTotalExperience = calc.totalExperience;
+                                    aiResult.candidateProfile.actualExperienceBreakdown = calc.roles;
+                                    aiResult.candidateProfile.experience = buildExperienceEntries(aiResult.candidateProfile.jobHistory || [], new Date());
+                                    if (Array.isArray(aiResult.candidateProfile.jobHistory)) {
+                                        aiResult.candidateProfile.jobHistory.forEach((job, idx) => {
+                                            const corrected = calc.roles[idx];
+                                            if (corrected) job.durationMonths = corrected.duration_months;
+                                        });
+                                    }
+                                    if (!aiResult.screening) aiResult.screening = {};
+                                    if (!aiResult.screening.experienceRange) aiResult.screening.experienceRange = {};
+                                    aiResult.screening.experienceRange.actual = `${calc.totalExperience}`;
+                                    if (c.formData && c.formData.totalExperience != null) {
+                                        const formExp = Number(c.formData.totalExperience);
+                                        const diff = Math.abs(formExp - calc.yearsDecimal);
+                                        if (!aiResult.validation) aiResult.validation = {};
+                                        aiResult.validation.experienceDiscrepancyDetail = diff >= 1
+                                            ? `Form reported ${formExp} years but resume calculation shows ${calc.totalExperience}.`
+                                            : `Form reported ${formExp} years matching resume calculation of ${calc.totalExperience}.`;
+                                    }
+                                }
+                            } catch (expErr) {
+                                console.error('[AI] Batch exp recompute failed (non-fatal):', expErr.message);
+                            }
+
+                            // Deterministic skill/score overwrite
+                            const expRange = jobDescription?.experienceRange || {};
+                            aiResult = this._applyDeterministicSkillMatch(
+                                aiResult,
+                                prefetchedJD.resolvedSkills,
+                                expRange,
+                                jobDescription?.salary,
+                                c.formData,
+                                jobDescription
+                            );
+
+                            const structuredData = this._structureAIResult(aiResult, c.formData);
+                            const fullResult = {
+                                success: true,
+                                data: structuredData,
+                                fullAnalysis: aiResult,
+                                confidence: this._buildConfidence(aiResult),
+                                provider: 'openai',
+                                model: batchAI.model,
+                                tokensUsed: 0, // allocated at batch level
+                                tokenUsage: { promptTokens: 0, completionTokens: 0, cachedTokens: 0, totalTokens: 0 }
+                            };
+
+                            aiResults.push({ candidateId: c.candidateId, name: c.name, result: fullResult });
+
+                            console.log(`[AI] ✅ Batch result [${i}] ${c.name}: score=${aiResult.scoring?.finalAdjustedScore}/100 (${aiResult.matchLevel})`);
+                        } catch (postErr) {
+                            console.error(`[AI] Post-processing failed for ${c.name} [${i}]:`, postErr.message);
+                            aiResults.push({ candidateId: c.candidateId, name: c.name, result: this._getEmptyResumeData() });
+                        }
+                    }
+                } catch (batchErr) {
+                    // Batch call failed — fall back to individual parseResume calls
+                    console.error('[AI] ⚠️ Batch AI call failed, falling back to individual calls:', batchErr.message);
+                    const fallbackPromises = needAI.map(c =>
+                        this.parseResume(c.resumeUrl, c.fileName, c.formData, jobDescription, { prefetchedJD })
+                            .then(res => {
+                                batchTokenUsage.totalTokens += res.tokenUsage?.totalTokens || 0;
+                                return { candidateId: c.candidateId, name: c.name, result: res };
+                            })
+                            .catch(err => ({ candidateId: c.candidateId, name: c.name, result: this._getEmptyResumeData() }))
+                    );
+                    const fallbackResults = await Promise.all(fallbackPromises);
+                    aiResults.push(...fallbackResults);
+                }
+            }
+        }
+
+        // ── Phase 5: Map AI results by candidateId, preserving original order ─
+        const allResultsMap = new Map();
+        for (const r of aiResults) allResultsMap.set(String(r.candidateId), { candidateId: r.candidateId, candidateName: r.name, result: r.result, fromCache: null });
+
+        const rawResults = normalized.map(c => allResultsMap.get(String(c.candidateId)) || { candidateId: c.candidateId, candidateName: c.name, result: this._getEmptyResumeData(), fromCache: null });
+
+        // ── Phase 6: Build comparative ranking matrix ────────────────────────
+        const rankedCandidates = rawResults
+            .map(item => {
+                const fa = item.result?.fullAnalysis || {};
+                const score = fa.scoring?.finalAdjustedScore || 0;
+                const priorityScore = fa.rankingSignals?.priorityScore || fa.recommendation?.priorityScore || score;
+                const matchLevel = fa.matchLevel || 'UNKNOWN';
+                const decision = fa.recommendation?.decision || 'HOLD';
+                const skillCoverage = fa.scoring?.skillCoveragePercent || 0;
+
+                return {
+                    candidateId: item.candidateId,
+                    candidateName: item.candidateName,
+                    score,
+                    priorityScore,
+                    matchLevel,
+                    decision,
+                    skillCoverage,
+                    matchedSkillsCount: fa.rankingSignals?.mustHaveSkillsMatchedCount || 0,
+                    totalMustSkills: fa.rankingSignals?.mustHaveSkillsTotal || 0,
+                    keyMissingSkills: fa.rankingSignals?.mustHaveSkillsMissing || [],
+                    fullAnalysis: fa,
+                    singleResult: item.result
+                };
+            })
+            .sort((a, b) => b.score - a.score || b.priorityScore - a.priorityScore);
+
+        rankedCandidates.forEach((cand, idx) => { cand.rank = idx + 1; });
+
+        const topCandidate = rankedCandidates[0] || null;
+
+        // ── Phase 7: Log token usage ─────────────────────────────────────────
+        const totalCandidates = candidatesToProcess.length;
+
+        console.log(`\n┌──────────────────────────────────────────────────────────────┐`);
+        console.log(`│ 📊 BATCH AI MATCHING — TOKEN USAGE REPORT                    │`);
+        console.log(`├──────────────────────────────────────────────────────────────┤`);
+        console.log(`│ Total Candidates:          ${String(totalCandidates).padEnd(35)}│`);
+        console.log(`│ 🤖 AI Calls (batch=1):      ${String(needAI.length > 1 ? '1 batch call' : needAI.length === 1 ? '1 single call' : '0').padEnd(35)}│`);
+        console.log(`├──────────────────────────────────────────────────────────────┤`);
+        console.log(`│ 📥 Prompt Tokens Used:      ${String(batchTokenUsage.promptTokens.toLocaleString()).padEnd(35)}│`);
+        console.log(`│ 📤 Completion Tokens Used:  ${String(batchTokenUsage.completionTokens.toLocaleString()).padEnd(35)}│`);
+        console.log(`│ 🔢 Total Tokens Used:       ${String(batchTokenUsage.totalTokens.toLocaleString()).padEnd(35)}│`);
+        console.log(`└──────────────────────────────────────────────────────────────┘\n`);
+
+        console.log(`[AI] ✅ Batch complete: ${rankedCandidates.length} candidate(s) ranked.`);
+        if (topCandidate) console.log(`   🏆 Top: ${topCandidate.candidateName} (Score: ${topCandidate.score}/100)`);
+
+        return {
+            success: true,
+            jobId,
+            jobTitle: jobDescription?.title || 'Job Description',
+            totalProcessed: rankedCandidates.length,
+            batchTokenUsage: {
+                totalPromptTokens: batchTokenUsage.promptTokens,
+                totalCompletionTokens: batchTokenUsage.completionTokens,
+                totalTokens: batchTokenUsage.totalTokens,
+                aiCandidatesProcessed: needAI.length,
+                batchMode: needAI.length > 1 ? 'true_batch' : needAI.length === 1 ? 'single' : 'none'
+            },
+            topCandidate: topCandidate ? {
+                candidateId: topCandidate.candidateId,
+                candidateName: topCandidate.candidateName,
+                score: topCandidate.score,
+                matchLevel: topCandidate.matchLevel,
+                decision: topCandidate.decision
+            } : null,
+            comparativeRanking: rankedCandidates,
+            results: rawResults
+        };
+    }
+    // ═══════════════════════════════════════════════════════════════════════
+    // PRIVATE — True batch prompt builder
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Build a single prompt containing N candidate blocks + ONE JD.
+     * Uses batch-scoring-prompt.txt template.
+     *
+     * @param {Array<{formData, resumeText}>} candidates
+     * @param {string} jdText - Pre-fetched job description text
+     * @returns {string} Full prompt string
+     */
+    _buildBatchPrompt(candidates, jdText) {
+        const promptPath = path.join(__dirname, '../prompts/batch-scoring-prompt.txt');
+        let template;
+        try {
+            template = fs.readFileSync(promptPath, 'utf-8');
+        } catch (err) {
+            console.error('[AI] Could not load batch scoring prompt:', err.message);
+            template = 'Score all candidates against the JD. Output JSON array only.';
+        }
+
+        // Build candidate blocks
+        const candidateBlocks = candidates.map((c, i) => {
+            const fd = c.formData || {};
+            const skillsStr = Array.isArray(fd.skills) && fd.skills.length > 0 ? fd.skills.join(', ') : 'Not provided';
+            const eduStr = Array.isArray(fd.education) && fd.education.length > 0
+                ? fd.education.map(e => `${e.degree || ''} from ${e.institution || ''} (${e.year || ''})`).join('; ')
+                : 'Not provided';
+            const certStr = Array.isArray(fd.certifications) && fd.certifications.length > 0 ? fd.certifications.join(', ') : 'Not provided';
+            const langStr = Array.isArray(fd.languages) && fd.languages.length > 0 ? fd.languages.join(', ') : 'Not provided';
+
+            return [
+                `--- CANDIDATE [${i}] ---`,
+                `name: ${fd.firstName || ''} ${fd.lastName || ''} | email: ${fd.email || 'N/A'} | mobile: ${fd.mobile || 'N/A'}`,
+                `location: ${fd.location || 'N/A'} | relocate: ${fd.willingToRelocate === true ? 'Yes' : fd.willingToRelocate === false ? 'No' : 'Not specified'}`,
+                `totalExp: ${fd.totalExperience || 'N/A'}yr | relevantExp: ${fd.relevantExperience || 'N/A'}yr | notice: ${fd.noticePeriod || 'N/A'}`,
+                `currentSalary: ${this._formatSalaryForPrompt(fd.currentSalary)} | expectedSalary: ${this._formatSalaryForPrompt(fd.expectedSalary)}`,
+                `skills: ${skillsStr}`,
+                `education: ${eduStr}`,
+                `certifications: ${certStr}`,
+                `languages: ${langStr}`,
+                `writeup: ${fd.writeup || 'Not provided'}`,
+                `# Resume:\n${c.resumeText || 'Resume text not available'}`,
+                `--- END CANDIDATE [${i}] ---`
+            ].join('\n');
+        }).join('\n\n');
+
+        return template
+            .replace('{{jobDescription}}', jdText)
+            .replace('{{candidateBlocks}}', candidateBlocks)
+            .replace(/\{\{candidateCount\}\}/g, String(candidates.length))
+            .replace('{{candidateCountMinus1}}', String(candidates.length - 1));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // PRIVATE — Single AI call for batch, returns array of full analyses
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Send one AI call with a batch prompt; parse and return JSON array.
+     * Falls back to empty array on parse failure so caller can degrade gracefully.
+     *
+     * @param {string} prompt - Full batch prompt
+     * @param {number} expectedCount - Number of candidates expected in response
+     * @returns {{ resultsArray, tokensUsed, model, promptTokens, completionTokens, cachedTokens }}
+     */
+    async _batchCallAI(prompt, expectedCount, attempt = 1) {
+        const openai = getOpenAI();
+        const model = getModel();
+        const startTime = Date.now();
+
+        // Scale max tokens by number of candidates (each full analysis ≈ 3000–4000 tokens)
+        const baseTokens = 4000;
+        const maxTokens = Math.min(Math.max(baseTokens * expectedCount, AI_MAX_TOKENS), 60000);
+
+        console.log(`[AI] 🚀 Batch AI call (attempt ${attempt}): model=${model}, candidates=${expectedCount}, max_tokens=${maxTokens}`);
+
+        let actualPrompt = prompt;
+        if (attempt > 1 && prompt.length > 40000) {
+            console.warn(`[AI] Batch retry: trimming prompt (${prompt.length} chars)`);
+            actualPrompt = prompt.slice(0, 40000) + '\n\n[Some resume text was truncated for retry]';
+        }
+
+        const params = {
+            model,
+            messages: [
+                {
+                    role: 'system',
+                    content: `You are Syncro1's advanced talent intelligence engine. Your job is to analyze multiple resumes against a single job description and output ONLY a valid JSON array. Each array element is the full analysis for one candidate. No explanations. No markdown. Terse, deterministic, consistent and evidence-based.`
+                },
+                { role: 'user', content: actualPrompt }
+            ],
+            max_completion_tokens: maxTokens,
+            response_format: { type: 'json_object' }
+        };
+
+        if (model.includes('gpt-5') || model.includes('o1') || model.includes('o3')) {
+            params.reasoning_effort = 'low';
+        } else {
+            params.temperature = 0.1;
+        }
+
+        const completion = await openai.chat.completions.create(params);
+        const durationMs = Date.now() - startTime;
+        const finishReason = completion.choices[0]?.finish_reason;
+        const responseText = completion.choices[0]?.message?.content;
+        const usage = completion.usage || {};
+        const promptTokens = usage.prompt_tokens || 0;
+        const completionTokens = usage.completion_tokens || 0;
+        const cachedTokens = usage.prompt_tokens_details?.cached_tokens || 0;
+        const totalTokens = usage.total_tokens || 0;
+
+        logTokenUsage(`Batch Resume Matching (${expectedCount} candidates)`, model, usage, finishReason, attempt, durationMs);
+
+        if (finishReason === 'length' && attempt < 2) {
+            console.warn('[AI] Batch response truncated — retrying with trimmed prompt...');
+            return this._batchCallAI(prompt, expectedCount, 2);
+        }
+
+        if (!responseText) throw new Error('Empty batch response from OpenAI');
+
+        // Parse the JSON object wrapper (response_format:json_object prevents a raw array)
+        let parsed;
+        try {
+            parsed = JSON.parse(responseText);
+        } catch (e) {
+            throw new Error(`Batch JSON parse failed: ${e.message}`);
+        }
+
+        // ── Robust array extraction ────────────────────────────────────────────
+        // response_format:json_object means the model wraps the candidates array
+        // in an outer object. We must find that array reliably.
+        // BUG FIXED: the old code used Object.values().find(Array.isArray) which
+        // picked the FIRST array — often skills[] or jobHistory[] from candidate 0,
+        // not the top-level candidates array. Now we:
+        //   1. Check well-known wrapper keys the model typically uses
+        //   2. Pick the largest array whose first element looks like a candidate
+        //   3. Fall back to wrapping the whole object as a single candidate
+        let resultsArray;
+
+        if (Array.isArray(parsed)) {
+            resultsArray = parsed;
+        } else {
+            // Step 1: check well-known wrapper keys
+            const knownKeys = ['candidates', 'results', 'analyses', 'data', 'output', 'evaluations', 'assessments'];
+            let found = null;
+            for (const k of knownKeys) {
+                if (Array.isArray(parsed[k]) && parsed[k].length > 0) {
+                    found = parsed[k];
+                    break;
+                }
+            }
+
+            if (found) {
+                resultsArray = found;
+            } else {
+                // Step 2: pick the largest top-level array whose items look like candidate analyses
+                let best = null;
+                let bestLen = 0;
+                for (const v of Object.values(parsed)) {
+                    if (Array.isArray(v) && v.length > bestLen) {
+                        const first = v[0];
+                        const looksLikeCandidate = first && typeof first === 'object' && (
+                            first.candidateProfile != null || first.candidateIndex != null ||
+                            first.scoring != null || first.recommendation != null || first.rankingSignals != null
+                        );
+                        if (looksLikeCandidate) {
+                            best = v;
+                            bestLen = v.length;
+                        }
+                    }
+                }
+
+                if (best) {
+                    resultsArray = best;
+                } else {
+                    // Step 3: whole object is a single candidate
+                    console.warn('[AI] Batch: could not find candidates array — treating response as single candidate');
+                    resultsArray = [parsed];
+                }
+            }
+        }
+
+        console.log(`[AI] Batch extraction: ${resultsArray.length} result(s) found (expected ${expectedCount}). Top-level keys: [${Object.keys(parsed).join(', ')}]`);
+
+        // Sort by candidateIndex so results align with input order
+        resultsArray.sort((a, b) => (a.candidateIndex ?? 0) - (b.candidateIndex ?? 0));
+
+        if (resultsArray.length !== expectedCount) {
+            console.warn(`[AI] Batch: expected ${expectedCount} results, got ${resultsArray.length}`);
+        }
+
+        return { resultsArray, tokensUsed: totalTokens, model, promptTokens, completionTokens, cachedTokens };
+    }
+
 
     // ═══════════════════════════════════════════════════════════════════════
     // PRIVATE — sub-methods (independently testable)
@@ -298,36 +796,40 @@ class AIService {
      */
     async _getJobDescriptionText(jobDescription) {
         const rawJobObj = jobDescription?.toObject ? jobDescription.toObject() : (jobDescription || {});
+        const jobId = rawJobObj._id || rawJobObj.id;
 
+        // Fast non-blocking lookup: check if structured JobPosition already exists in MongoDB (no LLM delay)
         try {
-            const { getOrParseJobPosition } = require('./jobPositionParser');
-            const jobPosition = await getOrParseJobPosition(jobDescription);
-            if (jobPosition?.parsedRequirements) {
-                console.log(`[AI] Using structured JobPosition for job ${rawJobObj._id}`);
-                const pr = jobPosition.parsedRequirements;
-                const resolvedSkills = {
-                    mustHave: Array.isArray(pr.skills?.mustHave) ? pr.skills.mustHave : [],
-                    shouldHave: Array.isArray(pr.skills?.shouldHave) ? pr.skills.shouldHave : [],
-                    niceToHave: Array.isArray(pr.skills?.niceToHave) ? pr.skills.niceToHave : [],
-                };
-                return {
-                    text: JSON.stringify(pr, null, 2),
-                    resolvedSkills,
-                };
+            if (jobId) {
+                const JobPosition = require('../models/JobPosition');
+                const jobPosition = await JobPosition.findOne({ jobId, parseStatus: 'SUCCESS' }).lean();
+                if (jobPosition?.parsedRequirements) {
+                    console.log(`[AI] Using pre-parsed JobPosition for job ${jobId}`);
+                    const pr = jobPosition.parsedRequirements;
+                    const resolvedSkills = {
+                        mustHave: Array.isArray(pr.skills?.mustHave) ? pr.skills.mustHave : [],
+                        shouldHave: Array.isArray(pr.skills?.shouldHave) ? pr.skills.shouldHave : [],
+                        niceToHave: Array.isArray(pr.skills?.niceToHave) ? pr.skills.niceToHave : [],
+                    };
+                    return {
+                        text: JSON.stringify(pr, null, 2),
+                        resolvedSkills,
+                    };
+                }
             }
         } catch (err) {
-            console.error(`[AI] JobPosition fetch failed: ${err.message}. Falling back to raw JD.`);
+            console.warn(`[AI] JobPosition fast lookup skipped: ${err.message}.`);
         }
 
-        // Fallback: read skills directly from the job document
+        // Fast zero-latency fallback: construct JD text directly from job document fields
         const resolvedSkills = {
-            mustHave: rawJobObj.skills?.required || rawJobObj.skills?.mustHave || [],
+            mustHave: rawJobObj.skills?.required || rawJobObj.skills?.mustHave || (Array.isArray(rawJobObj.skills) ? rawJobObj.skills : []),
             shouldHave: rawJobObj.skills?.preferred || rawJobObj.skills?.shouldHave || [],
             niceToHave: rawJobObj.skills?.niceToHave || [],
         };
 
         if (resolvedSkills.mustHave.length === 0 && resolvedSkills.shouldHave.length === 0) {
-            console.warn('[AI] No JD skills found in either parsedRequirements or raw job doc — deterministic skill correction skipped, AI output unverified');
+            console.warn('[AI] No JD skills found in job doc — deterministic skill correction will run on resume text');
         }
 
         return {
@@ -343,6 +845,7 @@ class AIService {
     async _callAI(prompt, attempt = 1) {
         const openai = getOpenAI();
         const model = getModel();
+        const startTime = Date.now();
 
         const maxTokens = attempt === 1 ? AI_MAX_TOKENS : 24000;
         console.log(`[AI] Calling OpenAI (attempt ${attempt}), model: ${model}, max_completion_tokens: ${maxTokens}`);
@@ -374,6 +877,7 @@ class AIService {
         }
 
         const completion = await openai.chat.completions.create(params);
+        const durationMs = Date.now() - startTime;
 
         const finishReason = completion.choices[0]?.finish_reason;
         const responseText = completion.choices[0]?.message?.content;
@@ -383,7 +887,7 @@ class AIService {
         const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens || 0;
         const totalTokens = usage.total_tokens || 0;
 
-        console.log(`[AI] finish_reason=${finishReason} | prompt_tokens=${promptTokens} | completion_tokens=${completionTokens} | reasoning_tokens=${reasoningTokens} | total_tokens=${totalTokens}`);
+        logTokenUsage('Candidate Resume Matching', model, usage, finishReason, attempt, durationMs);
 
         // Handle truncation
         if (finishReason === 'length') {
@@ -406,7 +910,8 @@ class AIService {
 
         if (!responseText) throw new Error('Empty response from OpenAI');
 
-        return { responseText, tokensUsed: totalTokens, model, promptTokens, completionTokens, reasoningTokens };
+        const cachedTokens = usage.prompt_tokens_details?.cached_tokens || 0;
+        return { responseText, tokensUsed: totalTokens, model, promptTokens, completionTokens, reasoningTokens, cachedTokens };
     }
 
     /**
@@ -544,7 +1049,8 @@ class AIService {
             const s = aiResult.scoring;
 
             // ── Step D2: recompute experienceMatch deterministically ───────
-            // Use ONLY the resume-calculated actualTotalMonths matched against JD experience range.
+            // Strictly resume-only: only use actualTotalMonths parsed from the resume.
+            // No formData fallback — if resume has no jobHistory, score stays as-is from AI.
             const expRange = experienceRange || {};
             const { min: expMin, max: expMax } = expRange;
             let experienceMatch = s.experienceMatch || 0;
@@ -554,31 +1060,88 @@ class AIService {
                     : null;
                 if (actualYears != null && actualYears >= 0) {
                     experienceMatch = this._scoreExperience(actualYears, expMin, expMax);
+                    console.log(`[AI] 📊 Experience scored: ${actualYears} yrs vs JD [${expMin}–${expMax}] → ${experienceMatch}`);
+                } else {
+                    console.warn(`[AI] ⚠️ Experience score not recomputed — resume had no parsed jobHistory (actualTotalMonths=null)`);
                 }
             }
             aiResult.scoring.experienceMatch = experienceMatch;
 
             // ── Step D3: recompute salaryFit deterministically ─────────────
-            const expectedSal = candidateFormData?.expectedSalary || aiResult.candidateProfile?.expectedSalary;
-            if (expectedSal != null && jobSalary?.max) {
-                const salaryResult = this._scoreSalary(expectedSal, jobSalary);
+            // Resolve job salary: handles { min, max } or { minimum, maximum } or jobDescription.salary
+            const resolvedJobSalary = jobSalary || jobDescription?.salary || jobDescription?.compensation || {};
+            const jobMaxRaw = resolvedJobSalary.max ?? resolvedJobSalary.maximum ?? null;
+            const jobMinRaw = resolvedJobSalary.min ?? resolvedJobSalary.minimum ?? 0;
 
+            // Resolve candidate salary: candidateFormData.expectedSalary -> candidateProfile.expectedSalary -> currentSalary
+            const rawCandExpected = candidateFormData?.expectedSalary
+                ?? aiResult.candidateProfile?.expectedSalary
+                ?? null;
+
+            const rawCandCurrent = candidateFormData?.currentSalary
+                ?? aiResult.candidateProfile?.currentSalary
+                ?? null;
+
+            const candExpectedLPA = this._normalizeSalaryToLPA(rawCandExpected);
+            const candCurrentLPA = this._normalizeSalaryToLPA(rawCandCurrent);
+            const effectiveCandSalaryLPA = candExpectedLPA > 0 ? candExpectedLPA : candCurrentLPA;
+
+            const jobMaxLPA = this._normalizeSalaryToLPA(jobMaxRaw);
+            const jobMinLPA = this._normalizeSalaryToLPA(jobMinRaw);
+
+            if (!aiResult.screening) aiResult.screening = {};
+            if (!aiResult.validation) aiResult.validation = {};
+            if (!aiResult.rankingSignals) aiResult.rankingSignals = {};
+
+            if (effectiveCandSalaryLPA > 0 && jobMaxLPA > 0) {
+                const salaryResult = this._scoreSalary(effectiveCandSalaryLPA, { min: jobMinLPA, max: jobMaxLPA });
                 aiResult.scoring.salaryFit = salaryResult.score;
-
-                if (!aiResult.screening) aiResult.screening = {};
                 aiResult.screening.salaryFit = {
-                    budget: jobSalary ? (jobSalary.min && jobSalary.max ? `${jobSalary.min} - ${jobSalary.max} LPA` : (jobSalary.max ? `<= ${jobSalary.max} LPA` : 'Not specified')) : 'Not specified',
-                    expected: expectedSal ? `${expectedSal} LPA` : 'Not provided',
+                    budget: jobMinLPA > 0 ? `${jobMinLPA} - ${jobMaxLPA} LPA` : `<= ${jobMaxLPA} LPA`,
+                    expected: `${effectiveCandSalaryLPA} LPA`,
                     deltaPercent: salaryResult.deltaPercent,
                     status: salaryResult.status
                 };
-
-                if (!aiResult.validation) aiResult.validation = {};
                 aiResult.validation.salaryStatus = salaryResult.status;
                 aiResult.validation.salaryDeltaPercent = salaryResult.deltaPercent;
-
-                if (!aiResult.rankingSignals) aiResult.rankingSignals = {};
                 aiResult.rankingSignals.salaryWithinBudget = salaryResult.withinBudget;
+                console.log(`[AI] 💰 Salary scored: ${effectiveCandSalaryLPA} LPA vs JD [${jobMinLPA}–${jobMaxLPA} LPA] → ${salaryResult.score} (${salaryResult.status})`);
+            } else if (jobMaxLPA > 0) {
+                // Job has salary range, but candidate provided neither expected nor current salary
+                aiResult.scoring.salaryFit = 70;
+                aiResult.screening.salaryFit = {
+                    budget: jobMinLPA > 0 ? `${jobMinLPA} - ${jobMaxLPA} LPA` : `<= ${jobMaxLPA} LPA`,
+                    expected: 'Not provided',
+                    deltaPercent: 0,
+                    status: 'UNKNOWN'
+                };
+                aiResult.validation.salaryStatus = 'UNKNOWN';
+                aiResult.rankingSignals.salaryWithinBudget = true;
+                console.log(`[AI] 💰 Salary: Candidate salary not provided — using default score 70`);
+            } else if (effectiveCandSalaryLPA > 0) {
+                // Candidate provided salary, but JD has no budget specified
+                aiResult.scoring.salaryFit = 80;
+                aiResult.screening.salaryFit = {
+                    budget: 'Not specified',
+                    expected: `${effectiveCandSalaryLPA} LPA`,
+                    deltaPercent: 0,
+                    status: 'UNKNOWN'
+                };
+                aiResult.validation.salaryStatus = 'UNKNOWN';
+                aiResult.rankingSignals.salaryWithinBudget = true;
+                console.log(`[AI] 💰 Salary: JD has no budget — using score 80 for candidate salary ${effectiveCandSalaryLPA} LPA`);
+            } else {
+                // Neither candidate nor JD salary specified
+                aiResult.scoring.salaryFit = 70;
+                aiResult.screening.salaryFit = {
+                    budget: 'Not specified',
+                    expected: 'Not provided',
+                    deltaPercent: 0,
+                    status: 'UNKNOWN'
+                };
+                aiResult.validation.salaryStatus = 'UNKNOWN';
+                aiResult.rankingSignals.salaryWithinBudget = true;
+                console.log(`[AI] 💰 Salary: Neither candidate nor JD salary specified — default score 70`);
             }
 
             // ── Step D4: recompute educationMatch deterministically ──────────
@@ -901,68 +1464,151 @@ class AIService {
 
     // ── Resume extraction (unchanged) ──────────────────────────────────────
 
+    _detectFileType(buffer, contentType = '', url = '') {
+        if (!buffer || buffer.length < 4) return 'unknown';
+
+        // 1. Magic bytes check (100% reliable content detection)
+        // PDF magic bytes: %PDF (0x25 0x50 0x44 0x46)
+        if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
+            return 'pdf';
+        }
+        // DOCX magic bytes (ZIP archive): PK\x03\x04 (0x50 0x4B 0x03 0x04)
+        if (buffer[0] === 0x50 && buffer[1] === 0x4B && buffer[2] === 0x03 && buffer[3] === 0x04) {
+            return 'docx';
+        }
+        // Legacy DOC magic bytes (OLE2 compound doc): 0xD0 0xCF 0x11 0xE0
+        if (buffer[0] === 0xD0 && buffer[1] === 0xCF && buffer[2] === 0x11 && buffer[3] === 0xE0) {
+            return 'doc';
+        }
+
+        // 2. Content-Type header fallback
+        const ct = (contentType || '').toLowerCase();
+        if (ct.includes('pdf')) return 'pdf';
+        if (ct.includes('wordprocessingml') || ct.includes('docx')) return 'docx';
+        if (ct.includes('msword') || ct.includes('doc')) return 'doc';
+
+        // 3. URL extension fallback
+        const u = (url || '').toLowerCase().split('?')[0];
+        if (u.endsWith('.docx') || u.includes('.docx')) return 'docx';
+        if (u.endsWith('.doc') || u.includes('.doc')) return 'doc';
+        if (u.endsWith('.pdf') || u.includes('.pdf')) return 'pdf';
+
+        return 'unknown';
+    }
+
     async _extractTextFromUrl(url) {
         try {
-            const fileName = url.toLowerCase();
-            if (fileName.includes('.docx') || fileName.includes('.doc')) return await this._extractFromDoc(url);
-            if (fileName.includes('.pdf') || url.includes('/raw/')) return await this._extractFromPdf(url);
+            if (!url || typeof url !== 'string') {
+                throw new Error('Resume URL is required');
+            }
 
-            const response = await axios.get(url, { responseType: 'text', timeout: 30000 });
-            return response.data;
+            console.log(`[AI] Downloading resume from URL: ${url}`);
+            const response = await axios.get(url, {
+                responseType: 'arraybuffer',
+                timeout: 30000,
+                maxContentLength: 15 * 1024 * 1024,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            });
+
+            const buffer = Buffer.from(response.data);
+            const contentType = response.headers['content-type'] || '';
+            const detectedType = this._detectFileType(buffer, contentType, url);
+
+            console.log(`[AI] File type detected via magic bytes: [${detectedType.toUpperCase()}] for URL: ${url}`);
+
+            if (detectedType === 'pdf') {
+                return await this._extractFromPdfBuffer(buffer, url);
+            }
+
+            if (detectedType === 'docx' || detectedType === 'doc') {
+                return await this._extractFromDocBuffer(buffer, url);
+            }
+
+            // Unknown file type fallback: try DOCX/DOC first, then PDF
+            try {
+                return await this._extractFromDocBuffer(buffer, url);
+            } catch (docErr) {
+                try {
+                    return await this._extractFromPdfBuffer(buffer, url);
+                } catch (pdfErr) {
+                    const text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+                    return text.length > 50 ? text : `Resume file (${url})`;
+                }
+            }
         } catch (error) {
-            console.error(`[AI] URL extraction error: ${error.message}`);
+            console.error(`[AI] URL extraction error for (${url}): ${error.message}`);
             throw new Error(`Could not download resume: ${error.message}`);
         }
     }
 
-    async _extractFromPdf(url) {
+    async _extractFromPdfBuffer(buffer, url = '') {
         try {
-            console.log('[AI] Extracting text from PDF…');
-            const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: 10 * 1024 * 1024 });
-            const buffer = Buffer.from(response.data);
-
-            try {
-                const pdfParse = require('pdf-parse');
-                const data = await pdfParse(buffer);
-                if (data.text && data.text.trim().length > 50) {
-                    console.log(`[AI] ✅ PDF parsed: ${data.text.length} chars, ${data.numpages} pages`);
-                    return data.text;
-                }
-            } catch (pdfError) {
-                console.log('[AI] pdf-parse error:', pdfError.message);
+            const pdfParse = require('pdf-parse');
+            const data = await pdfParse(buffer);
+            if (data.text && data.text.trim().length > 30) {
+                console.log(`[AI] ✅ PDF parsed via pdf-parse: ${data.text.length} chars, ${data.numpages} pages`);
+                return data.text.trim();
             }
-
-            const text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
-            if (text.length > 100) { console.log(`[AI] PDF fallback: ${text.length} chars`); return text; }
-            return `Resume file: ${url}`;
-        } catch (error) {
-            throw new Error(`PDF extraction failed: ${error.message}`);
+        } catch (pdfError) {
+            console.warn('[AI] pdf-parse error (non-fatal, trying string fallback):', pdfError.message);
         }
+
+        const text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (text.length > 50) {
+            console.log(`[AI] ✅ PDF extracted via string fallback: ${text.length} chars`);
+            return text;
+        }
+        return `Resume PDF file (${url})`;
+    }
+
+    async _extractFromDocBuffer(buffer, url = '') {
+        // 1. Try mammoth first for DOCX files
+        try {
+            const mammoth = require('mammoth');
+            const result = await mammoth.extractRawText({ buffer });
+            if (result.value && result.value.trim().length > 30) {
+                console.log(`[AI] ✅ DOCX extracted via Mammoth: ${result.value.length} chars`);
+                return result.value.trim();
+            }
+        } catch (mammothError) {
+            console.log('[AI] mammoth error (non-fatal, proceeding to DOC fallback):', mammothError.message);
+        }
+
+        // 2. Dual-encoding binary stream text extractor for legacy .doc & non-standard DOCX
+        console.log('[AI] Running binary stream text extractor for DOC/DOCX...');
+
+        const utf16Str = buffer.toString('utf16le');
+        const utf16Matches = utf16Str.match(/[\x20-\x7E\n\r\t]{3,}/g) || [];
+        const utf16Text = utf16Matches.map(s => s.trim()).filter(s => s.length > 2).join(' ');
+
+        const latin1Str = buffer.toString('latin1');
+        const latin1Matches = latin1Str.match(/[\x20-\x7E\n\r\t]{3,}/g) || [];
+        const latin1Text = latin1Matches.map(s => s.trim()).filter(s => s.length > 2).join(' ');
+
+        const bestText = utf16Text.length >= latin1Text.length ? utf16Text : latin1Text;
+        const cleanedText = bestText
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/[^\x20-\x7E\n\r\t]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (cleanedText.length > 50) {
+            console.log(`[AI] ✅ DOC/DOCX extracted via binary stream fallback: ${cleanedText.length} chars`);
+            return cleanedText;
+        }
+
+        console.warn('[AI] ⚠️ DOC/DOCX extraction produced sparse text');
+        return `Resume document file (${url})`;
+    }
+
+    async _extractFromPdf(url) {
+        return await this._extractTextFromUrl(url);
     }
 
     async _extractFromDoc(url) {
-        try {
-            console.log('[AI] Extracting text from DOC/DOCX…');
-            const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: 10 * 1024 * 1024 });
-            const buffer = Buffer.from(response.data);
-
-            try {
-                const mammoth = require('mammoth');
-                const result = await mammoth.extractRawText({ buffer });
-                if (result.value && result.value.trim().length > 50) {
-                    console.log(`[AI] ✅ DOCX extracted: ${result.value.length} chars`);
-                    return result.value;
-                }
-            } catch (mammothError) {
-                console.log('[AI] mammoth error:', mammothError.message);
-            }
-
-            const text = buffer.toString('utf-8').replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
-            if (text.length > 100) { console.log(`[AI] DOC fallback: ${text.length} chars`); return text; }
-            return `Resume file: ${url}`;
-        } catch (error) {
-            throw new Error(`DOC extraction failed: ${error.message}`);
-        }
+        return await this._extractTextFromUrl(url);
     }
 
     // ── String cleaners (unchanged) ────────────────────────────────────────
@@ -1066,22 +1712,31 @@ class AIService {
 
     _normalizeSalaryToLPA(val) {
         if (val == null || val === '') return 0;
-        const num = Number(String(val).replace(/,/g, ''));
-        if (isNaN(num)) return 0;
-        if (num < 100) return num;
-        return num / 100000;
+        if (typeof val === 'number') {
+            if (val <= 0 || isNaN(val)) return 0;
+            if (val < 100) return Number(val.toFixed(2)); // e.g. 12 or 15.5 LPA
+            return Number((val / 100000).toFixed(2));    // e.g. 1200000 -> 12 LPA
+        }
+        const str = String(val).replace(/,/g, '').trim();
+        if (!str) return 0;
+        const match = str.match(/(\d+(?:\.\d+)?)/);
+        if (!match) return 0;
+        const num = parseFloat(match[1]);
+        if (isNaN(num) || num <= 0) return 0;
+        if (num < 100) return Number(num.toFixed(2));
+        return Number((num / 100000).toFixed(2));
     }
 
     _scoreSalary(expected, jobSalary) {
-        if (expected == null || expected === '' || !jobSalary?.max) {
-            return { score: 50, status: 'UNKNOWN', detail: 'Salary data not available', deltaPercent: 0, withinBudget: false };
+        const normExpected = this._normalizeSalaryToLPA(expected);
+        const normMax = this._normalizeSalaryToLPA(jobSalary?.max ?? jobSalary?.maximum);
+        const normMin = this._normalizeSalaryToLPA(jobSalary?.min ?? jobSalary?.minimum);
+
+        if (normExpected <= 0 || normMax <= 0) {
+            return { score: 70, status: 'UNKNOWN', detail: 'Salary data not fully available', deltaPercent: 0, withinBudget: true };
         }
 
-        const normExpected = this._normalizeSalaryToLPA(expected);
-        const normMax = this._normalizeSalaryToLPA(jobSalary.max);
-        const normMin = jobSalary.min ? this._normalizeSalaryToLPA(jobSalary.min) : 0;
-
-        const deltaPercent = normMax > 0 ? Math.round(((normExpected / normMax) - 1) * 100) : 0;
+        const deltaPercent = Math.round(((normExpected / normMax) - 1) * 100);
 
         if (normMin > 0 && normExpected < normMin) {
             return { score: 100, status: 'BELOW_BUDGET', detail: 'Below budget minimum', deltaPercent, withinBudget: true };
@@ -1098,7 +1753,7 @@ class AIService {
         if (normExpected <= normMax * 1.30) {
             return { score: 40, status: 'OVER', detail: `${deltaPercent}% above budget`, deltaPercent, withinBudget: false };
         }
-        return { score: 0, status: 'OVER', detail: `${deltaPercent}% above — unlikely to fit`, deltaPercent, withinBudget: false };
+        return { score: 20, status: 'OVER', detail: `${deltaPercent}% above — unlikely to fit`, deltaPercent, withinBudget: false };
     }
 
     _formatSalaryForPrompt(val) {
@@ -1114,4 +1769,6 @@ class AIService {
     }
 }
 
-module.exports = new AIService();
+const instance = new AIService();
+instance.logTokenUsage = logTokenUsage;
+module.exports = instance;

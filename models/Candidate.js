@@ -168,6 +168,8 @@ const candidateSchema = new mongoose.Schema({
       'OFFER_DECLINED',
       'JOINED',
       'REJECTED',
+      'CLIENT_PORTAL_DUPLICATE',
+      'CANDIDATE_DROP',
       'WITHDRAWN',
       'ON_HOLD',
       'SLOT_ASSIGNED',
@@ -175,6 +177,8 @@ const candidateSchema = new mongoose.Schema({
 
       // ── Pipeline FSM states (§1.7) ──────────────────────────────────────
       'ASSESSMENT_PENDING',
+      'ASSESSMENT_LINK_SENT',
+      'ASSESSMENT_LINK_COMPLETE',
       'ASSESSMENT_PASSED',
       'ASSESSMENT_FAILED',
       'SLOTS_NOT_PUBLISHED',
@@ -698,7 +702,7 @@ const candidateSchema = new mongoose.Schema({
       outcome: {
         decision: {
           type: String,
-          enum: ['SELECTED_NEXT_ROUND', 'REJECTED', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'ON_HOLD']
+          enum: ['SELECTED_NEXT_ROUND', 'REJECTED', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'ON_HOLD']
         },
         reason: String,
         decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -733,14 +737,17 @@ const candidateSchema = new mongoose.Schema({
   // Immutable audit trail — one entry per FSM transition
   auditTrail: [
     {
-      actorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      actorRole: String,
-      action: String,
-      fromState: String,
-      toState: String,
-      reason: String,
-      roundIndex: Number, // which round this pertains to (null for top-level actions)
-      timestamp: { type: Date, default: Date.now }
+      actorId:        { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      actorRole:      String,
+      actorEmail:     String,   // Actor's email at time of action (self-contained, no join needed)
+      actorFirstName: String,   // Actor's first name at time of action
+      actorLastName:  String,   // Actor's last name at time of action
+      action:         String,
+      fromState:      String,
+      toState:        String,
+      reason:         String,
+      roundIndex:     Number, // which round this pertains to (null for top-level actions)
+      timestamp:      { type: Date, default: Date.now }
     }
   ],
 
@@ -763,6 +770,43 @@ const candidateSchema = new mongoose.Schema({
     }
   ],
 
+  // ==================== PRE-SCREEN RESULT (rule-based, runs after consent) ====================
+  // Populated automatically by prescreenService right after candidate confirms WhatsApp consent.
+  // AI matching is intentionally NOT triggered here — recruiters/admins trigger it manually.
+  prescreen: {
+    computed_at: Date,
+
+    // Raw sub-scores (0–100 each) — stored separately so weights can be retuned later
+    location_score:   { type: Number, default: null },
+    salary_score:     { type: Number, default: null },
+    notice_score:     { type: Number, default: null },
+    experience_score: { type: Number, default: null },
+
+    // Weighted composite of the four sub-scores (0–100)
+    prescreen_score:  { type: Number, default: null },
+
+    // Status label derived from prescreen_score thresholds
+    status: {
+      type: String,
+      enum: ['qualified', 'borderline', 'not_qualified', 'skipped'],
+      default: null
+    },
+
+    // Hard-filter fields (Phase 4 — kept here so model is ready)
+    hard_filter_triggered: { type: Boolean, default: false },
+    hard_filter_reason:    { type: String, default: null },
+
+    // Set to true when one or more fields required for scoring were missing
+    data_incomplete:    { type: Boolean, default: false },
+    incomplete_fields:  [String],  // e.g. ['salary', 'location']
+
+    // Detailed reasons for each sub-score (for recruiter tooltip)
+    location_detail:   String,
+    salary_detail:     String,
+    notice_detail:     String,
+    experience_detail: String,
+  },
+
 }, {
   timestamps: true
 });
@@ -776,6 +820,7 @@ candidateSchema.index({ 'payout.status': 1, 'payout.eligibleDate': 1 }); // For 
 candidateSchema.index({ 'replacementGuarantee.endDate': 1 }); // For guarantee expiry
 candidateSchema.index({ 'resumeAnalysis.profileScore': -1 });
 candidateSchema.index({ 'adminQueue.action': 1, createdAt: -1 });
+candidateSchema.index({ 'prescreen.status': 1, 'prescreen.prescreen_score': -1 }); // Pre-screen queries
 
 // ==================== METHODS ====================
 

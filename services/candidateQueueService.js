@@ -5,6 +5,7 @@ const Job = require('../models/Job');
 const StaffingPartner = require('../models/StaffingPartner');
 const User = require('../models/User');
 const aiService = require('./aiService');
+const prescreenService = require('./prescreenService');
 
 // Minimum score to auto-forward to client
 const MIN_SCORE_TO_FORWARD = 40;
@@ -12,16 +13,15 @@ const MIN_SCORE_TO_FORWARD = 40;
 class CandidateQueueService {
 
     /**
-     * Called automatically after candidate confirms WhatsApp consent
+     * Called automatically after candidate confirms WhatsApp consent.
      * Steps:
-     * 1. Parse resume with AI
-     * 2. Score profile against job
-     * 3. Add to admin queue
+     * 1. Run rule-based pre-screen (always, instant, no AI)
+     * 2. Move to ADMIN_REVIEW
+     * 3. Optionally run AI analysis (only if AUTO_AI_AFTER_CONSENT=true)
      * 4. Notify admin/subadmin
      */
     async processAfterConsent(candidateId) {
         console.log(`[QUEUE] ── Processing candidate after consent: ${candidateId} ──`);
-
 
         const candidate = await Candidate.findById(candidateId)
             .populate('job')
@@ -39,16 +39,31 @@ class CandidateQueueService {
             return { skipped: true, reason: `Invalid status: ${candidate.status}` };
         }
 
-        // ✅ Move to ADMIN_REVIEW status immediately so the frontend reflects this state
+        // ── STEP 1: Rule-based pre-screen (pure, instant, no AI) ─────────────
+        console.log(`[QUEUE] 📋 Running pre-screen for: ${candidate.firstName} ${candidate.lastName}`);
+        let prescreenResult = null;
+        try {
+            prescreenResult = prescreenService.runPreScreen(candidate, candidate.job);
+            candidate.prescreen = prescreenResult;
+            console.log(`[QUEUE] ✅ Pre-screen complete: ${prescreenResult.prescreen_score}/100 (${prescreenResult.status})`);
+        } catch (psErr) {
+            console.error('[QUEUE] ⚠️ Pre-screen failed (non-fatal):', psErr.message);
+            candidate.prescreen = { status: 'skipped', computed_at: new Date() };
+        }
+
+        // ── STEP 2: Move to ADMIN_REVIEW ─────────────────────────────────────
         candidate.status = 'ADMIN_REVIEW';
         candidate.adminQueue = {
             assignedAt: new Date(),
             action: 'PENDING'
         };
+        const prescreenNote = prescreenResult
+            ? `Pre-screen: ${prescreenResult.prescreen_score}/100 (${prescreenResult.status}). AI match pending manual trigger.`
+            : 'Pre-screen skipped. AI match pending manual trigger.';
         candidate.statusHistory.push({
             status: 'ADMIN_REVIEW',
             changedAt: new Date(),
-            notes: 'Consent confirmed. Moving to Admin Review. AI analysis initiated...'
+            notes: `Consent confirmed. Moving to Admin Review. ${prescreenNote}`
         });
         await candidate.save();
 
@@ -63,8 +78,11 @@ class CandidateQueueService {
         let fullAnalysis = null;
 
         const aiEnabled = process.env.AI_ENABLED === 'true';
+        // AUTO_AI_AFTER_CONSENT: when false (default), AI matching requires a manual trigger.
+        // Set to true in .env to restore the old auto-run behaviour.
+        const autoAiAfterConsent = process.env.AUTO_AI_AFTER_CONSENT === 'true';
 
-        if (aiEnabled && candidate.resume?.url) {
+        if (aiEnabled && autoAiAfterConsent && candidate.resume?.url) {
             try {
                 console.log(`[QUEUE] 🤖 Starting AI analysis for: ${candidate.firstName} ${candidate.lastName}`);
 
@@ -127,70 +145,55 @@ class CandidateQueueService {
                         experience: {
                             score: scoring.experienceMatch || 0,
                             weight: 0.20,
-                            totalExperience: candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} years` : 'Not provided',
-                            relevantExperience: candidate.profile?.relevantExperience != null ? `${candidate.profile.relevantExperience} years` : 'Not provided',
-                            actualExperienceFromResume: (() => {
-                                const a = fullAnalysis.candidateProfile || {};
-                                if (a.actualTotalExperience) return a.actualTotalExperience;
-                                if (a.actualTotalMonths != null) {
-                                    const y = Math.floor(a.actualTotalMonths / 12);
-                                    const m = a.actualTotalMonths % 12;
-                                    if (y === 0) return `${m} month${m === 1 ? '' : 's'}`;
-                                    if (m === 0) return `${y} year${y === 1 ? '' : 's'}`;
-                                    return `${y} year${y === 1 ? '' : 's'} ${m} month${m === 1 ? '' : 's'}`;
-                                }
-                                return 'Not provided';
-                            })(),
-                            actual: screening.experienceRange?.actual || '',
+                            actualExperienceFromResume: screening.experienceRange?.actualExperienceFromResume || screening.experienceRange?.actual || (candidate.profile?.totalExperience ? `${candidate.profile.totalExperience} Yrs` : 'N/A'),
+                            formReportedExperience: screening.experienceRange?.formReportedExperience || (candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} Yrs` : 'Not specified'),
+                            actual: screening.experienceRange?.actual || (candidate.profile?.totalExperience ? `${candidate.profile.totalExperience} Yrs` : 'N/A'),
                             required: screening.experienceRange?.required || '',
-                            status: screening.experienceRange?.status || '',
-                            detail: validation.experienceDiscrepancyDetail || '',
+                            status: screening.experienceRange?.status || (scoring.experienceMatch >= 80 ? 'MEETS' : scoring.experienceMatch >= 50 ? 'PARTIAL' : 'BELOW'),
+                            detail: screening.experienceRange?.detail || candidate.prescreen?.experience_detail || '',
                             relevancePercent: 100
                         },
                         domain: {
-                            score: scoring.domainMatch || 0,
+                            score: scoring.domainMatch ?? (screening.domainMatch?.status === 'EXACT' ? 100 : screening.domainMatch?.status === 'RELATED' ? 70 : screening.domainMatch?.status === 'UNRELATED' ? 20 : 50),
                             weight: 0.05,
                             jobDomain: screening.domainMatch?.jobDomain || '',
                             candidateDomain: screening.domainMatch?.candidateDomain || '',
-                            status: screening.domainMatch?.status || ''
+                            status: screening.domainMatch?.status || (scoring.domainMatch >= 80 ? 'EXACT' : scoring.domainMatch >= 50 ? 'RELATED' : 'UNRELATED')
                         },
                         education: {
-                            score: scoring.educationMatch || 0,
-                            weight: 0.05,
+                            score: scoring.educationMatch || 0, weight: 0.05,
                             minimumRequired: screening.educationMatch?.minimumRequired || '',
                             candidateEducation: screening.educationMatch?.candidateEducation || '',
                             status: screening.educationMatch?.status || ''
                         },
                         salary: {
-                            score: scoring.salaryFit || 0,
-                            weight: 0.10,
+                            score: scoring.salaryFit || 0, weight: 0.10,
                             budget: screening.salaryFit?.budget || '',
                             expected: screening.salaryFit?.expected || '',
-                            deltaPercent: screening.salaryFit?.deltaPercent || 0,
-                            status: screening.salaryFit?.status || '',
+                            status: screening.salaryFit?.status || (scoring.salaryFit >= 80 ? 'WITHIN' : scoring.salaryFit >= 50 ? 'SLIGHTLY_OVER' : 'OVER'),
+                            detail: screening.salaryFit?.detail || candidate.prescreen?.salary_detail || '',
                             withinBudget: ranking.salaryWithinBudget ?? true
                         },
                         location: {
-                            score: scoring.locationMatch || 0,
-                            weight: 0.10,
+                            score: scoring.locationMatch || 0, weight: 0.10,
                             jobLocation: screening.locationFit?.jobLocation || '',
-                            candidateLocation: screening.locationFit?.candidateLocation || '',
-                            status: screening.locationFit?.status || '',
-                            willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? candidate.willingToRelocate ?? null
+                            candidateLocation: screening.locationFit?.candidateLocation || candidate.profile?.location || '',
+                            status: screening.locationFit?.status || (scoring.locationMatch >= 80 ? 'EXACT' : scoring.locationMatch >= 50 ? 'NEARBY' : 'DIFFERENT'),
+                            detail: screening.locationFit?.detail || candidate.prescreen?.location_detail || '',
+                            willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? null
                         },
                         noticePeriod: {
-                            score: scoring.noticePeriodFit || 0,
+                            score: scoring.noticePeriodFit ?? candidate.prescreen?.notice_score ?? 0,
                             weight: 0.10,
-                            required: screening.noticePeriod?.required || '',
-                            actual: screening.noticePeriod?.actual || '',
-                            days: ranking.noticePeriodDays || 0,
-                            status: screening.noticePeriod?.status || ''
+                            required: screening.noticePeriod?.required || candidate.job?.expectedJoiningDate || '',
+                            actual: screening.noticePeriod?.actual || candidate.profile?.noticePeriod || 'Not specified',
+                            status: screening.noticePeriod?.status || (candidate.prescreen?.notice_score >= 80 ? 'IMMEDIATE' : candidate.prescreen?.notice_score >= 50 ? 'ACCEPTABLE' : 'LONG'),
+                            detail: screening.noticePeriod?.detail || candidate.prescreen?.notice_detail || ''
                         },
                         stability: {
-                            score: scoring.stabilityScore || 0,
-                            weight: 0.10,
+                            score: scoring.stabilityScore || 0, weight: 0.10,
                             averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
-                            last5YearAverageTenureYears: screening.stabilityAnalysis?.last5YearAverageTenureYears || screening.stabilityAnalysis?.averageTenureYears || 0,
+                            last5YearAverageTenureYears: screening.stabilityAnalysis?.last5YearAverageTenureYears || 0,
                             totalAverageTenureYears: screening.stabilityAnalysis?.totalAverageTenureYears || 0,
                             isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
                             risk: screening.stabilityAnalysis?.stabilityRisk || '',
@@ -229,10 +232,7 @@ class CandidateQueueService {
                         })));
                     }
 
-                    advice = [
-                        ...(rec.suggestedActions || []),
-                        ...(rec.interviewFocusAreas || [])
-                    ];
+                    advice = []; // Advice deprecated to save token cost
 
                     // Job history logging
                     const jobHistory = candidateProfile.jobHistory || [];
@@ -766,10 +766,518 @@ class CandidateQueueService {
                     (Date.now() - new Date(c.createdAt)) / (1000 * 60 * 60)
                 ),
                 flags: c.resumeAnalysis?.flags || [],
-                advice: c.resumeAnalysis?.advice || []
+                advice: c.resumeAnalysis?.advice || [],
+                prescreen: c.prescreen
             }
         }));
     }
+
+    /**
+     * Manually trigger AI matching for a candidate.
+     * Called from the admin "Run AI Match" endpoint.
+     * Reuses the same AI pipeline as processAfterConsent — no duplication.
+     *
+     * @param {string} candidateId
+     * @param {string} triggeredByUserId — admin/subadmin user ID (for audit trail)
+     * @returns {object} updated resumeAnalysis + prescreen
+     */
+    async runAIMatchForCandidate(candidateId, triggeredByUserId) {
+        console.log(`[QUEUE] 🤖 Manual AI match triggered for candidate: ${candidateId} by user: ${triggeredByUserId}`);
+
+        const candidate = await Candidate.findById(candidateId)
+            .populate('job')
+            .populate('submittedBy', 'firmName firstName lastName user')
+            .populate('company', 'companyName');
+
+        if (!candidate) throw new Error('Candidate not found');
+
+        if (!candidate.resume?.url) {
+            throw new Error('Candidate has no resume URL — AI match cannot run');
+        }
+
+        const aiEnabled = process.env.AI_ENABLED === 'true';
+        if (!aiEnabled) {
+            throw new Error('AI is disabled (AI_ENABLED !== true) — cannot run AI match');
+        }
+
+        let profileScore = 0;
+        let scoreBreakdown = null;
+        let matchLevel = 'UNKNOWN';
+        let recommendation = 'Manual Review Required';
+        let flags = [];
+        let advice = [];
+        let parsedData = null;
+        let aiParsed = false;
+        let fullAnalysis = null;
+
+        try {
+            const formData = {
+                candidateId: candidate._id,
+                firstName: candidate.firstName,
+                lastName: candidate.lastName,
+                email: candidate.email,
+                mobile: candidate.mobile,
+                location: candidate.profile?.location,
+                totalExperience: candidate.profile?.totalExperience,
+                relevantExperience: candidate.profile?.relevantExperience,
+                noticePeriod: candidate.profile?.noticePeriod,
+                currentSalary: candidate.profile?.currentSalary,
+                expectedSalary: candidate.profile?.expectedSalary,
+                writeup: candidate.profile?.writeup,
+                skills: candidate.profile?.skills || [],
+                education: candidate.profile?.education || [],
+                certifications: candidate.profile?.certifications || [],
+                languages: candidate.profile?.languages || [],
+                jobHistory: candidate.profile?.jobHistory || candidate.resumeAnalysis?.aiData?.profile?.jobHistory || candidate.profile?.experience || [],
+                experience: candidate.profile?.experience || candidate.profile?.jobHistory || [],
+                willingToRelocate: candidate.profile?.willingToRelocate ?? null,
+            };
+
+            const jobData = candidate.job?.toObject ? candidate.job.toObject() : candidate.job;
+
+            const result = await aiService.parseResume(
+                candidate.resume.url,
+                candidate.resume.fileName,
+                formData,
+                jobData
+            );
+
+            if (result.success && result.fullAnalysis) {
+                parsedData = result.data;
+                fullAnalysis = result.fullAnalysis;
+                aiParsed = true;
+
+                const screening = fullAnalysis.screening || {};
+                const scoring = fullAnalysis.scoring || {};
+                const validation = fullAnalysis.validation || {};
+                const rec = fullAnalysis.recommendation || {};
+                const candidateProfile = fullAnalysis.candidateProfile || {};
+                const ranking = fullAnalysis.rankingSignals || {};
+
+                scoreBreakdown = {
+                    skills: {
+                        score: scoring.skillsMatch || 0,
+                        weight: 0.30,
+                        matchedRequired: ranking.mustHaveSkillsMatched || [],
+                        missingRequired: ranking.mustHaveSkillsMissing || [],
+                        matchedPreferred: ranking.shouldHaveSkillsMatched || ranking.preferredSkillsMatched || [],
+                        missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
+                        coveragePercent: scoring.skillCoveragePercent || 0
+                    },
+                    experience: {
+                        score: scoring.experienceMatch || 0,
+                        weight: 0.20,
+                        totalExperience: candidate.profile?.totalExperience != null ? `${candidate.profile.totalExperience} years` : 'Not provided',
+                        relevantExperience: candidate.profile?.relevantExperience != null ? `${candidate.profile.relevantExperience} years` : 'Not provided',
+                        actual: screening.experienceRange?.actual || '',
+                        required: screening.experienceRange?.required || '',
+                        status: screening.experienceRange?.status || (scoring.experienceMatch >= 80 ? 'MEETS' : scoring.experienceMatch >= 50 ? 'PARTIAL' : 'BELOW'),
+                        detail: validation.experienceDiscrepancyDetail || '',
+                        relevancePercent: 100
+                    },
+                    domain: {
+                        score: scoring.domainMatch || 0, weight: 0.05,
+                        jobDomain: screening.domainMatch?.jobDomain || '',
+                        candidateDomain: screening.domainMatch?.candidateDomain || '',
+                        status: screening.domainMatch?.status || ''
+                    },
+                    education: {
+                        score: scoring.educationMatch || 0, weight: 0.05,
+                        minimumRequired: screening.educationMatch?.minimumRequired || '',
+                        candidateEducation: screening.educationMatch?.candidateEducation || '',
+                        status: screening.educationMatch?.status || ''
+                    },
+                    salary: {
+                        score: scoring.salaryFit || 0, weight: 0.10,
+                        budget: screening.salaryFit?.budget || '',
+                        expected: screening.salaryFit?.expected || '',
+                        deltaPercent: screening.salaryFit?.deltaPercent || 0,
+                        status: screening.salaryFit?.status || (scoring.salaryFit >= 80 ? 'WITHIN' : scoring.salaryFit >= 50 ? 'SLIGHTLY_OVER' : 'OVER'),
+                        withinBudget: ranking.salaryWithinBudget ?? true
+                    },
+                    location: {
+                        score: scoring.locationMatch || 0, weight: 0.10,
+                        jobLocation: screening.locationFit?.jobLocation || '',
+                        candidateLocation: screening.locationFit?.candidateLocation || '',
+                        status: screening.locationFit?.status || (scoring.locationMatch >= 80 ? 'EXACT' : scoring.locationMatch >= 50 ? 'NEARBY' : 'DIFFERENT'),
+                        detail: screening.locationFit?.detail || '',
+                        willingToRelocate: screening.locationFit?.willingToRelocate ?? candidate.profile?.willingToRelocate ?? null
+                    },
+                    noticePeriod: {
+                        score: scoring.noticePeriodFit || 0, weight: 0.10,
+                        required: screening.noticePeriod?.required || '',
+                        actual: screening.noticePeriod?.actual || '',
+                        days: ranking.noticePeriodDays || 0,
+                        status: screening.noticePeriod?.status || (scoring.noticePeriodFit >= 80 ? 'IMMEDIATE' : scoring.noticePeriodFit >= 50 ? 'ACCEPTABLE' : 'LONG')
+                    },
+                    stability: {
+                        score: scoring.stabilityScore || 0, weight: 0.10,
+                        averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
+                        last5YearAverageTenureYears: screening.stabilityAnalysis?.last5YearAverageTenureYears || 0,
+                        totalAverageTenureYears: screening.stabilityAnalysis?.totalAverageTenureYears || 0,
+                        isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
+                        risk: screening.stabilityAnalysis?.stabilityRisk || '',
+                        detail: screening.stabilityAnalysis?.detail || ''
+                    },
+                    summary: {
+                        weightedScore: scoring.weightedScore || 0,
+                        riskPenalty: scoring.riskPenalty || 0,
+                        riskBreakdown: {
+                            careerGapPenalty: scoring.riskBreakdown?.careerGapPenalty || 0,
+                            jobHopperPenalty: scoring.riskBreakdown?.jobHopperPenalty || 0,
+                            domainMismatchPenalty: scoring.riskBreakdown?.domainMismatchPenalty || 0,
+                            experienceDiscrepancyPenalty: scoring.riskBreakdown?.experienceDiscrepancyPenalty || 0,
+                            salaryOverBudgetPenalty: scoring.riskBreakdown?.salaryOverBudgetPenalty || 0
+                        },
+                        finalAdjustedScore: scoring.finalAdjustedScore || 0,
+                        matchLevel: fullAnalysis.matchLevel || 'UNKNOWN'
+                    }
+                };
+
+                profileScore = scoring.finalAdjustedScore || 0;
+                matchLevel = fullAnalysis.matchLevel || 'UNKNOWN';
+                recommendation = rec.decision || 'HOLD';
+
+                flags = [
+                    ...(validation.redFlags || []).map(f => ({ type: 'WARNING', message: f })),
+                    ...(validation.greenFlags || []).map(f => ({ type: 'SUCCESS', message: f }))
+                ];
+                advice = []; // Advice deprecated to save token cost
+
+                if (parsedData?.profile) {
+                    candidate.profile = {
+                        ...candidate.profile?.toObject?.() || {},
+                        currentCompany: parsedData.profile?.currentCompany || candidate.profile?.currentCompany,
+                        currentDesignation: parsedData.profile?.currentDesignation || candidate.profile?.currentDesignation,
+                        skills: parsedData.profile?.skills?.length > 0 ? parsedData.profile.skills : candidate.profile?.skills || [],
+                        education: parsedData.profile?.education?.length > 0 ? parsedData.profile.education : candidate.profile?.education || [],
+                        experience: parsedData.profile?.experience?.length > 0 ? parsedData.profile.experience : candidate.profile?.experience || [],
+                        totalExperienceMonths: parsedData.profile?.totalExperienceMonths || candidate.profile?.totalExperienceMonths || null,
+                        experienceYears: parsedData.profile?.experienceYears || candidate.profile?.experienceYears || null,
+                        languages: parsedData.profile?.languages?.length > 0 ? parsedData.profile.languages : candidate.profile?.languages || [],
+                        certifications: (() => {
+                            const raw = parsedData.profile?.certifications;
+                            if (Array.isArray(raw) && raw.length > 0) {
+                                return raw.map(c => typeof c === 'string' ? c : (c.name || c.title || JSON.stringify(c)));
+                            }
+                            return candidate.profile?.certifications || [];
+                        })(),
+                        location: candidate.profile?.location,
+                        currentLocation: parsedData.profile?.currentLocation || candidate.profile?.currentLocation || candidate.profile?.location,
+                        willingToRelocate: candidate.profile?.willingToRelocate ?? parsedData.profile?.willingToRelocate ?? null,
+                    };
+                }
+
+                console.log(`[QUEUE] ✅ Manual AI match complete: ${profileScore}/100 (${matchLevel})`);
+            } else {
+                console.warn('[QUEUE] ⚠️ AI returned success=false or no fullAnalysis');
+            }
+        } catch (aiError) {
+            console.error('[QUEUE] ❌ AI error during manual match:', aiError.message);
+            throw new Error(`AI analysis failed: ${aiError.message}`);
+        }
+
+        // Build default scoreBreakdown if AI failed
+        if (!aiParsed) {
+            scoreBreakdown = {
+                skills: { score: 0, weight: 0.30, matchedRequired: [], missingRequired: [], matchedPreferred: [], missingPreferred: [], coveragePercent: 0 },
+                experience: { score: 0, weight: 0.20, actual: '', required: '', status: '', detail: 'AI analysis failed', relevancePercent: 100 },
+                domain: { score: 0, weight: 0.05, jobDomain: '', candidateDomain: '', status: '' },
+                education: { score: 0, weight: 0.05, minimumRequired: '', candidateEducation: '', status: '' },
+                salary: { score: 0, weight: 0.10, budget: '', expected: '', deltaPercent: 0, status: '', withinBudget: true },
+                location: { score: 0, weight: 0.10, jobLocation: '', candidateLocation: '', status: '', detail: '' },
+                noticePeriod: { score: 0, weight: 0.10, required: '', actual: '', days: 0, status: '' },
+                stability: { score: 0, weight: 0.10, averageTenureYears: 0, last5YearAverageTenureYears: 0, totalAverageTenureYears: 0, isJobHopper: false, risk: '', detail: '' },
+                summary: { weightedScore: 0, riskPenalty: 0, riskBreakdown: {}, finalAdjustedScore: 0, matchLevel: 'PENDING' }
+            };
+            matchLevel = 'PENDING';
+            recommendation = 'HOLD';
+        }
+
+        // Save AI result
+        candidate.resumeAnalysis = {
+            parsed: aiParsed,
+            parsedAt: aiParsed ? new Date() : null,
+            profileScore,
+            scoreBreakdown,
+            matchLevel,
+            recommendation,
+            flags,
+            advice,
+            aiData: parsedData,
+            fullAnalysis
+        };
+
+        // Audit trail entry
+        candidate.auditTrail = candidate.auditTrail || [];
+        candidate.auditTrail.push({
+            actorId: triggeredByUserId,
+            actorRole: 'admin',
+            action: 'MANUAL_AI_MATCH',
+            fromState: candidate.status,
+            toState: candidate.status, // status unchanged by AI match
+            reason: 'Admin manually triggered AI matching',
+            timestamp: new Date()
+        });
+
+        candidate.statusHistory.push({
+            status: candidate.status,
+            changedBy: triggeredByUserId,
+            changedAt: new Date(),
+            notes: aiParsed
+                ? `AI match run manually. Score: ${profileScore}/100 (${matchLevel}).`
+                : 'AI match attempted manually but failed.'
+        });
+
+        await candidate.save();
+
+        console.log(`[QUEUE] ✅ Manual AI match saved for candidate ${candidate._id}`);
+
+        return {
+            candidateId: candidate._id,
+            profileScore,
+            matchLevel,
+            recommendation,
+            aiParsed,
+            scoreBreakdown,
+            flags,
+            advice,
+            prescreen: candidate.prescreen
+        };
+    }
+
+    /**
+     * Manually trigger AI matching for up to 5 candidates against a target Job Description (JD1).
+     *
+     * @param {Array<string>} candidateIds - Array of candidate IDs (up to 5)
+     * @param {string} jobId - Target Job ID (JD1). Optional if candidates already have .job populated.
+     * @param {string} triggeredByUserId - Admin/subadmin user ID for audit trail
+     * @returns {object} Batch scanning results & comparative ranking
+     */
+    async runAIMatchForMultipleCandidates(candidateIds = [], jobId = null, triggeredByUserId = null) {
+        console.log(`[QUEUE] 🤖 Batch AI match triggered for ${candidateIds.length} candidate(s) by user: ${triggeredByUserId}`);
+
+        if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+            throw new Error('At least one candidate ID must be provided');
+        }
+
+        const MAX_BATCH = 5;
+        const targetIds = candidateIds.slice(0, MAX_BATCH);
+
+        const candidates = await Candidate.find({ _id: { $in: targetIds } })
+            .populate('job')
+            .populate('submittedBy', 'firmName firstName lastName user')
+            .populate('company', 'companyName');
+
+        if (!candidates || candidates.length === 0) {
+            throw new Error('No matching candidates found');
+        }
+
+        // Fetch target job if jobId provided, else use first candidate's job
+        let targetJob = null;
+        if (jobId) {
+            targetJob = await Job.findById(jobId);
+        }
+        if (!targetJob && candidates[0]?.job) {
+            targetJob = candidates[0].job;
+        }
+        if (!targetJob) {
+            throw new Error('Target Job Description (JD1) could not be found');
+        }
+
+        const jobData = targetJob.toObject ? targetJob.toObject() : targetJob;
+
+        // Build candidate list payload for aiService
+        const candidatesPayload = candidates.map(cand => {
+            const formData = {
+                candidateId: cand._id,
+                firstName: cand.firstName,
+                lastName: cand.lastName,
+                email: cand.email,
+                mobile: cand.mobile,
+                location: cand.profile?.location,
+                totalExperience: cand.profile?.totalExperience,
+                relevantExperience: cand.profile?.relevantExperience,
+                noticePeriod: cand.profile?.noticePeriod,
+                currentSalary: cand.profile?.currentSalary,
+                expectedSalary: cand.profile?.expectedSalary,
+                writeup: cand.profile?.writeup,
+                skills: cand.profile?.skills || [],
+                education: cand.profile?.education || [],
+                certifications: cand.profile?.certifications || [],
+                languages: cand.profile?.languages || [],
+                jobHistory: cand.profile?.jobHistory || cand.resumeAnalysis?.aiData?.profile?.jobHistory || cand.profile?.experience || [],
+                experience: cand.profile?.experience || cand.profile?.jobHistory || [],
+                willingToRelocate: cand.profile?.willingToRelocate ?? null,
+            };
+
+            return {
+                candidateId: cand._id,
+                resumeUrl: cand.resume?.url || '',
+                fileName: cand.resume?.fileName || '',
+                candidateFormData: formData
+            };
+        });
+
+        // Run batch evaluation via aiService
+        const batchResult = await aiService.parseMultipleResumes(candidatesPayload, jobData);
+
+        // Update DB records for each evaluated candidate
+        for (const item of (batchResult.results || [])) {
+            const candidateDoc = candidates.find(c => String(c._id) === String(item.candidateId));
+            if (!candidateDoc || !item.result?.success) continue;
+
+            const res = item.result;
+            const fullAnalysis = res.fullAnalysis || {};
+            const parsedData = res.data;
+            const scoring = fullAnalysis.scoring || {};
+            const screening = fullAnalysis.screening || {};
+            const validation = fullAnalysis.validation || {};
+            const rec = fullAnalysis.recommendation || {};
+            const ranking = fullAnalysis.rankingSignals || {};
+
+            const scoreBreakdown = {
+                skills: {
+                    score: scoring.skillsMatch || 0,
+                    weight: 0.30,
+                    matchedRequired: ranking.mustHaveSkillsMatched || [],
+                    missingRequired: ranking.mustHaveSkillsMissing || [],
+                    matchedPreferred: ranking.shouldHaveSkillsMatched || ranking.preferredSkillsMatched || [],
+                    missingPreferred: ranking.shouldHaveSkillsMissing || ranking.preferredSkillsMissing || [],
+                    coveragePercent: scoring.skillCoveragePercent || 0
+                },
+                experience: {
+                    score: scoring.experienceMatch || 0,
+                    weight: 0.20,
+                    totalExperience: candidateDoc.profile?.totalExperience != null ? `${candidateDoc.profile.totalExperience} years` : 'Not provided',
+                    relevantExperience: candidateDoc.profile?.relevantExperience != null ? `${candidateDoc.profile.relevantExperience} years` : 'Not provided',
+                    actual: screening.experienceRange?.actual || '',
+                    required: screening.experienceRange?.required || '',
+                    status: screening.experienceRange?.status || (scoring.experienceMatch >= 80 ? 'MEETS' : scoring.experienceMatch >= 50 ? 'PARTIAL' : 'BELOW'),
+                    detail: validation.experienceDiscrepancyDetail || '',
+                    relevancePercent: 100
+                },
+                domain: {
+                    score: scoring.domainMatch || 0, weight: 0.05,
+                    jobDomain: screening.domainMatch?.jobDomain || '',
+                    candidateDomain: screening.domainMatch?.candidateDomain || '',
+                    status: screening.domainMatch?.status || ''
+                },
+                education: {
+                    score: scoring.educationMatch || 0, weight: 0.05,
+                    minimumRequired: screening.educationMatch?.minimumRequired || '',
+                    candidateEducation: screening.educationMatch?.candidateEducation || '',
+                    status: screening.educationMatch?.status || ''
+                },
+                salary: {
+                    score: scoring.salaryFit || 0, weight: 0.10,
+                    budget: screening.salaryFit?.budget || '',
+                    expected: screening.salaryFit?.expected || '',
+                    deltaPercent: screening.salaryFit?.deltaPercent || 0,
+                    status: screening.salaryFit?.status || (scoring.salaryFit >= 80 ? 'WITHIN' : scoring.salaryFit >= 50 ? 'SLIGHTLY_OVER' : 'OVER'),
+                    withinBudget: ranking.salaryWithinBudget ?? true
+                },
+                location: {
+                    score: scoring.locationMatch || 0, weight: 0.10,
+                    jobLocation: screening.locationFit?.jobLocation || '',
+                    candidateLocation: screening.locationFit?.candidateLocation || '',
+                    status: screening.locationFit?.status || (scoring.locationMatch >= 80 ? 'EXACT' : scoring.locationMatch >= 50 ? 'NEARBY' : 'DIFFERENT'),
+                    detail: screening.locationFit?.detail || '',
+                    willingToRelocate: screening.locationFit?.willingToRelocate ?? candidateDoc.profile?.willingToRelocate ?? null
+                },
+                noticePeriod: {
+                    score: scoring.noticePeriodFit || 0, weight: 0.10,
+                    required: screening.noticePeriod?.required || '',
+                    actual: screening.noticePeriod?.actual || '',
+                    days: ranking.noticePeriodDays || 0,
+                    status: screening.noticePeriod?.status || (scoring.noticePeriodFit >= 80 ? 'IMMEDIATE' : scoring.noticePeriodFit >= 50 ? 'ACCEPTABLE' : 'LONG')
+                },
+                stability: {
+                    score: scoring.stabilityScore || 0, weight: 0.10,
+                    averageTenureYears: screening.stabilityAnalysis?.averageTenureYears || 0,
+                    last5YearAverageTenureYears: screening.stabilityAnalysis?.last5YearAverageTenureYears || 0,
+                    totalAverageTenureYears: screening.stabilityAnalysis?.totalAverageTenureYears || 0,
+                    isJobHopper: screening.stabilityAnalysis?.isJobHopper || false,
+                    risk: screening.stabilityAnalysis?.stabilityRisk || '',
+                    detail: screening.stabilityAnalysis?.detail || ''
+                },
+                summary: {
+                    weightedScore: scoring.weightedScore || 0,
+                    riskPenalty: scoring.riskPenalty || 0,
+                    riskBreakdown: scoring.riskBreakdown || {},
+                    finalAdjustedScore: scoring.finalAdjustedScore || 0,
+                    matchLevel: fullAnalysis.matchLevel || 'UNKNOWN'
+                }
+            };
+
+            const profileScore = scoring.finalAdjustedScore || 0;
+            const matchLevel = fullAnalysis.matchLevel || 'UNKNOWN';
+            const recommendation = rec.decision || 'HOLD';
+            const flags = [
+                ...(validation.redFlags || []).map(f => ({ type: 'WARNING', message: f })),
+                ...(validation.greenFlags || []).map(f => ({ type: 'SUCCESS', message: f }))
+            ];
+
+            if (parsedData?.profile) {
+                candidateDoc.profile = {
+                    ...candidateDoc.profile?.toObject?.() || {},
+                    currentCompany: parsedData.profile?.currentCompany || candidateDoc.profile?.currentCompany,
+                    currentDesignation: parsedData.profile?.currentDesignation || candidateDoc.profile?.currentDesignation,
+                    skills: parsedData.profile?.skills?.length > 0 ? parsedData.profile.skills : candidateDoc.profile?.skills || [],
+                    education: parsedData.profile?.education?.length > 0 ? parsedData.profile.education : candidateDoc.profile?.education || [],
+                    experience: parsedData.profile?.experience?.length > 0 ? parsedData.profile.experience : candidateDoc.profile?.experience || [],
+                    totalExperienceMonths: parsedData.profile?.totalExperienceMonths || candidateDoc.profile?.totalExperienceMonths || null,
+                    experienceYears: parsedData.profile?.experienceYears || candidateDoc.profile?.experienceYears || null,
+                    languages: parsedData.profile?.languages?.length > 0 ? parsedData.profile.languages : candidateDoc.profile?.languages || [],
+                    certifications: (() => {
+                        const raw = parsedData.profile?.certifications;
+                        if (Array.isArray(raw) && raw.length > 0) {
+                            return raw.map(c => typeof c === 'string' ? c : (c.name || c.title || JSON.stringify(c)));
+                        }
+                        return candidateDoc.profile?.certifications || [];
+                    })(),
+                    location: candidateDoc.profile?.location,
+                    currentLocation: parsedData.profile?.currentLocation || candidateDoc.profile?.currentLocation || candidateDoc.profile?.location,
+                    willingToRelocate: candidateDoc.profile?.willingToRelocate ?? parsedData.profile?.willingToRelocate ?? null,
+                };
+            }
+
+            candidateDoc.resumeAnalysis = {
+                parsed: true,
+                parsedAt: new Date(),
+                profileScore,
+                scoreBreakdown,
+                matchLevel,
+                recommendation,
+                flags,
+                advice: [],
+                aiData: parsedData,
+                fullAnalysis
+            };
+
+            candidateDoc.auditTrail = candidateDoc.auditTrail || [];
+            candidateDoc.auditTrail.push({
+                actorId: triggeredByUserId,
+                actorRole: 'admin',
+                action: 'BATCH_AI_MATCH',
+                fromState: candidateDoc.status,
+                toState: candidateDoc.status,
+                reason: `Batch AI match run against Job ${targetJob._id}`,
+                timestamp: new Date()
+            });
+
+            candidateDoc.statusHistory.push({
+                status: candidateDoc.status,
+                changedBy: triggeredByUserId,
+                changedAt: new Date(),
+                notes: `Batch AI match run. Score: ${profileScore}/100 (${matchLevel}). Decision: ${recommendation}.`
+            });
+
+            await candidateDoc.save();
+        }
+
+        return batchResult;
+    }
 }
 
-module.exports = new CandidateQueueService();   
+module.exports = new CandidateQueueService();

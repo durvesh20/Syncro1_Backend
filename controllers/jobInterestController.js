@@ -277,7 +277,6 @@ exports.getMyInterestedJobs = async (req, res) => {
                 as: 'jobDetails'
             }},
             { $unwind: '$jobDetails' },
-            { $match: { 'jobDetails.status': { $ne: 'ON_HOLD' } } },
             { $lookup: {
                 from: 'companies',
                 localField: 'jobDetails.company',
@@ -333,9 +332,9 @@ exports.getMyInterestedJobs = async (req, res) => {
             },
             submissionCount: i.submissionCount,
             submissionLimit: i.submissionLimit,
-            remainingSlots: i.submissionLimit - i.submissionCount,
+            remainingSlots: Math.max(0, i.submissionLimit - i.submissionCount),
             limitExtended: i.limitExtended,
-            canSubmit: i.submissionCount < i.submissionLimit,
+            canSubmit: !['ON_HOLD', 'PAUSED', 'CLOSED', 'FILLED'].includes(i.jobDetails.status) && (i.submissionCount < i.submissionLimit),
             registeredAt: i.createdAt
         }));
 
@@ -408,6 +407,10 @@ exports.getInterestStatus = async (req, res) => {
             job: req.params.jobId
         });
 
+        const isJobOnHold = job?.status === 'ON_HOLD';
+        const isJobPaused = job?.status === 'PAUSED';
+        const isJobClosed = ['CLOSED', 'FILLED'].includes(job?.status);
+
         res.json({
             success: true,
             data: {
@@ -417,7 +420,7 @@ exports.getInterestStatus = async (req, res) => {
                 submissionCount: interest.submissionCount,
                 submissionLimit: interest.submissionLimit,
                 remainingSlots: Math.max(0, interest.submissionLimit - interest.submissionCount),
-                canSubmit: interest.status === 'ACTIVE' && interest.submissionCount < interest.submissionLimit,
+                canSubmit: interest.status === 'ACTIVE' && !isJobOnHold && !isJobPaused && !isJobClosed && interest.submissionCount < interest.submissionLimit,
                 limitExtended: interest.limitExtended,
                 hasPendingExtension: !!pendingExtension,
                 pendingExtension: pendingExtension ? {
@@ -565,20 +568,52 @@ exports.requestLimitExtension = async (req, res) => {
 exports.getMyExtensionRequests = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
+        if (!partner) {
+            return res.status(404).json({
+                success: false,
+                message: 'Partner profile not found'
+            });
+        }
 
-        const requests = await LimitExtensionRequest.find({
-            partner: partner._id
-        })
-            .populate('job', 'title uniqueId category location')
-            .populate('reviewedBy', 'email role')
-            .sort({ createdAt: -1 });
+        const { status, page = 1, limit = 10 } = req.query;
+        const query = { partner: partner._id };
+        if (status && status !== 'ALL') {
+            query.status = status;
+        }
+
+        const sanitizedPage = Math.max(1, parseInt(page));
+        const sanitizedLimit = Math.min(50, Math.max(1, parseInt(limit)));
+        const skip = (sanitizedPage - 1) * sanitizedLimit;
+
+        const [requests, totalFiltered, totalAll, pendingCount, approvedCount, rejectedCount] = await Promise.all([
+            LimitExtensionRequest.find(query)
+                .populate('job', 'title uniqueId category location')
+                .populate('reviewedBy', 'email role')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(sanitizedLimit),
+            LimitExtensionRequest.countDocuments(query),
+            LimitExtensionRequest.countDocuments({ partner: partner._id }),
+            LimitExtensionRequest.countDocuments({ partner: partner._id, status: 'PENDING' }),
+            LimitExtensionRequest.countDocuments({ partner: partner._id, status: 'APPROVED' }),
+            LimitExtensionRequest.countDocuments({ partner: partner._id, status: 'REJECTED' })
+        ]);
 
         res.json({
             success: true,
             data: {
                 requests,
-                total: requests.length,
-                pending: requests.filter(r => r.status === 'PENDING').length
+                stats: {
+                    total: totalAll,
+                    pending: pendingCount,
+                    approved: approvedCount,
+                    rejected: rejectedCount
+                },
+                pagination: {
+                    total: totalFiltered,
+                    page: sanitizedPage,
+                    pages: Math.ceil(totalFiltered / sanitizedLimit) || 1
+                }
             }
         });
     } catch (error) {

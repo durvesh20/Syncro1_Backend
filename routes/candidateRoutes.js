@@ -53,6 +53,18 @@ router.get('/consent/review/:token', async (req, res) => {
       });
     }
 
+    if (
+      candidate.whatsappConsent?.status === 'EXPIRED' ||
+      candidate.status === 'WITHDRAWN' ||
+      (candidate.whatsappConsent?.expiresAt && new Date() > new Date(candidate.whatsappConsent.expiresAt))
+    ) {
+      return res.json({
+        success: true,
+        message: 'This consent request has expired or been withdrawn.',
+        data: { status: 'ALREADY_WITHDRAWN' }
+      });
+    }
+
     res.json({
       success: true,
       data: {
