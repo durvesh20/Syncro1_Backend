@@ -3710,7 +3710,7 @@ exports.getWorkedJobs = async (req, res) => {
     );
 
     const Candidate = require('../models/Candidate');
-    const aggregationResult = await Candidate.aggregate(pipeline);
+    const aggregationResult = await Candidate.aggregate(pipeline).allowDiskUse(true);
 
     const total = aggregationResult[0].metadata[0]?.total || 0;
 

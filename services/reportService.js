@@ -359,7 +359,7 @@ async function buildCursor({ reportType, user, selectedFields, filters }) {
     console.warn(JSON.stringify(pipeline, (k, v) => typeof v === 'function' ? undefined : v, 2));
   }
 
-  return Model.aggregate(pipeline).cursor();
+  return Model.aggregate(pipeline).allowDiskUse(true).cursor();
 }
 
 // ---- preview headers (no DB query) ----------------------------------------
@@ -483,7 +483,7 @@ async function debugQuery({ reportType, user, selectedFields, filters }) {
     pipeline.push({ $limit: limitValue });
   }
 
-  const sampleRows = await Model.aggregate(pipeline);
+  const sampleRows = await Model.aggregate(pipeline).allowDiskUse(true);
   const totalCount = await Model.countDocuments(match);
 
   const fieldMap = getFieldMap(reportType, user?.role);
