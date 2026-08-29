@@ -1640,7 +1640,11 @@ exports.approveJob = async (req, res) => {
     const { notes } = req.body;
 
     const job = await Job.findById(req.params.id)
-      .populate('company', 'companyName user');
+      .populate({
+        path: 'company',
+        select: 'companyName user',
+        populate: { path: 'user', select: 'email firstName lastName' }
+      });
 
     if (!job) {
       return res.status(404).json({
@@ -1670,8 +1674,10 @@ exports.approveJob = async (req, res) => {
     job.status = 'ACTIVE';
     await job.save();
 
-    const companyDoc = await Company.findById(job.company);
-    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+    const companyName = job.company?.companyName || 'Unknown Company';
+    const companyUserObj = job.company?.user;
+    const recipientUserId = companyUserObj?._id || companyUserObj;
+    const recipientEmail = companyUserObj?.email;
 
     // Trigger asynchronous JD parsing for JobPosition structure
     parseJobPosition(job).catch(err => {
@@ -1693,9 +1699,9 @@ exports.approveJob = async (req, res) => {
 
     const notificationEngine = require('../services/notificationEngine');
 
-    if (job.company.user) {
+    if (recipientUserId) {
       await notificationEngine.send({
-        recipientId: job.company.user,
+        recipientId: recipientUserId,
         type: 'JOB_APPROVED',
         title: `Job approved: "${job.title}"`,
         message: `Great news! Your job posting "${job.title}" has been approved and is now visible to talent partners.${notes ? `\n\nAdmin note: ${notes}` : ''}`,
@@ -1713,13 +1719,15 @@ exports.approveJob = async (req, res) => {
         priority: 'high'
       });
 
-      await emailService.sendJobApproved(
-        job.company.user.email,
-        job.company.companyName,
-        job.title,
-        job._id,
-        notes
-      );
+      if (recipientEmail) {
+        await emailService.sendJobApproved(
+          recipientEmail,
+          companyName,
+          job.title,
+          job._id,
+          notes
+        );
+      }
     }
 
     res.json({
@@ -1757,7 +1765,11 @@ exports.rejectJob = async (req, res) => {
     }
 
     const job = await Job.findById(req.params.id)
-      .populate('company', 'companyName user');
+      .populate({
+        path: 'company',
+        select: 'companyName user',
+        populate: { path: 'user', select: 'email firstName lastName' }
+      });
 
     if (!job) {
       return res.status(404).json({
@@ -1782,8 +1794,10 @@ exports.rejectJob = async (req, res) => {
     job.addToHistory('REJECTED', req.user._id, {}, reason);
     await job.save();
 
-    const companyDoc = await Company.findById(job.company);
-    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+    const companyName = job.company?.companyName || 'Unknown Company';
+    const companyUserObj = job.company?.user;
+    const recipientUserId = companyUserObj?._id || companyUserObj;
+    const recipientEmail = companyUserObj?.email;
 
     await auditService.log({
       actor: req.user._id,
@@ -1800,9 +1814,9 @@ exports.rejectJob = async (req, res) => {
 
     const notificationEngine = require('../services/notificationEngine');
 
-    if (job.company.user) {
+    if (recipientUserId) {
       await notificationEngine.send({
-        recipientId: job.company.user,
+        recipientId: recipientUserId,
         type: 'JOB_REJECTED',
         title: `Job requires revision: "${job.title}"`,
         message: `Your job posting "${job.title}" needs some updates before approval.\n\nReason: ${reason}\n\nPlease edit and resubmit for review.`,
@@ -1820,13 +1834,15 @@ exports.rejectJob = async (req, res) => {
         priority: 'high'
       });
 
-      await emailService.sendJobRejected(
-        job.company.user.email,
-        job.company.companyName,
-        job.title,
-        reason,
-        job._id
-      );
+      if (recipientEmail) {
+        await emailService.sendJobRejected(
+          recipientEmail,
+          companyName,
+          job.title,
+          reason,
+          job._id
+        );
+      }
     }
 
     res.json({
@@ -2005,7 +2021,11 @@ exports.approveEditRequest = async (req, res) => {
 
     const editRequest = await JobEditRequest.findById(req.params.id)
       .populate('job')
-      .populate('company', 'companyName user');
+      .populate({
+        path: 'company',
+        select: 'companyName user',
+        populate: { path: 'user', select: 'email firstName lastName' }
+      });
 
     if (!editRequest) {
       return res.status(404).json({
@@ -2162,9 +2182,19 @@ exports.approveEditRequest = async (req, res) => {
 
     const notificationEngine = require('../services/notificationEngine');
 
-    if (editRequest.company.user) {
+    const companyUserObj = editRequest.company?.user;
+    // Guard: if populate failed (user deleted), companyUserObj is a raw ObjectId with no .email
+    const isPopulated = companyUserObj && typeof companyUserObj === 'object' && companyUserObj.email;
+    const recipientUserId = isPopulated ? companyUserObj._id : (companyUserObj || null);
+    const recipientEmail  = isPopulated ? companyUserObj.email : null;
+
+    if (!isPopulated) {
+      console.warn(`[EMAIL] Company user not populated for edit request ${editRequest._id} — email notification skipped`);
+    }
+
+    if (recipientUserId) {
       await notificationEngine.send({
-        recipientId: editRequest.company.user,
+        recipientId: recipientUserId,
         type: 'JOB_EDIT_APPROVED',
         title: `Edit approved for "${job.title}"`,
         message: `Your requested changes to "${job.title}" have been approved and applied.${notes ? `\n\nAdmin note: ${notes}` : ''
@@ -2183,14 +2213,16 @@ exports.approveEditRequest = async (req, res) => {
         priority: 'high'
       });
 
-      await emailService.sendEditRequestApproved(
-        editRequest.company.user.email,
-        editRequest.company.companyName,
-        job.title,
-        appliedChanges,
-        notes,
-        job._id
-      );
+      if (recipientEmail) {
+        await emailService.sendEditRequestApproved(
+          recipientEmail,
+          editRequest.company.companyName,
+          job.title,
+          appliedChanges,
+          notes,
+          job._id
+        );
+      }
     }
 
     res.json({
@@ -2231,7 +2263,11 @@ exports.rejectEditRequest = async (req, res) => {
 
     const editRequest = await JobEditRequest.findById(req.params.id)
       .populate('job')
-      .populate('company', 'companyName user');
+      .populate({
+        path: 'company',
+        select: 'companyName user',
+        populate: { path: 'user', select: 'email firstName lastName' }
+      });
 
     if (!editRequest) {
       return res.status(404).json({
@@ -2276,9 +2312,13 @@ exports.rejectEditRequest = async (req, res) => {
       warningMessage = '\n\n⚠️ Warning: This job has 3+ rejected edit requests. Further rejections may result in discontinuation.';
     }
 
-    if (editRequest.company.user) {
+    const companyUserObj = editRequest.company?.user;
+    const recipientUserId = companyUserObj?._id || companyUserObj;
+    const recipientEmail = companyUserObj?.email;
+
+    if (recipientUserId) {
       await notificationEngine.send({
-        recipientId: editRequest.company.user,
+        recipientId: recipientUserId,
         type: 'JOB_EDIT_REJECTED',
         title: `Edit request rejected for "${job.title}"`,
         message: `Your edit request for "${job.title}" could not be approved.\n\nReason: ${reason}${warningMessage}`,
@@ -2299,15 +2339,17 @@ exports.rejectEditRequest = async (req, res) => {
         priority: shouldDiscontinue ? 'urgent' : (shouldWarn ? 'high' : 'medium')
       });
 
-      await emailService.sendEditRequestRejected(
-        editRequest.company.user.email,
-        editRequest.company.companyName,
-        job.title,
-        reason,
-        job.rejectedEditCount,
-        shouldWarn,
-        job._id
-      );
+      if (recipientEmail) {
+        await emailService.sendEditRequestRejected(
+          recipientEmail,
+          editRequest.company.companyName,
+          job.title,
+          reason,
+          job.rejectedEditCount,
+          shouldWarn,
+          job._id
+        );
+      }
     }
 
     await auditService.log({
@@ -2364,7 +2406,11 @@ exports.discontinueJob = async (req, res) => {
     }
 
     const job = await Job.findById(req.params.id)
-      .populate('company', 'companyName user');
+      .populate({
+        path: 'company',
+        select: 'companyName user',
+        populate: { path: 'user', select: 'email firstName lastName' }
+      });
 
     if (!job) {
       return res.status(404).json({
@@ -2389,8 +2435,10 @@ exports.discontinueJob = async (req, res) => {
     job.addToHistory('DISCONTINUED', req.user._id, {}, reason);
     await job.save();
 
-    const companyDoc = await Company.findById(job.company);
-    const companyName = companyDoc ? companyDoc.companyName : 'Unknown Company';
+    const companyName = job.company?.companyName || 'Unknown Company';
+    const companyUserObj = job.company?.user;
+    const recipientUserId = companyUserObj?._id || companyUserObj;
+    const recipientEmail = companyUserObj?.email;
 
     await auditService.log({
       actor: req.user._id,
@@ -2413,9 +2461,9 @@ exports.discontinueJob = async (req, res) => {
 
     const notificationEngine = require('../services/notificationEngine');
 
-    if (job.company.user) {
+    if (recipientUserId) {
       await notificationEngine.send({
-        recipientId: job.company.user,
+        recipientId: recipientUserId,
         type: 'JOB_DISCONTINUED',
         title: `Job discontinued: "${job.title}"`,
         message: `Your job posting "${job.title}" has been discontinued.\n\nReason: ${reason}\n\n📝 Next steps: Please create a new job posting with finalized and clear requirements.`,
@@ -2434,13 +2482,15 @@ exports.discontinueJob = async (req, res) => {
         priority: 'urgent'
       });
 
-      await emailService.sendJobDiscontinued(
-        job.company.user.email,
-        job.company.companyName,
-        job.title,
-        reason,
-        job.getEditStats()
-      );
+      if (recipientEmail) {
+        await emailService.sendJobDiscontinued(
+          recipientEmail,
+          companyName,
+          job.title,
+          reason,
+          job.getEditStats()
+        );
+      }
     }
 
     res.json({
@@ -5183,7 +5233,7 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
               <p>Best regards,<br/>Recruitment Team</p>
             </div>
           `;
-          await emailService.sendMail({ to: candidate.email, subject: mailSubject, html: mailHtml });
+          await emailService.sendEmail({ to: candidate.email, subject: mailSubject, html: mailHtml });
         }
       } catch (err) {
         console.error('[ADMIN ASSIGN] Notification error:', err.message);

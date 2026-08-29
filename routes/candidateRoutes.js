@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Candidate = require('../models/Candidate');
+const { protect, authorize } = require('../middleware/auth');
 
 // ================================================================
 // CANDIDATE CONSENT ROUTES
@@ -14,7 +15,15 @@ const Candidate = require('../models/Candidate');
 // @route   GET /api/candidates/consent/review/:token
 router.get('/consent/review/:token', async (req, res) => {
   try {
-    const { token } = req.params;
+    const rawToken = req.params.token;
+    const token = rawToken ? String(rawToken).trim() : '';
+
+    if (!token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or missing consent token'
+      });
+    }
 
     const candidate = await Candidate.findOne({
       'whatsappConsent.token': token
@@ -37,7 +46,7 @@ router.get('/consent/review/:token', async (req, res) => {
     }
 
     // Already actioned
-    if (candidate.whatsappConsent.status === 'CONFIRMED') {
+    if (candidate.whatsappConsent?.status === 'CONFIRMED' || candidate.consent?.consentStatus === 'CONFIRMED' || candidate.status === 'CONSENT_CONFIRMED') {
       return res.json({
         success: true,
         message: 'Consent already confirmed',
@@ -45,7 +54,7 @@ router.get('/consent/review/:token', async (req, res) => {
       });
     }
 
-    if (candidate.whatsappConsent.status === 'DENIED') {
+    if (candidate.whatsappConsent?.status === 'DENIED' || candidate.consent?.consentStatus === 'DENIED' || candidate.status === 'CONSENT_DENIED') {
       return res.json({
         success: true,
         message: 'Consent already denied',
@@ -53,14 +62,22 @@ router.get('/consent/review/:token', async (req, res) => {
       });
     }
 
+    // Link expired check (Do NOT auto-withdraw candidate profile)
     if (
       candidate.whatsappConsent?.status === 'EXPIRED' ||
-      candidate.status === 'WITHDRAWN' ||
       (candidate.whatsappConsent?.expiresAt && new Date() > new Date(candidate.whatsappConsent.expiresAt))
     ) {
       return res.json({
         success: true,
-        message: 'This consent request has expired or been withdrawn.',
+        message: 'This consent link has expired. Please contact your recruiter to resend a fresh link.',
+        data: { status: 'EXPIRED' }
+      });
+    }
+
+    if (candidate.status === 'WITHDRAWN') {
+      return res.json({
+        success: true,
+        message: 'This consent request has been withdrawn.',
         data: { status: 'ALREADY_WITHDRAWN' }
       });
     }
@@ -82,9 +99,9 @@ router.get('/consent/review/:token', async (req, res) => {
           firstName: candidate.submittedBy?.firstName,
           lastName: candidate.submittedBy?.lastName,
           email: candidate.submittedBy?.user?.email,
-          partnerName: `${candidate.submittedBy?.firstName} ${candidate.submittedBy?.lastName}`
+          partnerName: `${candidate.submittedBy?.firstName || ''} ${candidate.submittedBy?.lastName || ''}`.trim()
         },
-        expiresAt: candidate.whatsappConsent.expiresAt
+        expiresAt: candidate.whatsappConsent?.expiresAt
       }
     });
 
@@ -102,7 +119,8 @@ router.get('/consent/review/:token', async (req, res) => {
 // @route   GET /api/candidates/consent/agree/:token
 router.get('/consent/agree/:token', async (req, res) => {
   try {
-    const { token } = req.params;
+    const rawToken = req.params.token;
+    const token = rawToken ? String(rawToken).trim() : '';
 
     if (!token) {
       return res.status(400).json({
@@ -125,7 +143,7 @@ router.get('/consent/agree/:token', async (req, res) => {
       });
     }
 
-    // Already actioned
+    // Already actioned check
     const alreadyActionedStatuses = [
       'CONSENT_CONFIRMED',
       'ADMIN_REVIEW',
@@ -138,24 +156,20 @@ router.get('/consent/agree/:token', async (req, res) => {
       'WITHDRAWN'
     ];
     
-    if (alreadyActionedStatuses.includes(candidate.status)) {
-      const statusMap = {
-        'CONSENT_CONFIRMED': 'ALREADY_CONFIRMED',
-        'ADMIN_REVIEW': 'ALREADY_CONFIRMED',
-        'ADMIN_REJECTED': 'ALREADY_CONFIRMED',
-        'SUBMITTED': 'ALREADY_CONFIRMED',
-        'UNDER_REVIEW': 'ALREADY_CONFIRMED',
-        'SHORTLISTED': 'ALREADY_CONFIRMED',
-        'REJECTED': 'ALREADY_CONFIRMED',
-        'CONSENT_DENIED': 'ALREADY_DENIED',
-        'WITHDRAWN': 'ALREADY_WITHDRAWN'
-      };
+    if (alreadyActionedStatuses.includes(candidate.status) || candidate.whatsappConsent?.status === 'CONFIRMED' || candidate.whatsappConsent?.status === 'DENIED') {
+      const isDenied = candidate.status === 'CONSENT_DENIED' || candidate.whatsappConsent?.status === 'DENIED';
+      const isWithdrawn = candidate.status === 'WITHDRAWN';
       
-      const currentActionedStatus = statusMap[candidate.status] || 'ALREADY_CONFIRMED';
-      const message = currentActionedStatus === 'ALREADY_DENIED'
+      const currentActionedStatus = isDenied
+        ? 'ALREADY_DENIED'
+        : isWithdrawn
+          ? 'ALREADY_WITHDRAWN'
+          : 'ALREADY_CONFIRMED';
+
+      const message = isDenied
         ? 'You have already denied consent.'
-        : currentActionedStatus === 'ALREADY_WITHDRAWN'
-          ? 'This consent request has been withdrawn or expired.'
+        : isWithdrawn
+          ? 'This consent request has been withdrawn.'
           : 'You have already confirmed consent. Your profile is being processed.';
           
       return res.json({
@@ -165,48 +179,64 @@ router.get('/consent/agree/:token', async (req, res) => {
       });
     }
 
-    // Check expiry
-    if (new Date() > candidate.whatsappConsent.expiresAt) {
+    // Check expiry (Update consent status to EXPIRED without withdrawing candidate from pipeline)
+    if (
+      candidate.whatsappConsent?.status === 'EXPIRED' ||
+      (candidate.whatsappConsent?.expiresAt && new Date() > new Date(candidate.whatsappConsent.expiresAt))
+    ) {
       await Candidate.findByIdAndUpdate(candidate._id, {
-        'whatsappConsent.status': 'EXPIRED',
-        status: 'WITHDRAWN',
+        $set: {
+          'whatsappConsent.status': 'EXPIRED'
+        },
         $push: {
           statusHistory: {
-            status: 'WITHDRAWN',
+            status: candidate.status || 'CONSENT_PENDING',
             changedAt: new Date(),
-            notes: 'Consent link expired — auto withdrawn'
+            notes: 'Consent link expired — awaiting recruiter resend'
           }
         }
       });
 
       return res.status(400).json({
         success: false,
-        message: 'This consent link has expired. Please contact your recruiter.',
+        message: 'This consent link has expired. Please contact your recruiter to resend a fresh link.',
         data: { status: 'EXPIRED' }
       });
     }
 
-    // ✅ Confirm consent
-    candidate.whatsappConsent.status = 'CONFIRMED';
-    candidate.whatsappConsent.confirmedAt = new Date();
-    candidate.consent.given = true;
-    candidate.consent.consentStatus = 'CONFIRMED';
-    candidate.consent.consentConfirmedAt = new Date();
-    candidate.status = 'CONSENT_CONFIRMED';
+    // Capture client IP for audit/compliance
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || req.ip || '';
+    const now = new Date();
 
-    candidate.statusHistory.push({
-      status: 'CONSENT_CONFIRMED',
-      changedAt: new Date(),
-      notes: 'Candidate clicked I Agree on WhatsApp'
-    });
-
-    await candidate.save();
-
-    console.log(
-      `[CONSENT] ✅ AGREED: ${candidate.firstName} ${candidate.lastName}`
+    // ✅ Atomic update to guarantee persistence and avoid full-document schema validation failures
+    await Candidate.findByIdAndUpdate(
+      candidate._id,
+      {
+        $set: {
+          'whatsappConsent.status': 'CONFIRMED',
+          'whatsappConsent.confirmedAt': now,
+          'consent.given': true,
+          'consent.consentStatus': 'CONFIRMED',
+          'consent.consentConfirmedAt': now,
+          'consent.consentIp': clientIp,
+          'consent.ipAddress': clientIp,
+          status: 'CONSENT_CONFIRMED'
+        },
+        $push: {
+          statusHistory: {
+            status: 'CONSENT_CONFIRMED',
+            changedAt: now,
+            notes: 'Candidate confirmed consent via web portal'
+          }
+        }
+      }
     );
 
-    // ✅ Trigger AI parse + score + admin queue (fire and forget)
+    console.log(
+      `[CONSENT] ✅ AGREED: ${candidate.firstName} ${candidate.lastName} (ID: ${candidate._id})`
+    );
+
+    // ✅ Trigger AI parse + score + admin queue (fire and forget in background)
     const processCandidate = async () => {
       try {
         const candidateQueueService = require('../services/candidateQueueService');
@@ -246,7 +276,8 @@ router.get('/consent/agree/:token', async (req, res) => {
 // @route   GET /api/candidates/consent/disagree/:token
 router.get('/consent/disagree/:token', async (req, res) => {
   try {
-    const { token } = req.params;
+    const rawToken = req.params.token;
+    const token = rawToken ? String(rawToken).trim() : '';
 
     if (!token) {
       return res.status(400).json({
@@ -268,7 +299,7 @@ router.get('/consent/disagree/:token', async (req, res) => {
       });
     }
 
-    // Already actioned
+    // Already actioned check
     const alreadyActionedStatuses = [
       'CONSENT_CONFIRMED',
       'ADMIN_REVIEW',
@@ -281,23 +312,19 @@ router.get('/consent/disagree/:token', async (req, res) => {
       'WITHDRAWN'
     ];
     
-    if (alreadyActionedStatuses.includes(candidate.status)) {
-      const statusMap = {
-        'CONSENT_CONFIRMED': 'ALREADY_CONFIRMED',
-        'ADMIN_REVIEW': 'ALREADY_CONFIRMED',
-        'ADMIN_REJECTED': 'ALREADY_CONFIRMED',
-        'SUBMITTED': 'ALREADY_CONFIRMED',
-        'UNDER_REVIEW': 'ALREADY_CONFIRMED',
-        'SHORTLISTED': 'ALREADY_CONFIRMED',
-        'REJECTED': 'ALREADY_CONFIRMED',
-        'CONSENT_DENIED': 'ALREADY_DENIED',
-        'WITHDRAWN': 'ALREADY_WITHDRAWN'
-      };
-      
-      const currentActionedStatus = statusMap[candidate.status] || 'ALREADY_CONFIRMED';
-      const message = currentActionedStatus === 'ALREADY_DENIED'
+    if (alreadyActionedStatuses.includes(candidate.status) || candidate.whatsappConsent?.status === 'CONFIRMED' || candidate.whatsappConsent?.status === 'DENIED') {
+      const isDenied = candidate.status === 'CONSENT_DENIED' || candidate.whatsappConsent?.status === 'DENIED';
+      const isWithdrawn = candidate.status === 'WITHDRAWN' || candidate.whatsappConsent?.status === 'EXPIRED';
+
+      const currentActionedStatus = isDenied
+        ? 'ALREADY_DENIED'
+        : isWithdrawn
+          ? 'ALREADY_WITHDRAWN'
+          : 'ALREADY_CONFIRMED';
+
+      const message = isDenied
         ? 'You have already denied consent.'
-        : currentActionedStatus === 'ALREADY_WITHDRAWN'
+        : isWithdrawn
           ? 'This consent request has been withdrawn or expired.'
           : 'You have already confirmed consent. Your profile is being processed.';
           
@@ -308,23 +335,34 @@ router.get('/consent/disagree/:token', async (req, res) => {
       });
     }
 
-    // ✅ Deny consent
-    candidate.whatsappConsent.status = 'DENIED';
-    candidate.whatsappConsent.deniedAt = new Date();
-    candidate.consent.consentStatus = 'DENIED';
-    candidate.consent.consentDeniedAt = new Date();
-    candidate.status = 'CONSENT_DENIED';
+    // Capture client IP
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || req.ip || '';
+    const now = new Date();
 
-    candidate.statusHistory.push({
-      status: 'CONSENT_DENIED',
-      changedAt: new Date(),
-      notes: 'Candidate clicked I Disagree on WhatsApp — auto withdrawn'
-    });
-
-    await candidate.save();
+    // ✅ Atomic update to guarantee persistence
+    await Candidate.findByIdAndUpdate(
+      candidate._id,
+      {
+        $set: {
+          'whatsappConsent.status': 'DENIED',
+          'whatsappConsent.deniedAt': now,
+          'consent.consentStatus': 'DENIED',
+          'consent.consentDeniedAt': now,
+          'consent.consentIp': clientIp,
+          status: 'CONSENT_DENIED'
+        },
+        $push: {
+          statusHistory: {
+            status: 'CONSENT_DENIED',
+            changedAt: now,
+            notes: 'Candidate clicked I Disagree / Declined consent — auto withdrawn'
+          }
+        }
+      }
+    );
 
     console.log(
-      `[CONSENT] ❌ DENIED: ${candidate.firstName} ${candidate.lastName}`
+      `[CONSENT] ❌ DENIED: ${candidate.firstName} ${candidate.lastName} (ID: ${candidate._id})`
     );
 
     // ✅ Notify partner (fire and forget)
@@ -574,52 +612,133 @@ router.post('/offer/accept/:token', pipelineCandidateAcceptOffer);
 // RESUME PROXY ENDPOINT FOR PREVIEW & DOWNLOAD
 // Resolves cross-origin CORS, auto-download forced headers, & PDF iframe errors across all browsers
 // GET /api/candidates/resume-proxy?url=...&filename=...&mode=inline|download
+// @access  Private — requires login (any authenticated user)
+// Security: domain whitelist + internal IP block to prevent SSRF on Hostinger VPS
 // ================================================================
 const axios = require('axios');
+const { URL } = require('url');
 
-router.get('/resume-proxy', async (req, res) => {
+// ── SSRF Guard helpers ────────────────────────────────────────────────────────
+// Only allow resumes hosted on your Cloudinary account
+const ALLOWED_DOMAINS = [
+  'res.cloudinary.com',
+  'cloudinary.com'
+];
+
+// Block internal/loopback ranges to prevent VPS internal network probing
+const BLOCKED_HOSTNAMES = [
+  'localhost',
+  '127.0.0.1',
+  '0.0.0.0',
+  '::1'
+];
+
+const BLOCKED_IP_PREFIXES = [
+  '10.',          // Private class A
+  '192.168.',     // Private class C
+  '172.16.',      // Private class B
+  '172.17.',
+  '172.18.',
+  '172.19.',
+  '172.20.',
+  '172.21.',
+  '172.22.',
+  '172.23.',
+  '172.24.',
+  '172.25.',
+  '172.26.',
+  '172.27.',
+  '172.28.',
+  '172.29.',
+  '172.30.',
+  '172.31.',
+  '169.254.'      // Link-local (VPS metadata services)
+];
+
+function isAllowedUrl(rawUrl) {
   try {
-    let { url, filename = 'Candidate_Resume.pdf', mode = 'inline' } = req.query;
+    const parsed = new URL(rawUrl);
 
-    if (!url) {
-      return res.status(400).json({ success: false, message: 'URL is required' });
+    // Must be HTTPS
+    if (parsed.protocol !== 'https:') return { ok: false, reason: 'Only HTTPS URLs are allowed' };
+
+    const hostname = parsed.hostname.toLowerCase();
+
+    // Block internal hostnames
+    if (BLOCKED_HOSTNAMES.includes(hostname)) return { ok: false, reason: 'Internal hostnames are not allowed' };
+
+    // Block internal IP ranges
+    if (BLOCKED_IP_PREFIXES.some(prefix => hostname.startsWith(prefix))) {
+      return { ok: false, reason: 'Internal IP ranges are not allowed' };
     }
 
-    // Clean Cloudinary attachment flag if mode is inline to prevent forced auto-downloads in browser iframe
-    let fetchUrl = url;
-    if (mode === 'inline' && fetchUrl.includes('cloudinary.com') && fetchUrl.includes('/fl_attachment/')) {
-      fetchUrl = fetchUrl.replace('/fl_attachment/', '/');
-    }
+    // Must be an allowed domain
+    const isAllowed = ALLOWED_DOMAINS.some(domain => hostname === domain || hostname.endsWith('.' + domain));
+    if (!isAllowed) return { ok: false, reason: `Domain not whitelisted: ${hostname}` };
 
-    // Fetch original file stream
-    const response = await axios.get(fetchUrl, {
-      responseType: 'stream',
-      timeout: 20000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-
-    const contentType = response.headers['content-type'] || 'application/pdf';
-
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    res.setHeader('Content-Security-Policy', "frame-ancestors *");
-    res.removeHeader('X-Frame-Options');
-
-    if (mode === 'download') {
-      const safeFilename = (filename || 'Candidate_Resume.pdf').replace(/[^a-zA-Z0-9_\-\.]/g, '_');
-      res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
-    } else {
-      res.setHeader('Content-Disposition', `inline; filename="resume.pdf"`);
-    }
-
-    response.data.pipe(res);
-  } catch (error) {
-    console.error('[RESUME PROXY] Error streaming file:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to proxy resume file' });
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: 'Invalid URL format' };
   }
-});
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+router.get(
+  '/resume-proxy',
+  protect,
+  authorize('admin', 'sub_admin', 'staffing_partner', 'company'),
+  async (req, res) => {
+    try {
+      let { url, filename = 'Candidate_Resume.pdf', mode = 'inline' } = req.query;
+
+      if (!url) {
+        return res.status(400).json({ success: false, message: 'URL is required' });
+      }
+
+      // ── Security: validate URL before making any outbound request ───────────
+      const check = isAllowedUrl(url);
+      if (!check.ok) {
+        console.warn(`[RESUME PROXY] Blocked request from user ${req.user._id}: ${check.reason} — url: ${url}`);
+        return res.status(403).json({ success: false, message: `Blocked: ${check.reason}` });
+      }
+      // ────────────────────────────────────────────────────────────────────────
+
+      // Clean Cloudinary attachment flag if mode is inline to prevent forced auto-downloads in browser iframe
+      let fetchUrl = url;
+      if (mode === 'inline' && fetchUrl.includes('cloudinary.com') && fetchUrl.includes('/fl_attachment/')) {
+        fetchUrl = fetchUrl.replace('/fl_attachment/', '/');
+      }
+
+      // Fetch original file stream
+      const response = await axios.get(fetchUrl, {
+        responseType: 'stream',
+        timeout: 20000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      const contentType = response.headers['content-type'] || 'application/pdf';
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.setHeader('Content-Security-Policy', "frame-ancestors *");
+      res.removeHeader('X-Frame-Options');
+
+      if (mode === 'download') {
+        const safeFilename = (filename || 'Candidate_Resume.pdf').replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+        res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      } else {
+        res.setHeader('Content-Disposition', `inline; filename="resume.pdf"`);
+      }
+
+      response.data.pipe(res);
+    } catch (error) {
+      console.error('[RESUME PROXY] Error streaming file:', error.message);
+      res.status(500).json({ success: false, message: 'Failed to proxy resume file' });
+    }
+  }
+);
 
 module.exports = router;

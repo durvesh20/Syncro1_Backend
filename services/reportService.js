@@ -239,30 +239,11 @@ function formatValue(doc, fieldDef) {
 
   const raw = getPath(doc, fieldDef.path);
 
-  // Format Experience fields with 'years' / 'year' suffix
   const key = (fieldDef.key || '').toLowerCase();
   const path = (fieldDef.path || '').toLowerCase();
   const label = (fieldDef.label || '').toLowerCase();
 
-  const isExpField =
-    ['cand_totalexp', 'cand_relexp', 'job_expmin', 'job_expmax'].includes(key) ||
-    key.includes('exp') ||
-    path.includes('experience') ||
-    label.includes('experience');
-
-  if (isExpField) {
-    if (raw === undefined || raw === null || raw === '') return '';
-    const str = String(raw).trim();
-    if (!str) return '';
-    if (/years?|yrs?/i.test(str)) return str;
-    const num = Number(str);
-    if (!isNaN(num)) {
-      return num === 1 ? `${num} year` : `${num} years`;
-    }
-    return `${str} years`;
-  }
-
-  // Format Salary fields with 'LPA' suffix (converting 12,00,000 -> 12 LPA, 7,50,000 -> 7.5 LPA)
+  // Format Salary fields with 'LPA' suffix (converting 12,00,000 -> 12 LPA, 7,50,000 -> 7.5 LPA, 15 -> 15 LPA)
   const isSalaryField =
     ['cand_currentsalary', 'cand_expectedsalary', 'job_salarymin', 'job_salarymax'].includes(key) ||
     (key.includes('salary') && !key.includes('currency')) ||
@@ -288,6 +269,27 @@ function formatValue(doc, fieldDef) {
 
     const formattedNum = Number(num.toFixed(2)).toString();
     return `${formattedNum} LPA`;
+  }
+
+  // Format Experience fields with 'years' / 'year' suffix (excluding any salary/CTC fields)
+  const isExpField =
+    !isSalaryField &&
+    (['cand_totalexp', 'cand_relexp', 'job_expmin', 'job_expmax'].includes(key) ||
+      key.includes('experience') ||
+      path.includes('experience') ||
+      label.includes('experience') ||
+      (key.includes('exp') && !key.includes('expected')));
+
+  if (isExpField) {
+    if (raw === undefined || raw === null || raw === '') return '';
+    const str = String(raw).trim();
+    if (!str) return '';
+    if (/years?|yrs?/i.test(str)) return str;
+    const num = Number(str);
+    if (!isNaN(num)) {
+      return num === 1 ? `${num} year` : `${num} years`;
+    }
+    return `${str} years`;
   }
 
   switch (fieldDef.type) {
@@ -331,7 +333,10 @@ async function buildCursor({ reportType, user, selectedFields, filters }) {
 
   console.log(`[reports] buildCursor: base=${def.base}, scope=`, scope, 'match=', match);
 
-  const pipeline = [{ $match: match }];
+  const pipeline = [
+    { $match: match },
+    { $sort: { createdAt: -1 } }
+  ];
 
   // Joins declared in the registry (unwound so registry paths resolve)
   (def.lookups || []).forEach((lk) => {
@@ -347,9 +352,6 @@ async function buildCursor({ reportType, user, selectedFields, filters }) {
       $unwind: { path: `$${lk.as}`, preserveNullAndEmptyArrays: true }
     });
   });
-
-  // Stable sort so reports are reproducible
-  pipeline.push({ $sort: { createdAt: -1 } });
 
   // Diagnostic: check if the match returns any documents before streaming
   const countBefore = await Model.countDocuments(match);
@@ -461,7 +463,10 @@ async function debugQuery({ reportType, user, selectedFields, filters }) {
   const filterMatch = await buildFilterMatch(def, filters);
   const match = { ...(scope || {}), ...filterMatch };
 
-  const pipeline = [{ $match: match }];
+  const pipeline = [
+    { $match: match },
+    { $sort: { createdAt: -1 } }
+  ];
 
   (def.lookups || []).forEach((lk) => {
     pipeline.push({
@@ -476,8 +481,6 @@ async function debugQuery({ reportType, user, selectedFields, filters }) {
       $unwind: { path: `$${lk.as}`, preserveNullAndEmptyArrays: true }
     });
   });
-
-  pipeline.push({ $sort: { createdAt: -1 } });
   const limitValue = typeof filters?.limit !== "undefined" ? parseInt(filters.limit, 10) : 5;
   if (limitValue > 0) {
     pipeline.push({ $limit: limitValue });

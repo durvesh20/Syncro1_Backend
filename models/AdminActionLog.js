@@ -89,6 +89,13 @@ const adminActionLogSchema = new mongoose.Schema({
             'PIPELINE_RE_SHORTLIST',
             'PIPELINE_TEMPLATE_DEFINED',
             'PIPELINE_MARK_JOINED',
+            'PIPELINE_GLOBAL_REJECT',
+            'PIPELINE_CLIENT_PORTAL_DUPLICATE',
+            'PIPELINE_CANDIDATE_DROP',
+            'PIPELINE_ASSESSMENT_FAIL',
+            'PIPELINE_ROUND_REJECT',
+            'PIPELINE_HR_REJECT',
+            'PIPELINE_OFFER_REJECT',
 
             // Admin candidate actions
             'CANDIDATE_WITHDRAWN_BY_ADMIN'

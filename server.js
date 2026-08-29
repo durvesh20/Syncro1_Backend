@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const connectDB = require('./config/db');
+const sanitizeErrors = require('./middleware/sanitizeErrors');
 require('./config/env');
 
 
@@ -156,6 +157,15 @@ app.get('/api/health', (req, res) => {
 });
 
 /* =========================================================
+   ERROR SANITIZATION
+   Intercepts all res.json() calls — strips raw `error` field
+   in production to prevent internal detail leakage.
+   Must be mounted AFTER health check, BEFORE all API routes.
+========================================================= */
+
+app.use(sanitizeErrors);
+
+/* =========================================================
    API ROUTES — MOUNTED ONCE ONLY
 ========================================================= */
 
@@ -184,14 +194,19 @@ app.use('/api/landingpage', require('./routes/landingpageRoutes'));
 ========================================================= */
 
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  // Always log the full error server-side (PM2 logs) — never trust the client with internals
+  console.error(`[GLOBAL ERROR] ${req.method} ${req.originalUrl}:`, err);
+
+  const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
   if (err.name === 'ValidationError') {
     const messages = Object.values(err.errors).map(e => e.message);
     return res.status(400).json({
       success: false,
       message: 'Validation Error',
-      errors: messages
+      errors: IS_PRODUCTION
+        ? ['Invalid input data']   // hide field names / schema paths in production
+        : messages
     });
   }
 
@@ -199,7 +214,7 @@ app.use((err, req, res, next) => {
     const field = Object.keys(err.keyValue)[0];
     return res.status(400).json({
       success: false,
-      message: `${field} already exists`
+      message: IS_PRODUCTION ? 'A duplicate entry was detected' : `${field} already exists`
     });
   }
 
@@ -211,10 +226,11 @@ app.use((err, req, res, next) => {
     return res.status(401).json({ success: false, message: 'Token expired' });
   }
 
+  // Generic fallback — never leak err.message or stack in production
   res.status(err.statusCode || 500).json({
     success: false,
-    message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    message: IS_PRODUCTION ? 'Internal Server Error' : (err.message || 'Internal Server Error'),
+    ...(IS_PRODUCTION ? {} : { stack: err.stack })
   });
 });
 

@@ -535,7 +535,7 @@ const candidateSchema = new mongoose.Schema({
           durationMonths: Number
         }],
         languages: [String],
-        certifications: [String]
+        certifications: [mongoose.Schema.Types.Mixed]  // AI may return strings or objects ({name, issuer, year, status})
       },
       summary: String
     },
