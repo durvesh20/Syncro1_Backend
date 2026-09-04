@@ -139,14 +139,84 @@ router.get('/logos', async (req, res) => {
 });
 
 
+const auditService = require('../services/auditService');
+const AdminActionLog = require('../models/AdminActionLog');
+
 // PROTECTED ADMIN CRUD ENDPOINTS
 router.use(protect);
 router.use(authorizeAdminAccess);
 
+// Audit Logs Endpoint for Website Modifications
+router.get('/audit-logs', async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search = '', entityType = '', action = '' } = req.query;
+    const query = {
+      action: {
+        $in: [
+          'LANDING_LOGO_CREATED', 'LANDING_LOGO_UPDATED', 'LANDING_LOGO_DELETED',
+          'LANDING_TESTIMONIAL_CREATED', 'LANDING_TESTIMONIAL_UPDATED', 'LANDING_TESTIMONIAL_DELETED',
+          'LANDING_AWARD_CREATED', 'LANDING_AWARD_UPDATED', 'LANDING_AWARD_DELETED',
+          'WEBSITE_CONTENT_MODIFIED'
+        ]
+      }
+    };
+    if (entityType) query.entityType = entityType;
+    if (action) query.action = action;
+    if (search) {
+      query.$or = [
+        { actorEmail: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const [logs, total] = await Promise.all([
+      AdminActionLog.find(query)
+        .populate('actor', 'firstName lastName email role')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      AdminActionLog.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        logs,
+        pagination: {
+          current: parseInt(page),
+          pages: Math.ceil(total / parseInt(limit)),
+          total
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // Testimonials CRUD
 router.post('/testimonials', async (req, res) => {
   try {
-    const testimonial = await Testimonial.create(req.body);
+    const testimonial = await Testimonial.create({
+      ...req.body,
+      createdBy: req.user._id,
+      updatedBy: req.user._id
+    });
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_TESTIMONIAL_CREATED',
+      entityType: 'Testimonial',
+      entityId: testimonial._id,
+      description: `Created testimonial by "${testimonial.author}" (${testimonial.company || testimonial.role})`,
+      after: testimonial.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(201).json({ success: true, data: testimonial });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -155,10 +225,31 @@ router.post('/testimonials', async (req, res) => {
 
 router.put('/testimonials/:id', async (req, res) => {
   try {
-    const testimonial = await Testimonial.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-    if (!testimonial) {
+    const oldTestimonial = await Testimonial.findById(req.params.id);
+    if (!oldTestimonial) {
       return res.status(404).json({ success: false, message: 'Testimonial not found' });
     }
+
+    const testimonial = await Testimonial.findByIdAndUpdate(
+      req.params.id,
+      { ...req.body, updatedBy: req.user._id },
+      { new: true, runValidators: true }
+    );
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_TESTIMONIAL_UPDATED',
+      entityType: 'Testimonial',
+      entityId: testimonial._id,
+      description: `Modified testimonial by "${testimonial.author}" (${testimonial.company || testimonial.role})`,
+      before: oldTestimonial.toObject(),
+      after: testimonial.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(200).json({ success: true, data: testimonial });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -171,6 +262,20 @@ router.delete('/testimonials/:id', async (req, res) => {
     if (!testimonial) {
       return res.status(404).json({ success: false, message: 'Testimonial not found' });
     }
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_TESTIMONIAL_DELETED',
+      entityType: 'Testimonial',
+      entityId: testimonial._id,
+      description: `Deleted testimonial by "${testimonial.author}" (${testimonial.company || testimonial.role})`,
+      before: testimonial.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -180,7 +285,25 @@ router.delete('/testimonials/:id', async (req, res) => {
 // Awards CRUD
 router.post('/awards', async (req, res) => {
   try {
-    const award = await Award.create(req.body);
+    const award = await Award.create({
+      ...req.body,
+      createdBy: req.user._id,
+      updatedBy: req.user._id
+    });
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_AWARD_CREATED',
+      entityType: 'Award',
+      entityId: award._id,
+      description: `Created award "${award.title}" (${award.year}, ${award.org})`,
+      after: award.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(201).json({ success: true, data: award });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -189,10 +312,31 @@ router.post('/awards', async (req, res) => {
 
 router.put('/awards/:id', async (req, res) => {
   try {
-    const award = await Award.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-    if (!award) {
+    const oldAward = await Award.findById(req.params.id);
+    if (!oldAward) {
       return res.status(404).json({ success: false, message: 'Award not found' });
     }
+
+    const award = await Award.findByIdAndUpdate(
+      req.params.id,
+      { ...req.body, updatedBy: req.user._id },
+      { new: true, runValidators: true }
+    );
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_AWARD_UPDATED',
+      entityType: 'Award',
+      entityId: award._id,
+      description: `Modified award "${award.title}" (${award.year}, ${award.org})`,
+      before: oldAward.toObject(),
+      after: award.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(200).json({ success: true, data: award });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -205,6 +349,20 @@ router.delete('/awards/:id', async (req, res) => {
     if (!award) {
       return res.status(404).json({ success: false, message: 'Award not found' });
     }
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_AWARD_DELETED',
+      entityType: 'Award',
+      entityId: award._id,
+      description: `Deleted award "${award.title}" (${award.year}, ${award.org})`,
+      before: award.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -214,7 +372,25 @@ router.delete('/awards/:id', async (req, res) => {
 // Logos CRUD
 router.post('/logos', async (req, res) => {
   try {
-    const logo = await CompanyLogo.create(req.body);
+    const logo = await CompanyLogo.create({
+      ...req.body,
+      createdBy: req.user._id,
+      updatedBy: req.user._id
+    });
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_LOGO_CREATED',
+      entityType: 'CompanyLogo',
+      entityId: logo._id,
+      description: `Added partner/client logo "${logo.name || logo.iconName || 'Logo'}"`,
+      after: logo.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(201).json({ success: true, data: logo });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -223,10 +399,31 @@ router.post('/logos', async (req, res) => {
 
 router.put('/logos/:id', async (req, res) => {
   try {
-    const logo = await CompanyLogo.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
-    if (!logo) {
+    const oldLogo = await CompanyLogo.findById(req.params.id);
+    if (!oldLogo) {
       return res.status(404).json({ success: false, message: 'Logo not found' });
     }
+
+    const logo = await CompanyLogo.findByIdAndUpdate(
+      req.params.id,
+      { ...req.body, updatedBy: req.user._id },
+      { new: true, runValidators: true }
+    );
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_LOGO_UPDATED',
+      entityType: 'CompanyLogo',
+      entityId: logo._id,
+      description: `Modified logo "${logo.name || logo.iconName || 'Logo'}"`,
+      before: oldLogo.toObject(),
+      after: logo.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(200).json({ success: true, data: logo });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -239,6 +436,20 @@ router.delete('/logos/:id', async (req, res) => {
     if (!logo) {
       return res.status(404).json({ success: false, message: 'Logo not found' });
     }
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LANDING_LOGO_DELETED',
+      entityType: 'CompanyLogo',
+      entityId: logo._id,
+      description: `Deleted logo "${logo.name || logo.iconName || 'Logo'}"`,
+      before: logo.toObject(),
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

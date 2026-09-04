@@ -3482,8 +3482,8 @@ exports.adminGetPipelineAuditLog = async (req, res) => {
     if (status) candidateMatch.status = status;
 
     const candidates = await Candidate.find(candidateMatch)
-      .select('firstName lastName status auditTrail job company submittedBy')
-      .populate('job', 'title')
+      .select('firstName lastName uniqueId status auditTrail job company submittedBy')
+      .populate('job', 'title uniqueId')
       .populate('company', 'companyName')
       .populate('submittedBy', 'firmName firstName lastName')
       .sort({ updatedAt: -1 });
@@ -3495,13 +3495,20 @@ exports.adminGetPipelineAuditLog = async (req, res) => {
         if (action && entry.action !== action) continue;
         if (search) {
           const name = `${c.firstName} ${c.lastName}`.toLowerCase();
-          if (!name.includes(search.toLowerCase())) continue;
+          const candId = (c.uniqueId || '').toLowerCase();
+          const jobIdStr = (c.job?.uniqueId || '').toLowerCase();
+          const q = search.toLowerCase();
+          if (!name.includes(q) && !candId.includes(q) && !jobIdStr.includes(q)) continue;
         }
         allEntries.push({
           candidateId: c._id,
+          candidateUniqueId: c.uniqueId || (c._id ? `CAN-${c._id.toString().slice(-6).toUpperCase()}` : 'N/A'),
           candidateName: `${c.firstName} ${c.lastName}`,
           candidateStatus: c.status,
+          jobId: c.job?._id,
           jobTitle: c.job?.title || 'N/A',
+          jobUniqueId: c.job?.uniqueId || (c.job?._id ? `JOB-${c.job._id.toString().slice(-6).toUpperCase()}` : 'N/A'),
+          uniqueId: c.uniqueId || c.job?.uniqueId || (c._id ? `CAN-${c._id.toString().slice(-6).toUpperCase()}` : 'N/A'),
           companyName: c.company?.companyName || 'N/A',
           partnerName: c.submittedBy?.firmName || `${c.submittedBy?.firstName || ''} ${c.submittedBy?.lastName || ''}`.trim() || 'N/A',
           ...entry.toObject()

@@ -98,7 +98,19 @@ const adminActionLogSchema = new mongoose.Schema({
             'PIPELINE_OFFER_REJECT',
 
             // Admin candidate actions
-            'CANDIDATE_WITHDRAWN_BY_ADMIN'
+            'CANDIDATE_WITHDRAWN_BY_ADMIN',
+
+            // Website / Landing content modification actions
+            'LANDING_LOGO_CREATED',
+            'LANDING_LOGO_UPDATED',
+            'LANDING_LOGO_DELETED',
+            'LANDING_TESTIMONIAL_CREATED',
+            'LANDING_TESTIMONIAL_UPDATED',
+            'LANDING_TESTIMONIAL_DELETED',
+            'LANDING_AWARD_CREATED',
+            'LANDING_AWARD_UPDATED',
+            'LANDING_AWARD_DELETED',
+            'WEBSITE_CONTENT_MODIFIED'
         ]
     },
 
@@ -117,7 +129,11 @@ const adminActionLogSchema = new mongoose.Schema({
             'AgreementQuery',
             'Report',
             'CandidateApplication',
-            'Candidate'        // pipeline controller uses this directly
+            'Candidate',        // pipeline controller uses this directly
+            'CompanyLogo',
+            'Testimonial',
+            'Award',
+            'WebsiteContent'
         ],
         required: true
     },

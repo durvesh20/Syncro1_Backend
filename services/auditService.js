@@ -48,7 +48,29 @@ class AuditService {
      * Helper to get IP from request
      */
     getIp(req) {
-        return req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress || null;
+        let ip = req.headers['x-forwarded-for'] 
+            || req.headers['x-real-ip']
+            || req.headers['cf-connecting-ip']
+            || req.ip 
+            || req.socket?.remoteAddress 
+            || req.connection?.remoteAddress 
+            || null;
+
+        if (ip && typeof ip === 'string') {
+            // If comma-separated (proxy chain), take the first client IP
+            if (ip.includes(',')) {
+                ip = ip.split(',')[0].trim();
+            }
+            // Convert IPv6 loopback to standard IPv4
+            if (ip === '::1' || ip === '::ffff:127.0.0.1') {
+                return '127.0.0.1';
+            }
+            // Strip IPv4-mapped IPv6 prefix
+            if (ip.startsWith('::ffff:')) {
+                ip = ip.substring(7);
+            }
+        }
+        return ip;
     }
 
     /**

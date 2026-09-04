@@ -25,6 +25,14 @@ const testimonialSchema = new mongoose.Schema({
     type: String,
     enum: ['company', 'vendor'],
     required: [true, 'Testimonial type (company or vendor) is required']
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  updatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   timestamps: true
