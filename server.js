@@ -113,11 +113,12 @@ const allowedOrigins = [
   'https://syncro1.com',
   'https://www.syncro1.com',
   'https://app.syncro1.com',
+  'https://developer.syncro1.com',
   'https://syncro1.co',
   'http://localhost:9696',
   'http://localhost:3000',
   'http://localhost:2121',
-  'http://localhost:9595',
+  'http://localhost:9797',
 ];
 
 const corsOptions = {
