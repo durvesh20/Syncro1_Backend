@@ -11,9 +11,10 @@ const { protect, authorize } = require('../middleware/auth');
 // Review:   GET /api/candidates/consent/review/:token
 // ================================================================
 
-// @desc    Fetch candidate, job, and partner details for consent review
+// @desc    Fetch candidate, job, and partner details for consent review or status check
 // @route   GET /api/candidates/consent/review/:token
-router.get('/consent/review/:token', async (req, res) => {
+// @route   GET /api/candidates/consent/status/:token
+router.get(['/consent/review/:token', '/consent/status/:token'], async (req, res) => {
   try {
     const rawToken = req.params.token;
     const token = rawToken ? String(rawToken).trim() : '';
@@ -607,6 +608,10 @@ router.get('/offer/review/:token', pipelineGetOfferDetails);
 // @desc    Candidate accepts offer via token
 // @route   POST /api/candidates/offer/accept/:token
 router.post('/offer/accept/:token', pipelineCandidateAcceptOffer);
+
+// @desc    Candidate rejects offer via token
+// @route   POST /api/candidates/offer/reject/:token
+router.post('/offer/reject/:token', pipelineCandidateRejectOffer);
 
 // ================================================================
 // RESUME PROXY ENDPOINT FOR PREVIEW & DOWNLOAD
