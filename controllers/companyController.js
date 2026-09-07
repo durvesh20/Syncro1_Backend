@@ -3665,3 +3665,241 @@ exports.deleteJobScreeningQuestion = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to delete screening question', error: error.message });
   }
 };
+
+/* =========================================================================
+   DEVELOPER API SETTINGS (COMPANY DASHBOARD)
+========================================================================= */
+
+const bcrypt = require('bcryptjs');
+const Integration = require('../models/Integration');
+const ApiClient = require('../models/ApiClient');
+
+/**
+ * Helper: Resolve Company model from req.user
+ */
+const resolveCompanyForUser = async (user) => {
+  let company = await Company.findOne({ user: user._id });
+  if (!company && user.company) {
+    company = await Company.findById(user.company);
+  }
+  return company;
+};
+
+/**
+ * @desc    Get Developer API status and summary for company
+ * @route   GET /api/companies/developer-api/status
+ * @access  Company
+ */
+exports.getDeveloperApiStatus = async (req, res) => {
+  try {
+    const company = await resolveCompanyForUser(req.user);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const integration = await Integration.findOne({ company_id: company._id });
+    const credentialsCount = await ApiClient.countDocuments({
+      company_id: company._id,
+      status: 'ACTIVE'
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        enabled: integration?.status === 'ACTIVE',
+        status: integration?.status || 'INACTIVE',
+        environment: integration?.environment || 'PRODUCTION',
+        last_sync_at: integration?.last_sync_at || null,
+        active_credentials_count: credentialsCount,
+        created_at: integration?.created_at || null
+      }
+    });
+  } catch (error) {
+    console.error('getDeveloperApiStatus error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch Developer API status', error: error.message });
+  }
+};
+
+/**
+ * @desc    Enable Developer API access for company
+ * @route   POST /api/companies/developer-api/enable
+ * @access  Company
+ */
+exports.enableDeveloperApi = async (req, res) => {
+  try {
+    const company = await resolveCompanyForUser(req.user);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    let integration = await Integration.findOne({ company_id: company._id });
+    if (!integration) {
+      integration = await Integration.create({
+        company_id: company._id,
+        user_id: req.user._id,
+        status: 'ACTIVE'
+      });
+    } else {
+      integration.status = 'ACTIVE';
+      await integration.save();
+    }
+
+    return res.json({
+      success: true,
+      message: 'Developer API access enabled successfully',
+      data: { status: 'ACTIVE' }
+    });
+  } catch (error) {
+    console.error('enableDeveloperApi error:', error);
+    res.status(500).json({ success: false, message: 'Failed to enable Developer API', error: error.message });
+  }
+};
+
+/**
+ * @desc    Disable Developer API access for company
+ * @route   POST /api/companies/developer-api/disable
+ * @access  Company
+ */
+exports.disableDeveloperApi = async (req, res) => {
+  try {
+    const company = await resolveCompanyForUser(req.user);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const integration = await Integration.findOne({ company_id: company._id });
+    if (integration) {
+      integration.status = 'INACTIVE';
+      await integration.save();
+    }
+
+    // Revoke all active API keys
+    await ApiClient.updateMany(
+      { company_id: company._id, status: 'ACTIVE' },
+      { status: 'REVOKED' }
+    );
+
+    return res.json({
+      success: true,
+      message: 'Developer API access disabled and existing credentials revoked',
+      data: { status: 'INACTIVE' }
+    });
+  } catch (error) {
+    console.error('disableDeveloperApi error:', error);
+    res.status(500).json({ success: false, message: 'Failed to disable Developer API', error: error.message });
+  }
+};
+
+/**
+ * @desc    Create new API credentials (client_id + client_secret)
+ * @route   POST /api/companies/developer-api/credentials
+ * @access  Company
+ */
+exports.createApiCredentials = async (req, res) => {
+  try {
+    const company = await resolveCompanyForUser(req.user);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    let integration = await Integration.findOne({ company_id: company._id, status: 'ACTIVE' });
+    if (!integration) {
+      return res.status(400).json({
+        success: false,
+        message: 'Developer API access is disabled. Please enable it before generating credentials.'
+      });
+    }
+
+    const { label } = req.body;
+    const clientId = `syncro1_cli_${crypto.randomBytes(12).toString('hex')}`;
+    const clientSecret = `syncro1_sec_${crypto.randomBytes(24).toString('hex')}`;
+
+    const salt = await bcrypt.genSalt(10);
+    const clientSecretHash = await bcrypt.hash(clientSecret, salt);
+
+    const client = await ApiClient.create({
+      client_id: clientId,
+      client_secret_hash: clientSecretHash,
+      integration_id: integration._id,
+      company_id: company._id,
+      label: (label && typeof label === 'string' && label.trim()) ? label.trim() : 'Production API Key',
+      status: 'ACTIVE'
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'API credentials generated. Copy the secret now — it will not be shown again.',
+      data: {
+        client_id: client.client_id,
+        client_secret: clientSecret, // Returned ONCE
+        label: client.label,
+        scopes: client.scopes,
+        created_at: client.created_at
+      }
+    });
+  } catch (error) {
+    console.error('createApiCredentials error:', error);
+    res.status(500).json({ success: false, message: 'Failed to generate API credentials', error: error.message });
+  }
+};
+
+/**
+ * @desc    List all API credentials for company (without secrets)
+ * @route   GET /api/companies/developer-api/credentials
+ * @access  Company
+ */
+exports.listApiCredentials = async (req, res) => {
+  try {
+    const company = await resolveCompanyForUser(req.user);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const credentials = await ApiClient.find({ company_id: company._id })
+      .select('client_id label scopes status last_used_at created_at')
+      .sort({ created_at: -1 });
+
+    return res.json({
+      success: true,
+      data: { credentials }
+    });
+  } catch (error) {
+    console.error('listApiCredentials error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch API credentials', error: error.message });
+  }
+};
+
+/**
+ * @desc    Revoke specific API credential
+ * @route   DELETE /api/companies/developer-api/credentials/:clientId
+ * @access  Company
+ */
+exports.revokeApiCredentials = async (req, res) => {
+  try {
+    const company = await resolveCompanyForUser(req.user);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const client = await ApiClient.findOne({
+      client_id: req.params.clientId,
+      company_id: company._id
+    });
+
+    if (!client) {
+      return res.status(404).json({ success: false, message: 'API credential not found' });
+    }
+
+    client.status = 'REVOKED';
+    await client.save();
+
+    return res.json({
+      success: true,
+      message: 'API credential revoked successfully'
+    });
+  } catch (error) {
+    console.error('revokeApiCredentials error:', error);
+    res.status(500).json({ success: false, message: 'Failed to revoke API credential', error: error.message });
+  }
+};
+

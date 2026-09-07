@@ -1674,6 +1674,19 @@ exports.approveJob = async (req, res) => {
     job.status = 'ACTIVE';
     await job.save();
 
+    // Emit Developer Webhook event
+    try {
+      const webhookService = require('../services/webhookService');
+      webhookService.emitEvent(job.company?._id || job.company, 'job.published', {
+        job_id: job.uniqueId,
+        external_job_id: job.external_job_id || null,
+        title: job.title,
+        status: 'ACTIVE'
+      }, { entity_type: 'JOB', entity_id: job._id });
+    } catch (whErr) {
+      console.error('[Job Approval Webhook Error]:', whErr.message);
+    }
+
     const companyName = job.company?.companyName || 'Unknown Company';
     const companyUserObj = job.company?.user;
     const recipientUserId = companyUserObj?._id || companyUserObj;
@@ -5327,3 +5340,149 @@ exports.getJobScreeningQuestionsForAdmin = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
   }
 };
+
+/* =========================================================================
+   ADMIN INTEGRATION OVERSIGHT
+========================================================================= */
+
+const IntegrationModel = require('../models/Integration');
+const ApiClientModel = require('../models/ApiClient');
+const WebhookEndpointModel = require('../models/WebhookEndpoint');
+const WebhookDeliveryModel = require('../models/WebhookDelivery');
+const ApiLogModel = require('../models/ApiLog');
+
+/**
+ * @desc    Get all integrations across companies
+ * @route   GET /api/admin/integrations
+ * @access  Admin / SubAdmin
+ */
+exports.getAllIntegrations = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const query = {};
+    if (req.query.status) {
+      query.status = req.query.status.toUpperCase();
+    }
+
+    const [integrations, total] = await Promise.all([
+      IntegrationModel.find(query)
+        .populate('company_id', 'companyName location logo industry website')
+        .populate('user_id', 'firstName lastName email')
+        .sort({ created_at: -1 })
+        .skip(skip)
+        .limit(limit),
+      IntegrationModel.countDocuments(query)
+    ]);
+
+    // Enhance each integration with active keys and webhook counts
+    const enhanced = await Promise.all(
+      integrations.map(async (item) => {
+        const [activeKeys, webhooksCount, totalApiCalls] = await Promise.all([
+          ApiClientModel.countDocuments({ company_id: item.company_id?._id, status: 'ACTIVE' }),
+          WebhookEndpointModel.countDocuments({ company_id: item.company_id?._id }),
+          ApiLogModel.countDocuments({ company_id: item.company_id?._id })
+        ]);
+        return {
+          ...item.toObject(),
+          active_keys_count: activeKeys,
+          webhooks_count: webhooksCount,
+          total_api_calls: totalApiCalls
+        };
+      })
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        integrations: enhanced,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit) || 1,
+          total,
+          limit
+        }
+      }
+    });
+  } catch (error) {
+    console.error('getAllIntegrations error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch integrations', error: error.message });
+  }
+};
+
+/**
+ * @desc    Get single integration detail
+ * @route   GET /api/admin/integrations/:id
+ * @access  Admin / SubAdmin
+ */
+exports.getIntegrationDetail = async (req, res) => {
+  try {
+    const integration = await IntegrationModel.findById(req.params.id)
+      .populate('company_id', 'companyName legalName location logo industry website contact')
+      .populate('user_id', 'firstName lastName email');
+
+    if (!integration) {
+      return res.status(404).json({ success: false, message: 'Integration not found' });
+    }
+
+    const companyId = integration.company_id?._id;
+
+    const [apiKeys, webhooks, recentLogs, recentDeliveries] = await Promise.all([
+      ApiClientModel.find({ company_id: companyId }).select('client_id label scopes status last_used_at created_at').sort({ created_at: -1 }),
+      WebhookEndpointModel.find({ company_id: companyId }).sort({ created_at: -1 }),
+      ApiLogModel.find({ company_id: companyId }).sort({ created_at: -1 }).limit(10),
+      WebhookDeliveryModel.find({ company_id: companyId }).sort({ created_at: -1 }).limit(10)
+    ]);
+
+    return res.json({
+      success: true,
+      data: {
+        integration,
+        api_keys: apiKeys,
+        webhooks,
+        recent_logs: recentLogs,
+        recent_deliveries: recentDeliveries
+      }
+    });
+  } catch (error) {
+    console.error('getIntegrationDetail error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch integration detail', error: error.message });
+  }
+};
+
+/**
+ * @desc    Update integration status (ACTIVE, SUSPENDED, INACTIVE)
+ * @route   PUT /api/admin/integrations/:id/status
+ * @access  Admin / SubAdmin
+ */
+exports.updateIntegrationStatus = async (req, res) => {
+  try {
+    const { status, reason } = req.body;
+    if (!['ACTIVE', 'SUSPENDED', 'INACTIVE'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    const integration = await IntegrationModel.findById(req.params.id);
+    if (!integration) {
+      return res.status(404).json({ success: false, message: 'Integration not found' });
+    }
+
+    integration.status = status;
+    if (reason) {
+      integration.suspended_reason = reason;
+    }
+    await integration.save();
+
+    return res.json({
+      success: true,
+      message: `Integration status updated to ${status}`,
+      data: { integration }
+    });
+  } catch (error) {
+    console.error('updateIntegrationStatus error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update integration status', error: error.message });
+  }
+};
+

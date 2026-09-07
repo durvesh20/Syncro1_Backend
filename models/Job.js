@@ -311,13 +311,31 @@ const jobSchema = new mongoose.Schema({
       },
       order: { type: Number, required: true } // 1-based
     }
-  ]
+  ],
+
+  // ==================== DEVELOPER INTEGRATION ====================
+  external_job_id: {
+    type: String,
+    trim: true,
+    default: null
+  },
+  source_system: {
+    type: String,
+    enum: ['MANUAL', 'API'],
+    default: 'MANUAL'
+  },
+  integration_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Integration',
+    default: null
+  }
 }, {
   timestamps: true,
   validateModifiedOnly: true
 });
 
 // ==================== INDEXES ====================
+jobSchema.index({ company: 1, external_job_id: 1 }, { sparse: true });
 jobSchema.index({ company: 1, status: 1 });
 jobSchema.index({ status: 1, createdAt: -1 });
 jobSchema.index({ company: 1, approvalStatus: 1 }); // @deprecated — kept for backward compat

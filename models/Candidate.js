@@ -26,6 +26,11 @@ const candidateSchema = new mongoose.Schema({
     unique: true,
     sparse: true,
   },
+  external_candidate_id: {
+    type: String,
+    trim: true,
+    default: null
+  },
   firstName: {
     type: String,
     required: true,

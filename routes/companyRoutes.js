@@ -447,4 +447,21 @@ router.post('/jobs/:jobId/screening-questions', checkStatus('VERIFIED', 'ACTIVE'
 router.get('/jobs/:jobId/screening-questions', checkCompanyPermission('VIEW_JOBS'), getJobScreeningQuestions);
 router.delete('/jobs/:jobId/screening-questions/:qId', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('POST_JOB'), deleteJobScreeningQuestion);
 
+// ==================== DEVELOPER API SETTINGS ====================
+const {
+  getDeveloperApiStatus,
+  enableDeveloperApi,
+  disableDeveloperApi,
+  createApiCredentials,
+  listApiCredentials,
+  revokeApiCredentials
+} = require('../controllers/companyController');
+
+router.get('/developer-api/status', getDeveloperApiStatus);
+router.post('/developer-api/enable', checkStatus('VERIFIED', 'ACTIVE'), enableDeveloperApi);
+router.post('/developer-api/disable', checkStatus('VERIFIED', 'ACTIVE'), disableDeveloperApi);
+router.post('/developer-api/credentials', checkStatus('VERIFIED', 'ACTIVE'), createApiCredentials);
+router.get('/developer-api/credentials', listApiCredentials);
+router.delete('/developer-api/credentials/:clientId', checkStatus('VERIFIED', 'ACTIVE'), revokeApiCredentials);
+
 module.exports = router;

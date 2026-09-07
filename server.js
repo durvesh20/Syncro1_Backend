@@ -35,6 +35,12 @@ require('./models/Award');
 require('./models/CompanyLogo');
 require('./models/LandingPageLead');
 require('./models/ContactMessage');
+require('./models/Integration');
+require('./models/ApiClient');
+require('./models/WebhookEndpoint');
+require('./models/WebhookDelivery');
+require('./models/ApiLog');
+require('./models/IntegrationEvent');
 
 const app = express();
 
@@ -130,8 +136,16 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: ['Set-Cookie']
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Request-ID',
+    'Idempotency-Key',
+    'X-Syncro1-Event-ID',
+    'X-Syncro1-Signature',
+    'X-Syncro1-Timestamp'
+  ],
+  exposedHeaders: ['Set-Cookie', 'X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset']
 };
 
 app.use(cors(corsOptions));
@@ -192,6 +206,10 @@ app.use('/api/reports', require('./routes/reportRoutes'));
 app.use('/api/landing', require('./routes/landingRoutes'));
 app.use('/api/landingpage', require('./routes/landingpageRoutes'));
 app.use('/api/contact', require('./routes/contactRoutes'));
+
+// ── Developer Portal & ATS Integration Routes ──
+app.use('/api/developer/auth', require('./routes/developerAuthRoutes'));
+app.use('/api/v1', require('./routes/developerRoutes'));
 
 
 /* =========================================================

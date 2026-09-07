@@ -1500,4 +1500,15 @@ router.post(
   }
 );
 
+// ==================== DEVELOPER INTEGRATIONS OVERSIGHT ====================
+const {
+  getAllIntegrations,
+  getIntegrationDetail,
+  updateIntegrationStatus
+} = require('../controllers/adminController');
+
+router.get('/integrations', getAllIntegrations);
+router.get('/integrations/:id', getIntegrationDetail);
+router.put('/integrations/:id/status', updateIntegrationStatus);
+
 module.exports = router;

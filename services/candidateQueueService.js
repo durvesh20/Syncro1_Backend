@@ -494,6 +494,20 @@ class CandidateQueueService {
         // ✅ Notify company — new candidate received
         await this._notifyCompany(candidate);
 
+        // ✅ Emit Developer Webhook Event if company has integration
+        try {
+            const webhookService = require('./webhookService');
+            webhookService.emitEvent(candidate.company?._id || candidate.company, 'candidate.submitted', {
+                candidate_id: candidate.uniqueId,
+                external_candidate_id: candidate.external_candidate_id || null,
+                job_id: candidate.job?.uniqueId || String(candidate.job?._id || candidate.job),
+                name: `${candidate.firstName} ${candidate.lastName}`,
+                status: 'SUBMITTED'
+            }, { entity_type: 'CANDIDATE', entity_id: candidate._id });
+        } catch (whErr) {
+            console.error('[Candidate Approval Webhook Error]:', whErr.message);
+        }
+
         return candidate;
     }
 
