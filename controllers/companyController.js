@@ -908,17 +908,8 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
-    // Auto-update expired active jobs of this company to ON_HOLD
-    await Job.updateMany(
-      {
-        company: company._id,
-        status: 'ACTIVE',
-        applicationDeadline: { $lt: new Date() }
-      },
-      {
-        $set: { status: 'ON_HOLD' }
-      }
-    );
+    // NOTE: Deadline-based auto ON_HOLD removed intentionally.
+    // Status is changed only via explicit action.
 
     const jobStats = await Job.aggregate([
       { $match: { company: company._id } },
@@ -1153,17 +1144,8 @@ exports.getJobs = async (req, res) => {
       });
     }
 
-    // Auto-update expired active jobs of this company to ON_HOLD
-    await Job.updateMany(
-      {
-        company: company._id,
-        status: 'ACTIVE',
-        applicationDeadline: { $lt: new Date() }
-      },
-      {
-        $set: { status: 'ON_HOLD' }
-      }
-    );
+    // NOTE: Deadline-based auto ON_HOLD removed intentionally.
+    // Status is changed only via explicit action.
 
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
     const { status, search } = req.query;
@@ -1358,11 +1340,8 @@ exports.getJob = async (req, res) => {
       });
     }
 
-    // Auto-update if it is active but application deadline is passed
-    if (job.status === 'ACTIVE' && job.applicationDeadline && new Date(job.applicationDeadline) < new Date()) {
-      job.status = 'ON_HOLD';
-      await job.save();
-    }
+    // NOTE: Deadline-based auto ON_HOLD removed intentionally.
+    // Status is changed only via explicit action.
 
     const activeCandidatesCount = await Candidate.countDocuments({
       job: job._id,

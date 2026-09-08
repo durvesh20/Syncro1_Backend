@@ -2564,7 +2564,7 @@ exports.getMySubmissions = async (req, res) => {
 
     const [rawSubmissions, total, countAll, countConsentPending, countInterview, countOffer, countJoined] = await Promise.all([
       Candidate.find(query)
-        .populate('job', 'title company commission')
+        .populate('job', 'title company commission salary uniqueId')
         .populate('company', 'companyName')
         .sort({ _id: -1 })
         .skip(skip)
@@ -2575,7 +2575,7 @@ exports.getMySubmissions = async (req, res) => {
           'profile.noticePeriod profile.currentSalary profile.expectedSalary ' +
           'profile.writeup profile.currentCompany profile.currentDesignation ' +
           'resume interviewConfig whatsappConsent.status resumeAnalysis.profileScore ' +
-          'resumeAnalysis.matchLevel createdAt job company assignedSlot'
+          'resumeAnalysis.matchLevel createdAt job company assignedSlot commission payout'
         )
         .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName')
         .lean(),
@@ -2687,7 +2687,7 @@ exports.getSubmission = async (req, res) => {
       _id: req.params.id,
       submittedBy: partner._id
     })
-      .populate('job', 'title company commission')
+      .populate('job', 'title company commission salary uniqueId')
       .populate('company', 'companyName')
       .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName');
 
