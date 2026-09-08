@@ -1,7 +1,7 @@
 // backend/controllers/developerAuthController.js
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const ApiClient = require('../models/ApiClient');
+const DeveloperAccount = require('../models/DeveloperAccount');
 const Integration = require('../models/Integration');
 const Company = require('../models/Company');
 
@@ -11,14 +11,13 @@ const REFRESH_TOKEN_EXPIRES_IN = '7d';
 /**
  * Generate Developer JWT tokens
  */
-const generateTokens = (client) => {
+const generateTokens = (developerAccount) => {
   const payload = {
-    id: client._id,
-    client_id: client.client_id,
-    company_id: client.company_id,
-    integration_id: client.integration_id,
-    scopes: client.scopes,
-    type: 'developer'
+    id: developerAccount._id,
+    email: developerAccount.email,
+    company_id: developerAccount.company_id,
+    integration_id: developerAccount.integration_id,
+    type: 'developer_portal'
   };
 
   const accessToken = jwt.sign(payload, process.env.JWT_SECRET, {
@@ -35,64 +34,64 @@ const generateTokens = (client) => {
 };
 
 /**
- * @desc    Authenticate with client_id and client_secret
+ * @desc    Authenticate developer portal login
  * @route   POST /api/developer/auth/login
  * @access  Public
  */
 exports.login = async (req, res) => {
-  const { client_id, client_secret } = req.body;
+  const { email, password } = req.body;
   const requestId = req.requestId || null;
 
-  if (!client_id || !client_secret) {
+  if (!email || !password) {
     return res.status(400).json({
       success: false,
       error: {
         code: 'MISSING_FIELD',
-        message: 'client_id and client_secret are required'
+        message: 'email and password are required'
       },
       request_id: requestId
     });
   }
 
   try {
-    const client = await ApiClient.findOne({ client_id });
-    if (!client) {
+    const account = await DeveloperAccount.findOne({ email: email.toLowerCase().trim() });
+    if (!account) {
       return res.status(401).json({
         success: false,
         error: {
           code: 'INVALID_CREDENTIALS',
-          message: 'Invalid client credentials'
+          message: 'Invalid credentials'
         },
         request_id: requestId
       });
     }
 
-    if (client.status !== 'ACTIVE') {
+    if (account.status !== 'ACTIVE') {
       return res.status(403).json({
         success: false,
         error: {
-          code: 'CREDENTIAL_REVOKED',
-          message: 'This API key has been revoked'
+          code: 'ACCOUNT_INACTIVE',
+          message: 'This account is inactive'
         },
         request_id: requestId
       });
     }
 
-    // Verify secret
-    const isMatch = await bcrypt.compare(client_secret, client.client_secret_hash);
+    // Verify password
+    const isMatch = await bcrypt.compare(password, account.password_hash);
     if (!isMatch) {
       return res.status(401).json({
         success: false,
         error: {
           code: 'INVALID_CREDENTIALS',
-          message: 'Invalid client credentials'
+          message: 'Invalid credentials'
         },
         request_id: requestId
       });
     }
 
     // Verify Integration status
-    const integration = await Integration.findById(client.integration_id);
+    const integration = await Integration.findById(account.integration_id);
     if (!integration || integration.status !== 'ACTIVE') {
       return res.status(403).json({
         success: false,
@@ -104,12 +103,12 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Update last_used_at
-    client.last_used_at = new Date();
-    await client.save({ validateModifiedOnly: true });
+    // Update last_login_at
+    account.last_login_at = new Date();
+    await account.save({ validateModifiedOnly: true });
 
     // Generate tokens
-    const { accessToken, refreshToken } = generateTokens(client);
+    const { accessToken, refreshToken } = generateTokens(account);
 
     return res.status(200).json({
       success: true,
@@ -118,9 +117,10 @@ exports.login = async (req, res) => {
         refresh_token: refreshToken,
         token_type: 'Bearer',
         expires_in: 3600,
-        scopes: client.scopes,
-        client_id: client.client_id,
-        label: client.label
+        developer: {
+          email: account.email,
+          name: account.name
+        }
       },
       request_id: requestId
     });
@@ -138,7 +138,7 @@ exports.login = async (req, res) => {
 };
 
 /**
- * @desc    Refresh Developer API access token
+ * @desc    Refresh Developer portal access token
  * @route   POST /api/developer/auth/refresh
  * @access  Public
  */
@@ -159,7 +159,7 @@ exports.refresh = async (req, res) => {
 
   try {
     const decoded = jwt.verify(refresh_token, process.env.JWT_SECRET);
-    if (decoded.type !== 'developer' || decoded.token_type !== 'refresh') {
+    if (decoded.type !== 'developer_portal' || decoded.token_type !== 'refresh') {
       return res.status(401).json({
         success: false,
         error: {
@@ -170,23 +170,20 @@ exports.refresh = async (req, res) => {
       });
     }
 
-    const client = await ApiClient.findOne({
-      client_id: decoded.client_id,
-      status: 'ACTIVE'
-    });
+    const account = await DeveloperAccount.findById(decoded.id);
 
-    if (!client) {
+    if (!account || account.status !== 'ACTIVE') {
       return res.status(401).json({
         success: false,
         error: {
           code: 'INVALID_TOKEN',
-          message: 'Client credentials not found or revoked'
+          message: 'Account not found or inactive'
         },
         request_id: requestId
       });
     }
 
-    const integration = await Integration.findById(client.integration_id);
+    const integration = await Integration.findById(account.integration_id);
     if (!integration || integration.status !== 'ACTIVE') {
       return res.status(403).json({
         success: false,
@@ -198,7 +195,7 @@ exports.refresh = async (req, res) => {
       });
     }
 
-    const { accessToken, refreshToken: newRefreshToken } = generateTokens(client);
+    const { accessToken, refreshToken: newRefreshToken } = generateTokens(account);
 
     return res.status(200).json({
       success: true,
@@ -223,15 +220,14 @@ exports.refresh = async (req, res) => {
 };
 
 /**
- * @desc    Get current developer client context
+ * @desc    Get current developer profile
  * @route   GET /api/developer/auth/me
- * @access  Developer Protected
+ * @access  Protected (Developer Portal)
  */
 exports.me = async (req, res) => {
   const requestId = req.requestId || null;
 
   try {
-    const client = await ApiClient.findOne({ client_id: req.developer.client_id });
     const company = await Company.findById(req.developer.company_id).select(
       'companyName legalName logo location industry website contact'
     );
@@ -240,13 +236,10 @@ exports.me = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        client: {
-          client_id: client.client_id,
-          label: client.label,
-          scopes: client.scopes,
-          status: client.status,
-          last_used_at: client.last_used_at,
-          created_at: client.created_at
+        developer: {
+          id: req.developer.id,
+          email: req.developer.email,
+          name: req.developer.name
         },
         company: company || null,
         integration: {
@@ -271,3 +264,69 @@ exports.me = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Change developer password
+ * @route   POST /api/developer/auth/change-password
+ * @access  Protected (Developer Portal)
+ */
+exports.changePassword = async (req, res) => {
+  const { current_password, new_password } = req.body;
+  const requestId = req.requestId || null;
+
+  if (!current_password || !new_password) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'MISSING_FIELD',
+        message: 'current_password and new_password are required'
+      },
+      request_id: requestId
+    });
+  }
+
+  try {
+    const account = await DeveloperAccount.findById(req.developer.id);
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Account not found'
+        },
+        request_id: requestId
+      });
+    }
+
+    const isMatch = await bcrypt.compare(current_password, account.password_hash);
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_CREDENTIALS',
+          message: 'Incorrect current password'
+        },
+        request_id: requestId
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    account.password_hash = await bcrypt.hash(new_password, salt);
+    await account.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password changed successfully',
+      request_id: requestId
+    });
+  } catch (error) {
+    console.error('[Developer Auth Change Password Error]:', error);
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to change password'
+      },
+      request_id: requestId
+    });
+  }
+};

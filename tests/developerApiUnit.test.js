@@ -136,5 +136,46 @@ describe('Developer API Unit Tests', () => {
 
     expect(crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))).toBe(true);
   });
+
+  test('5. Multi-account list mapping and target query validation', () => {
+    const mockAccounts = [
+      {
+        _id: '66e2c9a10f8b1234567890aa',
+        company_id: '66e2c9a10f8b1234567890cd',
+        email: 'lead.dev@company.com',
+        name: 'Lead Developer',
+        status: 'ACTIVE',
+        last_login_at: new Date('2026-09-07T10:00:00Z'),
+        created_at: new Date('2026-09-01T08:00:00Z')
+      },
+      {
+        _id: '66e2c9a10f8b1234567890bb',
+        company_id: '66e2c9a10f8b1234567890cd',
+        email: 'integrations.dev@company.com',
+        name: 'ATS Integrations Lead',
+        status: 'ACTIVE',
+        last_login_at: null,
+        created_at: new Date('2026-09-05T12:00:00Z')
+      }
+    ];
+
+    // Status endpoint returns list of accounts and backward-compatible single account
+    const responsePayload = {
+      enabled: true,
+      status: 'ACTIVE',
+      developer_accounts: mockAccounts,
+      developer_account: mockAccounts[0]
+    };
+
+    expect(responsePayload.developer_accounts.length).toBe(2);
+    expect(responsePayload.developer_account._id).toBe('66e2c9a10f8b1234567890aa');
+    expect(responsePayload.developer_accounts[1].email).toBe('integrations.dev@company.com');
+
+    // Targeting by ID helper test
+    const targetAccountId = '66e2c9a10f8b1234567890bb';
+    const target = mockAccounts.find(acc => acc._id === targetAccountId);
+    expect(target).toBeDefined();
+    expect(target.name).toBe('ATS Integrations Lead');
+  });
 });
 

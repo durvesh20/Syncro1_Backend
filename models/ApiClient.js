@@ -4,13 +4,31 @@ const apiClientSchema = new mongoose.Schema(
   {
     client_id: {
       type: String,
-      required: true,
-      unique: true,
+      sparse: true,
       index: true
     },
     client_secret_hash: {
       type: String,
-      required: true
+      default: null
+    },
+    key_prefix: {
+      type: String,
+      default: 'syncro_live_'
+    },
+    key_hash: {
+      type: String,
+      sparse: true,
+      index: true
+    },
+    environment: {
+      type: String,
+      enum: ['PRODUCTION', 'SANDBOX'],
+      default: 'PRODUCTION'
+    },
+    created_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'DeveloperAccount',
+      default: null
     },
     integration_id: {
       type: mongoose.Schema.Types.ObjectId,
@@ -62,4 +80,3 @@ const apiClientSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model('ApiClient', apiClientSchema);
-

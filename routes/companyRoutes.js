@@ -452,16 +452,20 @@ const {
   getDeveloperApiStatus,
   enableDeveloperApi,
   disableDeveloperApi,
-  createApiCredentials,
-  listApiCredentials,
-  revokeApiCredentials
+  createDeveloperAccount,
+  getDeveloperAccount,
+  resetDeveloperPassword,
+  toggleDeveloperAccountStatus,
+  deleteDeveloperAccount
 } = require('../controllers/companyController');
 
 router.get('/developer-api/status', getDeveloperApiStatus);
 router.post('/developer-api/enable', checkStatus('VERIFIED', 'ACTIVE'), enableDeveloperApi);
 router.post('/developer-api/disable', checkStatus('VERIFIED', 'ACTIVE'), disableDeveloperApi);
-router.post('/developer-api/credentials', checkStatus('VERIFIED', 'ACTIVE'), createApiCredentials);
-router.get('/developer-api/credentials', listApiCredentials);
-router.delete('/developer-api/credentials/:clientId', checkStatus('VERIFIED', 'ACTIVE'), revokeApiCredentials);
+router.post('/developer-api/account', checkStatus('VERIFIED', 'ACTIVE'), createDeveloperAccount);
+router.get('/developer-api/account', checkStatus('VERIFIED', 'ACTIVE'), getDeveloperAccount);
+router.post('/developer-api/account/reset-password', checkStatus('VERIFIED', 'ACTIVE'), resetDeveloperPassword);
+router.patch('/developer-api/account/status', checkStatus('VERIFIED', 'ACTIVE'), toggleDeveloperAccountStatus);
+router.delete('/developer-api/account/:id', checkStatus('VERIFIED', 'ACTIVE'), deleteDeveloperAccount);
 
 module.exports = router;

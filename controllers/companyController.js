@@ -3692,12 +3692,18 @@ const resolveCompanyForUser = async (user) => {
  */
 exports.getDeveloperApiStatus = async (req, res) => {
   try {
+    const DeveloperAccount = require('../models/DeveloperAccount');
     const company = await resolveCompanyForUser(req.user);
     if (!company) {
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
     const integration = await Integration.findOne({ company_id: company._id });
+    const devAccounts = await DeveloperAccount.find({ company_id: company._id })
+      .select('email name status last_login_at created_at')
+      .sort({ created_at: -1 });
+    
+    // We can also count API keys instead of credentials count if needed, but not strictly required
     const credentialsCount = await ApiClient.countDocuments({
       company_id: company._id,
       status: 'ACTIVE'
@@ -3711,7 +3717,9 @@ exports.getDeveloperApiStatus = async (req, res) => {
         environment: integration?.environment || 'PRODUCTION',
         last_sync_at: integration?.last_sync_at || null,
         active_credentials_count: credentialsCount,
-        created_at: integration?.created_at || null
+        created_at: integration?.created_at || null,
+        developer_accounts: devAccounts,
+        developer_account: devAccounts[0] || null
       }
     });
   } catch (error) {
@@ -3762,6 +3770,7 @@ exports.enableDeveloperApi = async (req, res) => {
  */
 exports.disableDeveloperApi = async (req, res) => {
   try {
+    const DeveloperAccount = require('../models/DeveloperAccount');
     const company = await resolveCompanyForUser(req.user);
     if (!company) {
       return res.status(404).json({ success: false, message: 'Company not found' });
@@ -3779,9 +3788,15 @@ exports.disableDeveloperApi = async (req, res) => {
       { status: 'REVOKED' }
     );
 
+    // Deactivate DeveloperAccount
+    await DeveloperAccount.updateMany(
+      { company_id: company._id, status: 'ACTIVE' },
+      { status: 'INACTIVE' }
+    );
+
     return res.json({
       success: true,
-      message: 'Developer API access disabled and existing credentials revoked',
+      message: 'Developer API access disabled, developer accounts deactivated, and existing credentials revoked',
       data: { status: 'INACTIVE' }
     });
   } catch (error) {
@@ -3791,12 +3806,13 @@ exports.disableDeveloperApi = async (req, res) => {
 };
 
 /**
- * @desc    Create new API credentials (client_id + client_secret)
- * @route   POST /api/companies/developer-api/credentials
+ * @desc    Create new Developer Account for the portal
+ * @route   POST /api/companies/developer-api/account
  * @access  Company
  */
-exports.createApiCredentials = async (req, res) => {
+exports.createDeveloperAccount = async (req, res) => {
   try {
+    const DeveloperAccount = require('../models/DeveloperAccount');
     const company = await resolveCompanyForUser(req.user);
     if (!company) {
       return res.status(404).json({ success: false, message: 'Company not found' });
@@ -3806,100 +3822,210 @@ exports.createApiCredentials = async (req, res) => {
     if (!integration) {
       return res.status(400).json({
         success: false,
-        message: 'Developer API access is disabled. Please enable it before generating credentials.'
+        message: 'Developer API access is disabled. Please enable it before creating a developer account.'
       });
     }
 
-    const { label } = req.body;
-    const clientId = `syncro1_cli_${crypto.randomBytes(12).toString('hex')}`;
-    const clientSecret = `syncro1_sec_${crypto.randomBytes(24).toString('hex')}`;
+    const { email, name, password } = req.body;
+
+    if (!email || !name || !password) {
+      return res.status(400).json({ success: false, message: 'Email, name, and password are required' });
+    }
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ success: false, message: 'Invalid email format' });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters long' });
+    }
+
+    const emailExists = await DeveloperAccount.findOne({ email: email.toLowerCase().trim() });
+    if (emailExists) {
+      return res.status(400).json({ success: false, message: 'This email is already used by another developer account' });
+    }
 
     const salt = await bcrypt.genSalt(10);
-    const clientSecretHash = await bcrypt.hash(clientSecret, salt);
+    const passwordHash = await bcrypt.hash(password, salt);
 
-    const client = await ApiClient.create({
-      client_id: clientId,
-      client_secret_hash: clientSecretHash,
-      integration_id: integration._id,
+    const devAccount = await DeveloperAccount.create({
       company_id: company._id,
-      label: (label && typeof label === 'string' && label.trim()) ? label.trim() : 'Production API Key',
+      integration_id: integration._id,
+      email: email.toLowerCase().trim(),
+      name: name.trim(),
+      password_hash: passwordHash,
       status: 'ACTIVE'
     });
 
     return res.status(201).json({
       success: true,
-      message: 'API credentials generated. Copy the secret now — it will not be shown again.',
+      message: 'Developer account created successfully.',
       data: {
-        client_id: client.client_id,
-        client_secret: clientSecret, // Returned ONCE
-        label: client.label,
-        scopes: client.scopes,
-        created_at: client.created_at
+        _id: devAccount._id,
+        email: devAccount.email,
+        name: devAccount.name,
+        status: devAccount.status,
+        created_at: devAccount.created_at
       }
     });
   } catch (error) {
-    console.error('createApiCredentials error:', error);
-    res.status(500).json({ success: false, message: 'Failed to generate API credentials', error: error.message });
+    console.error('createDeveloperAccount error:', error);
+    res.status(500).json({ success: false, message: 'Failed to create developer account', error: error.message });
   }
 };
 
 /**
- * @desc    List all API credentials for company (without secrets)
- * @route   GET /api/companies/developer-api/credentials
+ * @desc    Get Developer Accounts for the portal
+ * @route   GET /api/companies/developer-api/account
  * @access  Company
  */
-exports.listApiCredentials = async (req, res) => {
+exports.getDeveloperAccount = async (req, res) => {
   try {
+    const DeveloperAccount = require('../models/DeveloperAccount');
     const company = await resolveCompanyForUser(req.user);
     if (!company) {
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
-    const credentials = await ApiClient.find({ company_id: company._id })
-      .select('client_id label scopes status last_used_at created_at')
+    const devAccounts = await DeveloperAccount.find({ company_id: company._id })
+      .select('email name status last_login_at created_at')
       .sort({ created_at: -1 });
 
     return res.json({
       success: true,
-      data: { credentials }
+      data: {
+        accounts: devAccounts,
+        account: devAccounts[0] || null
+      }
     });
   } catch (error) {
-    console.error('listApiCredentials error:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch API credentials', error: error.message });
+    console.error('getDeveloperAccount error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch developer account', error: error.message });
   }
 };
 
 /**
- * @desc    Revoke specific API credential
- * @route   DELETE /api/companies/developer-api/credentials/:clientId
+ * @desc    Reset Developer Account Password
+ * @route   POST /api/companies/developer-api/account/reset-password
  * @access  Company
  */
-exports.revokeApiCredentials = async (req, res) => {
+exports.resetDeveloperPassword = async (req, res) => {
   try {
+    const DeveloperAccount = require('../models/DeveloperAccount');
     const company = await resolveCompanyForUser(req.user);
     if (!company) {
       return res.status(404).json({ success: false, message: 'Company not found' });
     }
 
-    const client = await ApiClient.findOne({
-      client_id: req.params.clientId,
-      company_id: company._id
-    });
-
-    if (!client) {
-      return res.status(404).json({ success: false, message: 'API credential not found' });
+    const new_password = req.body.new_password || req.body.newPassword;
+    if (!new_password || new_password.length < 8) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 8 characters long' });
     }
 
-    client.status = 'REVOKED';
-    await client.save();
+    const account_id = req.body.account_id || req.body.id;
+    const email = req.body.email;
+    const query = { company_id: company._id };
+    if (account_id) {
+      query._id = account_id;
+    } else if (email) {
+      query.email = email.toLowerCase().trim();
+    }
+
+    const devAccount = await DeveloperAccount.findOne(query);
+    if (!devAccount) {
+      return res.status(404).json({ success: false, message: 'Developer account not found' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    devAccount.password_hash = await bcrypt.hash(new_password, salt);
+    await devAccount.save();
 
     return res.json({
       success: true,
-      message: 'API credential revoked successfully'
+      message: `Developer account password reset successfully for ${devAccount.email}`
     });
   } catch (error) {
-    console.error('revokeApiCredentials error:', error);
-    res.status(500).json({ success: false, message: 'Failed to revoke API credential', error: error.message });
+    console.error('resetDeveloperPassword error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset developer password', error: error.message });
+  }
+};
+
+/**
+ * @desc    Toggle Developer Account Status
+ * @route   PATCH /api/companies/developer-api/account/status
+ * @access  Company
+ */
+exports.toggleDeveloperAccountStatus = async (req, res) => {
+  try {
+    const DeveloperAccount = require('../models/DeveloperAccount');
+    const company = await resolveCompanyForUser(req.user);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const { status } = req.body;
+    if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Invalid status' });
+    }
+
+    const account_id = req.body.account_id || req.body.id;
+    const email = req.body.email;
+    const query = { company_id: company._id };
+    if (account_id) {
+      query._id = account_id;
+    } else if (email) {
+      query.email = email.toLowerCase().trim();
+    }
+
+    const devAccount = await DeveloperAccount.findOne(query);
+    if (!devAccount) {
+      return res.status(404).json({ success: false, message: 'Developer account not found' });
+    }
+
+    devAccount.status = status;
+    await devAccount.save();
+
+    return res.json({
+      success: true,
+      message: `Developer account ${devAccount.email} status updated to ${status}`,
+      data: { status: devAccount.status, _id: devAccount._id }
+    });
+  } catch (error) {
+    console.error('toggleDeveloperAccountStatus error:', error);
+    res.status(500).json({ success: false, message: 'Failed to toggle developer account status', error: error.message });
+  }
+};
+
+/**
+ * @desc    Delete Developer Account
+ * @route   DELETE /api/companies/developer-api/account/:id
+ * @access  Company
+ */
+exports.deleteDeveloperAccount = async (req, res) => {
+  try {
+    const DeveloperAccount = require('../models/DeveloperAccount');
+    const company = await resolveCompanyForUser(req.user);
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const { id } = req.params;
+    const devAccount = await DeveloperAccount.findOneAndDelete({
+      _id: id,
+      company_id: company._id
+    });
+
+    if (!devAccount) {
+      return res.status(404).json({ success: false, message: 'Developer account not found' });
+    }
+
+    return res.json({
+      success: true,
+      message: `Developer account ${devAccount.email} deleted successfully`
+    });
+  } catch (error) {
+    console.error('deleteDeveloperAccount error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete developer account', error: error.message });
   }
 };
 

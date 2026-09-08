@@ -36,6 +36,7 @@ require('./models/CompanyLogo');
 require('./models/LandingPageLead');
 require('./models/ContactMessage');
 require('./models/Integration');
+require('./models/DeveloperAccount');
 require('./models/ApiClient');
 require('./models/WebhookEndpoint');
 require('./models/WebhookDelivery');
