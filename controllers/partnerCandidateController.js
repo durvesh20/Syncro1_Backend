@@ -205,9 +205,9 @@ exports.getPoolCandidate = async (req, res) => {
 
     // Fetch this candidate's submissions (jobs applied to)
     const submissions = await Candidate.find({ poolCandidateRef: candidate._id })
-      .populate('job', 'title uniqueId status')
+      .populate('job', 'title uniqueId status salary commission')
       .populate('company', 'companyName logo')
-      .select('status createdAt job company')
+      .select('status createdAt job company commission payout')
       .lean();
 
     res.json({
@@ -226,7 +226,9 @@ exports.getPoolCandidate = async (req, res) => {
             status,
             appliedAt: sub.createdAt,
             job: sub.job,
-            company: sub.company
+            company: sub.company,
+            commission: sub.commission,
+            payout: sub.payout
           };
         })
       }

@@ -358,20 +358,6 @@ jobSchema.pre('save', function (next) {
   next();
 });
 
-// Deadline-based auto ON_HOLD logic
-jobSchema.pre('save', function (next) {
-  const now = new Date();
-  if (!this.isModified('status')) {
-    if (this.status === 'ACTIVE' && this.applicationDeadline && this.applicationDeadline < now) {
-      this.status = 'ON_HOLD';
-    } else if (this.status === 'ON_HOLD' && this.applicationDeadline && this.applicationDeadline > now) {
-      this.status = 'ACTIVE';
-    }
-  }
-  next();
-});
-
-
 jobSchema.pre('save', async function (next) {
   // Auto-generate slug
   if (this.isModified('title') && !this.slug) {

@@ -2927,7 +2927,7 @@ exports.getCandidateDetail = async (req, res) => {
       .populate('submittedBy', 'firmName firstName lastName uniqueId commercialDetails')
       .populate({
         path: 'job',
-        select: 'title uniqueId company education assignedTo',
+        select: 'title uniqueId company education assignedTo salary commission',
         populate: [
           { path: 'assignedTo', select: 'email role' },
           { path: 'company', select: 'companyName uniqueId' }

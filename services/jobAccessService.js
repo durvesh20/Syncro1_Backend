@@ -181,16 +181,8 @@ class JobAccessService {
       ctcLimit = ctcLimits[plan] || 500000;
     }
 
-    // Auto-update expired active jobs on the platform to ON_HOLD
-    await Job.updateMany(
-      {
-        status: 'ACTIVE',
-        applicationDeadline: { $lt: new Date() }
-      },
-      {
-        $set: { status: 'ON_HOLD' }
-      }
-    );
+    // NOTE: Deadline-based auto ON_HOLD removed intentionally.
+    // Status is changed only via explicit action.
 
     // Build query
     const query = {
