@@ -1259,6 +1259,7 @@ router.delete(
 // ==================== PIPELINE (Admin read-only + Audit Log + Write Access) ====================
 const { 
   adminGetPipeline, 
+  adminRepairCandidatePipeline,
   adminGetPipelineAuditLog, 
   getJobPipelineTemplate,
   definePipelineTemplate,
@@ -1292,6 +1293,7 @@ const { getJobInterviewSlots } = require('../controllers/companyController');
 const { adminAssignCandidateToSlot, adminRemoveCandidateFromSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot } = require('../controllers/adminController');
 
 router.get('/candidates/:id/pipeline', adminGetPipeline);
+router.post('/candidates/:id/pipeline/repair-sync', adminRepairCandidatePipeline);
 router.get('/jobs/:jobId/pipeline/template', getJobPipelineTemplate);
 router.get('/jobs/:jobId/interview-slots', getJobInterviewSlots);
 router.post('/jobs/:jobId/interview-slots', adminCreateJobInterviewSlots);

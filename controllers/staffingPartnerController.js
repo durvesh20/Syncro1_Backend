@@ -2687,7 +2687,7 @@ exports.getSubmission = async (req, res) => {
       _id: req.params.id,
       submittedBy: partner._id
     })
-      .populate('job', 'title company commission salary uniqueId')
+      .populate('job', 'title company commission salary uniqueId pipelineTemplate')
       .populate('company', 'companyName')
       .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName');
 

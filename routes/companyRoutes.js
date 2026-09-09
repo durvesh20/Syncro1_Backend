@@ -73,6 +73,7 @@ const {
   defineJobPipelineTemplate,
   getJobPipelineTemplate,
   getPipelinePreview,
+  pipelineRepairSync,
   pipelineAssessmentLinkSent,
   pipelineAssessmentLinkComplete,
   pipelineAssessmentPass,
@@ -389,6 +390,7 @@ router.put('/candidates/:id/pipeline/client-portal-duplicate',...PIPELINE_MW, pi
 router.put('/candidates/:id/pipeline/candidate-drop',         ...PIPELINE_MW, pipelineCandidateDrop);
 router.post('/candidates/:id/pipeline/template',              ...PIPELINE_MW, definePipelineTemplate);
 router.get('/candidates/:id/pipeline',                        checkCompanyPermission('VIEW_CANDIDATES'), getPipelinePreview);
+router.post('/candidates/:id/pipeline/repair-sync',            ...PIPELINE_MW, pipelineRepairSync);
 
 // Job-level Pipeline Template Routes
 router.post('/jobs/:jobId/pipeline/template',        ...PIPELINE_MW, defineJobPipelineTemplate);

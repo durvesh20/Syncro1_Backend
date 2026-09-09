@@ -800,7 +800,7 @@ async function populateRoundsWithJobSlots(candidate) {
   return populatedRounds;
 }
 
-async function syncCandidateRoundsWithJobTemplate(candidate) {
+async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
   if (!candidate || !candidate.job) return;
 
   const jobObj = candidate.job.toObject ? candidate.job.toObject() : candidate.job;
@@ -812,14 +812,122 @@ async function syncCandidateRoundsWithJobTemplate(candidate) {
     order: r.order ?? i + 1
   }));
 
-  const hasOutcome = candidate.rounds?.some(r => r.outcome && r.outcome.decision);
+  // Case 1: Candidate has NO rounds initialized yet (empty array or undefined)
+  if (!candidate.rounds || candidate.rounds.length === 0) {
+    candidate.pipelineTemplate = normalizedJobTemplate;
+
+    // Check if candidate has already completed / passed Round 1:
+    const targetRound = options.advanceToRound !== undefined ? parseInt(options.advanceToRound, 10) : null;
+    const isRound1Completed = targetRound !== null 
+      ? targetRound >= 2 
+      : (
+          candidate.status === 'ROUND_SELECTED_NEXT' ||
+          candidate.status === 'INTERVIEW_CONDUCTED' ||
+          candidate.status === 'INTERVIEWED' ||
+          (candidate.statusHistory && candidate.statusHistory.some(h => 
+            h.status === 'ROUND_SELECTED_NEXT' || 
+            h.status === 'INTERVIEW_CONDUCTED' ||
+            (h.notes && /next round|cleared|passed|completed/i.test(h.notes))
+          )) ||
+          (candidate.interviews && candidate.interviews.some(i => i.result === 'PASSED'))
+        );
+
+    if (isRound1Completed && normalizedJobTemplate.length >= 2) {
+      // Round 1 is CLEARED -> Activate Round 2 (e.g. Client Round) with SLOTS_NOT_PUBLISHED
+      candidate.rounds = normalizedJobTemplate.map((r, idx) => {
+        if (idx === 0) {
+          return {
+            roundType: r.roundType,
+            order: r.order,
+            status: 'ROUND_SELECTED_NEXT',
+            outcome: {
+              decision: 'SELECTED_NEXT_ROUND',
+              reason: 'Round 1 cleared',
+              decidedAt: new Date()
+            },
+            slots: [],
+            rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+          };
+        } else if (idx === 1) {
+          return {
+            roundType: r.roundType,
+            order: r.order,
+            status: getInitialRoundState(r.roundType), // 'SLOTS_NOT_PUBLISHED'
+            slots: [],
+            rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+          };
+        } else {
+          return {
+            roundType: r.roundType,
+            order: r.order,
+            status: 'NOT_STARTED',
+            slots: [],
+            rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+          };
+        }
+      });
+
+      candidate.status = candidate.rounds[1].status;
+      candidate.assignedSlot = null; // Decouple legacy slot from Round 1
+      candidate.interviewConfig = null;
+      candidate.statusHistory.push({
+        status: candidate.status,
+        changedAt: new Date(),
+        notes: `Pipeline auto-synced: Round 1 cleared, advanced to ${candidate.rounds[1].roundType}`
+      });
+    } else {
+      // Initialize from beginning
+      candidate.rounds = normalizedJobTemplate.map((r, idx) => ({
+        roundType: r.roundType,
+        order: r.order,
+        status: idx === 0 ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
+        slots: [],
+        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+      }));
+      if (candidate.rounds.length > 0 && ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING', 'SLOTS_PUBLISHED', 'SUBMITTED', 'UNDER_REVIEW'].includes(candidate.status)) {
+        candidate.status = candidate.rounds[0].status;
+      }
+    }
+
+    await candidate.save();
+    return;
+  }
+
+  // Case 2: Candidate already has rounds. If caller explicitly requested repair/advance:
+  if (options.advanceToRound !== undefined && candidate.rounds.length >= 2) {
+    const targetIdx = parseInt(options.advanceToRound, 10) - 1;
+    if (targetIdx >= 0 && targetIdx < candidate.rounds.length) {
+      for (let i = 0; i < targetIdx; i++) {
+        candidate.rounds[i].status = 'ROUND_SELECTED_NEXT';
+        candidate.rounds[i].outcome = {
+          decision: 'SELECTED_NEXT_ROUND',
+          reason: `Round ${i + 1} cleared via sync`,
+          decidedAt: new Date()
+        };
+      }
+      candidate.rounds[targetIdx].status = getInitialRoundState(candidate.rounds[targetIdx].roundType);
+      candidate.status = candidate.rounds[targetIdx].status;
+      candidate.assignedSlot = null;
+      candidate.interviewConfig = null;
+      candidate.statusHistory.push({
+        status: candidate.status,
+        changedAt: new Date(),
+        notes: `Pipeline manually advanced to Round ${targetIdx + 1}: ${candidate.rounds[targetIdx].roundType}`
+      });
+      await candidate.save();
+      return;
+    }
+  }
+
+  // Case 3: Auto-sync template changes if candidate is in initial state
+  const hasOutcome = candidate.rounds.some(r => r.outcome && r.outcome.decision);
   const isInitialState = ['SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'].includes(candidate.status);
 
   if (!hasOutcome && isInitialState) {
     const jobTemplateStr = JSON.stringify(normalizedJobTemplate.map(r => r.roundType));
     const candTemplateStr = JSON.stringify((candidate.pipelineTemplate || []).map(r => r.roundType));
 
-    if (jobTemplateStr !== candTemplateStr || !candidate.rounds || candidate.rounds.length === 0) {
+    if (jobTemplateStr !== candTemplateStr) {
       candidate.pipelineTemplate = normalizedJobTemplate;
       candidate.rounds = normalizedJobTemplate.map(r => ({
         roundType: r.roundType,
@@ -884,7 +992,6 @@ exports.getPipelinePreview = async (req, res) => {
 exports.adminGetPipeline = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
-      .populate('pipelineTemplate')
       .populate('job')
       .populate('auditTrail.actorId', 'email role');
 
@@ -927,6 +1034,69 @@ exports.adminGetPipeline = async (req, res) => {
   }
 };
 
+// ─── POST /api/companies/candidates/:id/pipeline/repair-sync ──────────────────
+exports.pipelineRepairSync = async (req, res) => {
+  try {
+    const { advanceToRound } = req.body;
+    const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
+
+    await syncCandidateRoundsWithJobTemplate(candidate, { advanceToRound });
+
+    let populatedRounds = await populateRoundsWithJobSlots(candidate);
+    let pipelineTemplate = candidate.pipelineTemplate && candidate.pipelineTemplate.length > 0 
+      ? candidate.pipelineTemplate 
+      : (candidate.job && candidate.job.pipelineTemplate ? candidate.job.pipelineTemplate : []);
+
+    res.json({
+      success: true,
+      message: 'Candidate pipeline synchronized successfully',
+      data: {
+        candidateId: candidate._id,
+        currentStatus: candidate.status,
+        pipelineTemplate,
+        rounds: populatedRounds
+      }
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ success: false, message: err.message });
+    console.error('[PIPELINE] repair sync error:', err);
+    res.status(500).json({ success: false, message: 'Failed to synchronize pipeline' });
+  }
+};
+
+// ─── POST /api/admin/candidates/:id/pipeline/repair-sync ───────────────────────
+exports.adminRepairCandidatePipeline = async (req, res) => {
+  try {
+    const { advanceToRound } = req.body;
+    const candidate = await Candidate.findById(req.params.id)
+      .populate('job')
+      .populate('auditTrail.actorId', 'email role');
+
+    if (!candidate) return res.status(404).json({ success: false, message: 'Candidate not found' });
+
+    await syncCandidateRoundsWithJobTemplate(candidate, { advanceToRound });
+
+    let populatedRounds = await populateRoundsWithJobSlots(candidate);
+    let pipelineTemplate = candidate.pipelineTemplate && candidate.pipelineTemplate.length > 0 
+      ? candidate.pipelineTemplate 
+      : (candidate.job && candidate.job.pipelineTemplate ? candidate.job.pipelineTemplate : []);
+
+    res.json({
+      success: true,
+      message: 'Candidate pipeline synchronized successfully',
+      data: {
+        candidateId: candidate._id,
+        currentStatus: candidate.status,
+        pipelineTemplate,
+        rounds: populatedRounds
+      }
+    });
+  } catch (err) {
+    console.error('[PIPELINE][ADMIN] repair sync error:', err);
+    res.status(500).json({ success: false, message: 'Failed to synchronize pipeline' });
+  }
+};
+
 // ─── GET /api/staffing-partners/submissions/:id/pipeline  (Partner read-only) ────────────────
 exports.partnerGetPipeline = async (req, res) => {
   try {
@@ -940,7 +1110,6 @@ exports.partnerGetPipeline = async (req, res) => {
       _id: req.params.id,
       submittedBy: partner._id
     })
-      .populate('pipelineTemplate')
       .populate('job')
       .populate('auditTrail.actorId', 'email role');
 
