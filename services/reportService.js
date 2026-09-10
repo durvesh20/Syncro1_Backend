@@ -204,13 +204,52 @@ function computeValue(doc, fieldDef) {
       if (typeof edu === 'string' && edu.trim().length > 0) {
         return edu.trim();
       }
+      return 'N/A';
+    }
+    case 'cand_aiEducation': {
       const aiEdu = getPath(doc, 'resumeAnalysis.scoreBreakdown.education.candidateEducation');
       if (aiEdu && typeof aiEdu === 'string' && aiEdu.trim().length > 0 && aiEdu !== 'Not provided') {
         return aiEdu.trim();
       }
-      const rawAiEdu = getPath(doc, 'resumeAnalysis.education');
+      const rawAiEdu = getPath(doc, 'resumeAnalysis.education') || getPath(doc, 'resumeAnalysis.aiData.profile.education');
       if (Array.isArray(rawAiEdu) && rawAiEdu.length > 0) {
-        return rawAiEdu.join('; ');
+        const formatted = rawAiEdu
+          .map((e) => {
+            if (typeof e === 'string') return e;
+            if (typeof e === 'object' && e !== null) {
+              const parts = [e.degree, e.institution, e.year].filter(Boolean);
+              return parts.join(' - ');
+            }
+            return String(e);
+          })
+          .filter(Boolean);
+        if (formatted.length > 0) return formatted.join('; ');
+      }
+      if (typeof rawAiEdu === 'string' && rawAiEdu.trim().length > 0) {
+        return rawAiEdu.trim();
+      }
+      return 'N/A';
+    }
+    case 'cand_currentCompany': {
+      const company = getPath(doc, 'profile.currentCompany');
+      if (company && typeof company === 'string' && company.trim().length > 0) {
+        return company.trim();
+      }
+      return 'N/A';
+    }
+    case 'cand_aiCurrentCompany': {
+      const aiCompany =
+        getPath(doc, 'resumeAnalysis.aiData.profile.currentCompany') ||
+        getPath(doc, 'resumeAnalysis.currentCompany');
+      if (aiCompany && typeof aiCompany === 'string' && aiCompany.trim().length > 0) {
+        return aiCompany.trim();
+      }
+      const exp = getPath(doc, 'resumeAnalysis.aiData.profile.experience') || getPath(doc, 'profile.experience');
+      if (Array.isArray(exp) && exp.length > 0) {
+        const currentExp = exp.find((e) => e.isCurrent) || exp[0];
+        if (currentExp && currentExp.company && typeof currentExp.company === 'string' && currentExp.company.trim().length > 0) {
+          return currentExp.company.trim();
+        }
       }
       return 'N/A';
     }

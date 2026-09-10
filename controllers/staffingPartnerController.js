@@ -1256,7 +1256,9 @@ exports.submitCandidate = async (req, res) => {
       profile,
       forceSubmit,
       lastWorkingDay,
-      willingToRelocate
+      willingToRelocate,
+      currentCompany,
+      education
     } = req.body;
 
     // Resume comes from multer (uploaded to Cloudinary before this runs)
@@ -1518,6 +1520,20 @@ exports.submitCandidate = async (req, res) => {
       };
     });
 
+    // Parse and normalize education
+    let normalizedEducation = parsedProfile?.education || [];
+    const eduInput = education !== undefined ? education : parsedProfile?.education;
+    if (typeof eduInput === 'string' && eduInput.trim()) {
+      try {
+        const parsed = JSON.parse(eduInput);
+        normalizedEducation = Array.isArray(parsed) ? parsed : [{ degree: eduInput.trim() }];
+      } catch {
+        normalizedEducation = [{ degree: eduInput.trim() }];
+      }
+    } else if (Array.isArray(eduInput)) {
+      normalizedEducation = eduInput;
+    }
+
     // ✅ STEP 15: Create candidate in DRAFT status with resume from Cloudinary
     const candidate = await Candidate.create({
       submittedBy: partner._id,
@@ -1549,10 +1565,10 @@ exports.submitCandidate = async (req, res) => {
         currentSalary: parsedCurrentSalary,  // ✅ parsed int (no comma issue)
         expectedSalary: parsedExpectedSalary, // ✅ parsed int (no comma issue)
         writeup: writeup?.trim() || '',
-        currentCompany: parsedProfile?.currentCompany || '',
+        currentCompany: currentCompany?.trim() || parsedProfile?.currentCompany || '',
         currentDesignation: parsedProfile?.currentDesignation || '',
         skills: parsedProfile?.skills || [],
-        education: parsedProfile?.education || [],
+        education: normalizedEducation,
         experience: parsedProfile?.experience || [],
         totalExperienceMonths: parsedProfile?.totalExperienceMonths || null,
         experienceYears: parsedProfile?.experienceYears || null,
@@ -2796,7 +2812,9 @@ exports.updateSubmission = async (req, res) => {
       currentSalary,
       expectedSalary,
       writeup,
-      lastWorkingDay
+      lastWorkingDay,
+      currentCompany,
+      education
     } = req.body;
 
     if (firstName) submission.firstName = firstName.trim();
@@ -2831,6 +2849,14 @@ exports.updateSubmission = async (req, res) => {
     if (currentSalary !== undefined && currentSalary !== '') submission.profile.currentSalary = Number(currentSalary);
     if (expectedSalary !== undefined && expectedSalary !== '') submission.profile.expectedSalary = Number(expectedSalary);
     if (writeup !== undefined) submission.profile.writeup = writeup.trim();
+    if (currentCompany !== undefined) submission.profile.currentCompany = currentCompany.trim();
+    if (education !== undefined) {
+      if (typeof education === 'string') {
+        submission.profile.education = education.trim() ? [{ degree: education.trim() }] : [];
+      } else if (Array.isArray(education)) {
+        submission.profile.education = education;
+      }
+    }
 
     // If new resume file uploaded
     if (req.file && req.file.path) {
@@ -2867,6 +2893,10 @@ exports.updateSubmission = async (req, res) => {
         if (currentSalary !== undefined && currentSalary !== '') poolCandidate.currentSalary = Number(currentSalary);
         if (expectedSalary !== undefined && expectedSalary !== '') poolCandidate.expectedSalary = Number(expectedSalary);
         if (writeup !== undefined) poolCandidate.writeup = writeup.trim();
+        if (currentCompany !== undefined) poolCandidate.currentCompany = currentCompany.trim();
+        if (education !== undefined) {
+          poolCandidate.education = typeof education === 'string' ? education.trim() : (education?.[0]?.degree || '');
+        }
 
         if (req.file && req.file.path) {
           poolCandidate.resume = {

@@ -1,5 +1,25 @@
-// backend/services/jobPositionPdfService.js
+const fs = require('fs');
+const path = require('path');
 const puppeteer = require('puppeteer');
+
+let cachedLogoDataUri = null;
+function getLogoDataUri() {
+  if (cachedLogoDataUri) return cachedLogoDataUri;
+  const potentialPaths = [
+    path.join(__dirname, '../assets/syncro1-logo.svg'),
+    path.join(__dirname, '../../Syncro1-WebApp/src/assets/syncro1-logo.svg'),
+  ];
+  for (const p of potentialPaths) {
+    try {
+      if (fs.existsSync(p)) {
+        const svg = fs.readFileSync(p, 'utf8');
+        cachedLogoDataUri = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+        return cachedLogoDataUri;
+      }
+    } catch (_) {}
+  }
+  return '';
+}
 
 function escapeHtml(str) {
   if (!str) return '';
@@ -102,14 +122,22 @@ function generateJobHtml(job, jobPosition, options = {}) {
       align-items: center;
       margin-bottom: 10px;
     }
-    .brand-logo {
-      font-size: 15pt;
-      font-weight: 900;
-      letter-spacing: -0.5px;
-      color: #1e3a8a;
+    .brand-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
-    .brand-logo span {
-      color: #2563eb;
+    .brand-logo-img {
+      height: 36px;
+      width: auto;
+      object-fit: contain;
+      display: block;
+    }
+    .brand-spec-label {
+      font-size: 9.5pt;
+      font-weight: 700;
+      color: #64748b;
+      letter-spacing: 0.5px;
     }
     .job-id-badge {
       background-color: #f1f5f9;
@@ -266,7 +294,10 @@ function generateJobHtml(job, jobPosition, options = {}) {
   <!-- Header -->
   <div class="header">
     <div class="header-top">
-      <div class="brand-logo">Syncro<span>1</span> <span style="font-size: 10pt; font-weight: 600; color: #64748b; margin-left: 8px;">| JOB SPECIFICATION</span></div>
+      <div class="brand-container">
+        ${getLogoDataUri() ? `<img src="${getLogoDataUri()}" alt="Syncro1" class="brand-logo-img" />` : `<div style="font-size: 15pt; font-weight: 900; color: #1e3a8a;">Syncro<span style="color: #2563eb;">1</span></div>`}
+        <span class="brand-spec-label">| JOB SPECIFICATION</span>
+      </div>
       ${job.uniqueId ? `<div class="job-id-badge">ID: ${escapeHtml(job.uniqueId)}</div>` : ''}
     </div>
     <div class="job-title">${escapeHtml(job.title)}</div>

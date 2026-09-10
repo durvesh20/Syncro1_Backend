@@ -589,9 +589,9 @@ class CandidateScoringService {
   }
 
   _scoreEducation(education, job) {
-    const candidateDegrees = (Array.isArray(education) ? education : [])
-      .map(e => e?.degree)
-      .filter(d => d && typeof d === 'string');
+    const candidateDegrees = (Array.isArray(education) ? education : (typeof education === 'string' && education.trim() ? [education.trim()] : []))
+      .map(e => (typeof e === 'object' && e !== null ? e.degree : String(e)))
+      .filter(d => d && typeof d === 'string' && d.trim() !== '');
 
     const primaryDegree = candidateDegrees[0] || (typeof education === 'string' ? education : null);
     if (!primaryDegree && candidateDegrees.length === 0) {

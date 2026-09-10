@@ -117,6 +117,16 @@ const partnerCandidateSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  currentCompany: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  education: {
+    type: String,
+    trim: true,
+    default: ''
+  },
 
   // ==================== RESUME ====================
   resume: {

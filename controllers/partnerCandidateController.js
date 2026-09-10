@@ -34,6 +34,8 @@ exports.listPoolCandidates = async (req, res) => {
         { email: rx },
         { mobile: rx },
         { location: rx },
+        { currentCompany: rx },
+        { education: rx },
         { tags: rx },
         { uniqueId: rx }
       ];
@@ -93,7 +95,8 @@ exports.createPoolCandidate = async (req, res) => {
       email, mobile,
       location, willingToRelocate, totalExperience, relevantExperience,
       noticePeriod, currentSalary, expectedSalary,
-      writeup, tags, lastWorkingDay
+      writeup, tags, lastWorkingDay,
+      currentCompany, education
     } = req.body;
 
     // ── Required fields ──
@@ -166,6 +169,8 @@ exports.createPoolCandidate = async (req, res) => {
       currentSalary: currentSalary !== '' && currentSalary !== undefined ? Number(String(currentSalary).replace(/,/g, '')) : undefined,
       expectedSalary: expectedSalary !== '' && expectedSalary !== undefined ? Number(String(expectedSalary).replace(/,/g, '')) : undefined,
       writeup: writeup?.trim(),
+      currentCompany: currentCompany?.trim() || '',
+      education: education?.trim() || '',
       tags: Array.isArray(tags) ? tags : (tags ? [tags] : []),
       ...(resume && { resume })
     });
@@ -261,7 +266,8 @@ exports.updatePoolCandidate = async (req, res) => {
       email, mobile,
       location, willingToRelocate, totalExperience, relevantExperience,
       noticePeriod, currentSalary, expectedSalary,
-      writeup, tags, lastWorkingDay
+      writeup, tags, lastWorkingDay,
+      currentCompany, education
     } = req.body;
 
     // ── Check uniqueness if email/mobile is being changed ──
@@ -320,6 +326,8 @@ exports.updatePoolCandidate = async (req, res) => {
     if (expectedSalary !== undefined && expectedSalary !== '')
       candidate.expectedSalary = Number(String(expectedSalary).replace(/,/g, ''));
     if (writeup !== undefined) candidate.writeup = writeup.trim();
+    if (currentCompany !== undefined) candidate.currentCompany = currentCompany.trim();
+    if (education !== undefined) candidate.education = education.trim();
     if (tags) candidate.tags = Array.isArray(tags) ? tags : [tags];
 
     // ── New resume (optional) ──
@@ -603,6 +611,8 @@ exports.applyFromPool = async (req, res) => {
         currentSalary: poolCandidate.currentSalary,
         expectedSalary: poolCandidate.expectedSalary,
         lastWorkingDay: poolCandidate.lastWorkingDay,
+        currentCompany: poolCandidate.currentCompany || '',
+        education: poolCandidate.education ? [{ degree: poolCandidate.education }] : [],
         // Partner may override writeup for this specific job
         writeup: submissionWriteup || poolCandidate.writeup
       },
