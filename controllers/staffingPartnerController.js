@@ -1113,6 +1113,40 @@ exports.getJobDetails = async (req, res) => {
   }
 };
 
+// @desc    Download Job Position / JD as PDF
+// @route   GET /api/staffing-partners/jobs/:id/download-jd
+exports.downloadJobPositionPdf = async (req, res) => {
+  try {
+    const Job = require('../models/Job');
+    const JobPosition = require('../models/JobPosition');
+    const jobPositionPdfService = require('../services/jobPositionPdfService');
+
+    const job = await Job.findById(req.params.id).populate('company');
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job position not found' });
+    }
+
+    const jobPosition = await JobPosition.findOne({ jobId: job._id });
+    const pdfBuffer = await jobPositionPdfService.generateJobPdf(job, jobPosition, { isAdmin: false });
+
+    const safeTitle = (job.title || 'Job_Description').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const filename = `JD_${job.uniqueId || safeTitle}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+
+    res.end(pdfBuffer);
+  } catch (error) {
+    console.error('[PARTNER_DOWNLOAD_JD] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate Job Description PDF',
+      error: error.message
+    });
+  }
+};
+
 // ============================================================
 // CANDIDATE SUBMISSION
 // ============================================================

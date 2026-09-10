@@ -40,7 +40,8 @@ const {
   getWorkedJobs,
   resendConsent,
   updateSubmission,
-  getJobScreeningQuestionsForPartner
+  getJobScreeningQuestionsForPartner,
+  downloadJobPositionPdf
 } = require('../controllers/staffingPartnerController');
 
 const {
@@ -191,6 +192,7 @@ router.post('/profile/submit', submitProfile);
 // ==================== JOBS ROUTES ====================
 router.get('/jobs', getAvailableJobs);
 router.get('/jobs/:id', getJobDetails);
+router.get('/jobs/:id/download-jd', downloadJobPositionPdf);
 
 // ==================== PRE-SUBMISSION CHECKS ====================
 

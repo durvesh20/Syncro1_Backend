@@ -41,6 +41,7 @@ const {
   // NEW
   getAllJobs,
   getJobDetail,
+  adminDownloadJobPositionPdf,
   getAllCandidates,
   getCandidateDetail,
   getAllPartners,
@@ -242,6 +243,11 @@ router.get(
 router.get(
   '/jobs/:id/detail',
   getJobDetail
+);
+
+router.get(
+  '/jobs/:id/download-jd',
+  adminDownloadJobPositionPdf
 );
 
 // All candidates
