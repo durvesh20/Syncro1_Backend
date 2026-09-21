@@ -812,6 +812,32 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
     order: r.order ?? i + 1
   }));
 
+  // Self-healing: If candidate is currently in an initial round state (SLOTS_NOT_PUBLISHED, SLOTS_PUBLISHED, ASSESSMENT_PENDING)
+  // but was never actually shortlisted by the company (company has not reviewed or shortlisted them)
+  const isPostShortlistState = ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING'].includes(candidate.status);
+  if (isPostShortlistState) {
+    const hasCompanyShortlist = 
+      (candidate.auditTrail && candidate.auditTrail.some(a => a.action === 'SHORTLIST')) ||
+      (candidate.statusHistory && candidate.statusHistory.some(h => 
+        (h.status === 'SHORTLISTED' || (h.notes && /shortlist/i.test(h.notes) && h.status !== 'SUBMITTED'))
+      ));
+
+    const wasSubmitted = candidate.statusHistory && candidate.statusHistory.some(h => h.status === 'SUBMITTED');
+
+    if (!hasCompanyShortlist && wasSubmitted) {
+      candidate.status = 'SUBMITTED';
+      if (candidate.rounds && candidate.rounds.length > 0) {
+        candidate.rounds.forEach(r => {
+          if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED' || r.status === 'ASSESSMENT_PENDING') {
+            r.status = 'NOT_STARTED';
+          }
+        });
+      }
+      await candidate.save();
+      return;
+    }
+  }
+
   // Case 1: Candidate has NO rounds initialized yet (empty array or undefined)
   if (!candidate.rounds || candidate.rounds.length === 0) {
     candidate.pipelineTemplate = normalizedJobTemplate;
@@ -877,14 +903,15 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
       });
     } else {
       // Initialize from beginning
+      const isPrePipelineReview = ['SUBMITTED', 'UNDER_REVIEW', 'COMPANY_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'ADMIN_REVIEW'].includes(candidate.status);
       candidate.rounds = normalizedJobTemplate.map((r, idx) => ({
         roundType: r.roundType,
         order: r.order,
-        status: idx === 0 ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
+        status: (idx === 0 && !isPrePipelineReview) ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
         slots: [],
         rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
       }));
-      if (candidate.rounds.length > 0 && ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING', 'SLOTS_PUBLISHED', 'SUBMITTED', 'UNDER_REVIEW'].includes(candidate.status)) {
+      if (candidate.rounds.length > 0 && ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING', 'SLOTS_PUBLISHED'].includes(candidate.status)) {
         candidate.status = candidate.rounds[0].status;
       }
     }
@@ -928,11 +955,12 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
     const candTemplateStr = JSON.stringify((candidate.pipelineTemplate || []).map(r => r.roundType));
 
     if (jobTemplateStr !== candTemplateStr) {
+      const isPrePipelineReview = ['SUBMITTED', 'UNDER_REVIEW', 'COMPANY_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'ADMIN_REVIEW'].includes(candidate.status);
       candidate.pipelineTemplate = normalizedJobTemplate;
-      candidate.rounds = normalizedJobTemplate.map(r => ({
+      candidate.rounds = normalizedJobTemplate.map((r, i) => ({
         roundType: r.roundType,
         order: r.order,
-        status: getInitialRoundState(r.roundType),
+        status: (i === 0 && !isPrePipelineReview) ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
         slots: [],
         rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
       }));

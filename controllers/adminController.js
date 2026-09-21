@@ -811,11 +811,13 @@ exports.approvePayout = async (req, res) => {
 
     const notificationEngine = require('../services/notificationEngine');
     if (payout.staffingPartner.user) {
+      const candidateName = payout.candidate ? `${payout.candidate.firstName || ''} ${payout.candidate.lastName || ''}`.trim() || 'Candidate' : 'Candidate';
+      const formattedAmount = (payout.amount?.netPayable ?? 0).toLocaleString('en-IN');
       await notificationEngine.send({
         recipientId: payout.staffingPartner.user._id || payout.staffingPartner.user,
         type: 'PAYOUT_APPROVED',
         title: '✅ Payout Approved!',
-        message: `Your payout of ₹${payout.amount.netPayable.toLocaleString('en-IN')} for ${payout.candidate.firstName} ${payout.candidate.lastName} has been approved and will be processed soon.`,
+        message: `Your payout of ₹${formattedAmount} for ${candidateName} has been approved and will be processed soon.`,
         data: {
           entityType: 'Payout',
           entityId: payout._id,
@@ -885,13 +887,15 @@ exports.processPayout = async (req, res) => {
     if (notes) payout.notes = notes;
     await payout.save();
 
-    await Candidate.findByIdAndUpdate(payout.candidate._id, {
-      'payout.status': 'PAID',
-      'payout.paidAt': new Date(),
-      'payout.transactionId': transactionId,
-      'payout.utrNumber': utrNumber,
-      'payout.paymentMethod': paymentMethod || 'BANK_TRANSFER'
-    });
+    if (payout.candidate?._id || payout.candidate) {
+      await Candidate.findByIdAndUpdate(payout.candidate._id || payout.candidate, {
+        'payout.status': 'PAID',
+        'payout.paidAt': new Date(),
+        'payout.transactionId': transactionId,
+        'payout.utrNumber': utrNumber,
+        'payout.paymentMethod': paymentMethod || 'BANK_TRANSFER'
+      });
+    }
 
     await commissionService._updatePartnerMetrics(
       payout.staffingPartner._id,

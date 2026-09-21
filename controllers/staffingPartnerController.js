@@ -3346,15 +3346,15 @@ exports.getDashboard = async (req, res) => {
           summary: earningsSummary,
           upcomingPayouts: upcomingPayouts.map(p => ({
             _id: p._id,
-            candidate: `${p.candidate.firstName} ${p.candidate.lastName}`,
-            amount: p.amount.netPayable,
-            eligibleDate: p.replacementGuarantee.endDate,
-            daysRemaining: p.getDaysRemaining()
+            candidate: p.candidate ? `${p.candidate.firstName || ''} ${p.candidate.lastName || ''}`.trim() || 'N/A' : 'N/A',
+            amount: p.amount?.netPayable ?? 0,
+            eligibleDate: p.replacementGuarantee?.endDate,
+            daysRemaining: typeof p.getDaysRemaining === 'function' ? p.getDaysRemaining() : 0
           })),
           recentPayouts: recentPayouts.map(p => ({
             _id: p._id,
-            candidate: `${p.candidate.firstName} ${p.candidate.lastName}`,
-            amount: p.amount.netPayable,
+            candidate: p.candidate ? `${p.candidate.firstName || ''} ${p.candidate.lastName || ''}`.trim() || 'N/A' : 'N/A',
+            amount: p.amount?.netPayable ?? 0,
             status: p.status,
             paidAt: p.payment?.paidAt
           }))
@@ -3414,10 +3414,10 @@ exports.getEarnings = async (req, res) => {
     ]);
 
     const enrichedPayouts = payouts.map(p => ({
-      ...p.toObject(),
-      daysRemaining: p.getDaysRemaining(),
-      isEligible: p.checkEligibility(),
-      candidateName: `${p.candidate.firstName} ${p.candidate.lastName}`
+      ...(p.toObject ? p.toObject() : p),
+      daysRemaining: typeof p.getDaysRemaining === 'function' ? p.getDaysRemaining() : 0,
+      isEligible: typeof p.checkEligibility === 'function' ? p.checkEligibility() : false,
+      candidateName: p.candidate ? `${p.candidate.firstName || ''} ${p.candidate.lastName || ''}`.trim() || 'N/A' : 'N/A'
     }));
 
     const summary = {
@@ -3467,11 +3467,11 @@ exports.getEarnings = async (req, res) => {
         payouts: enrichedPayouts,
         upcomingEligible: upcomingEligible.map(p => ({
           _id: p._id,
-          candidate: `${p.candidate.firstName} ${p.candidate.lastName}`,
-          job: p.job.title,
-          amount: p.amount.netPayable,
-          eligibleDate: p.replacementGuarantee.endDate,
-          daysRemaining: p.getDaysRemaining()
+          candidate: p.candidate ? `${p.candidate.firstName || ''} ${p.candidate.lastName || ''}`.trim() || 'N/A' : 'N/A',
+          job: p.job?.title || 'N/A',
+          amount: p.amount?.netPayable ?? 0,
+          eligibleDate: p.replacementGuarantee?.endDate,
+          daysRemaining: typeof p.getDaysRemaining === 'function' ? p.getDaysRemaining() : 0
         })),
         pagination: {
           current: sanitizedPage,
