@@ -9,7 +9,8 @@ const apiLogSchema = new mongoose.Schema(
     },
     client_id: {
       type: String,
-      required: true,
+      required: false,
+      default: null,
       index: true
     },
     company_id: {

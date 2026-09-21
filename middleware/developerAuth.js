@@ -53,6 +53,7 @@ exports.protectDeveloperPortal = async (req, res, next) => {
 
     req.developer = {
       id: account._id,
+      client_id: `portal_${account._id}`,
       email: account.email,
       name: account.name,
       company_id: account.company_id,
@@ -184,6 +185,7 @@ exports.protectDeveloper = async (req, res, next) => {
 
       req.developer = {
         id: account._id,
+        client_id: `portal_${account._id}`,
         company_id: account.company_id,
         integration_id: account.integration_id,
         scopes: ['*'], // Full scopes for portal users accessing programmatic APIs

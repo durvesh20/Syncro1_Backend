@@ -1983,7 +1983,7 @@ exports.markJoined = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Candidate marked as Joined. Commission and placement processing initiated.',
+      message: 'Candidate marked as Joined successfully.',
       data: integrationService.mapInternalCandidateToApi(updatedCandidate),
       request_id: req.requestId
     });
@@ -3979,7 +3979,7 @@ exports.listApiLogs = async (req, res) => {
       success: true,
       data: logs.map(l => ({
         id: String(l._id),
-        request_id: l.request_id,
+        request_id: l.request_id || `req_${String(l._id).slice(-12)}`,
         method: l.method,
         path: l.path,
         status_code: l.status_code,
@@ -4011,11 +4011,26 @@ exports.listApiLogs = async (req, res) => {
  */
 exports.getApiLogDetail = async (req, res) => {
   const companyId = req.developer.company_id;
-  try {
-    const log = await ApiLog.findOne({
-      company_id: companyId,
-      $or: [{ request_id: req.params.requestId }, { _id: req.params.requestId }]
+  const { requestId } = req.params;
+
+  if (!requestId || requestId === 'undefined' || requestId === 'null') {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_REQUEST_ID', message: 'Valid request_id is required' },
+      request_id: req.requestId
     });
+  }
+
+  try {
+    const isObjectId = /^[0-9a-fA-F]{24}$/.test(requestId);
+    const filter = {
+      company_id: companyId,
+      ...(isObjectId
+        ? { $or: [{ request_id: requestId }, { _id: requestId }] }
+        : { request_id: requestId })
+    };
+
+    const log = await ApiLog.findOne(filter).lean();
 
     if (!log) {
       return res.status(404).json({

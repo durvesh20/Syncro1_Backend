@@ -2,7 +2,9 @@
 node_modules/
 
 # Environment variables
+.env
 .env.*
+!.env.example
 
 # Logs
 logs/
@@ -12,6 +14,10 @@ locust
 
 # Uploads
 uploads/
+
+# Editor & IDE directories
+.vscode/
+.idea/
 
 # OS files
 .DS_Store

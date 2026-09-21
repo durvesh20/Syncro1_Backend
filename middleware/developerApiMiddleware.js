@@ -129,8 +129,16 @@ exports.apiLoggerMiddleware = (req, res, next) => {
       try {
         if (!req.developer) return;
 
+        const requestPath = req.originalUrl || req.url || '';
+        // Skip logging log-reading requests themselves to avoid log pollution
+        if (requestPath.includes('/logs/api')) {
+          return;
+        }
+
+        const companyId = req.developer.company_id;
+        if (!companyId) return;
+
         const latencyMs = Date.now() - startTime;
-        let errorCode = null;
 
         // Mask sensitive fields if present in body
         let sanitizedBody = null;
@@ -141,12 +149,16 @@ exports.apiLoggerMiddleware = (req, res, next) => {
           delete sanitizedBody.token;
         }
 
+        const clientId = req.developer.client_id
+          ? String(req.developer.client_id)
+          : (req.developer.id ? `portal_${req.developer.id}` : 'portal_session');
+
         await ApiLog.create({
           request_id: req.requestId || `req_${uuidv4().replace(/-/g, '').slice(0, 16)}`,
-          client_id: req.developer.client_id,
-          company_id: req.developer.company_id,
+          client_id: clientId,
+          company_id: companyId,
           method: req.method,
-          path: req.originalUrl || req.url,
+          path: requestPath,
           status_code: res.statusCode,
           latency_ms: latencyMs,
           ip: req.ip || req.connection?.remoteAddress,
