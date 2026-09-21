@@ -175,6 +175,7 @@ const candidateSchema = new mongoose.Schema({
       'REJECTED',
       'CLIENT_PORTAL_DUPLICATE',
       'CANDIDATE_DROP',
+      'NOT_JOINED',
       'WITHDRAWN',
       'ON_HOLD',
       'SLOT_ASSIGNED',

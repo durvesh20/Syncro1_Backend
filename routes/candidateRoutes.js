@@ -493,6 +493,24 @@ router.get("/interview/agree/:token", async (req, res) => {
             channels: { inApp: true, email: true },
           });
         }
+
+        // Emit webhook to ATS
+        try {
+          const webhookService = require("../services/webhookService");
+          const companyId = candidate.company?._id || candidate.company;
+          if (companyId) {
+            webhookService.emitEvent(companyId, 'interview.consent_received', {
+              candidate_id: candidate.uniqueId,
+              external_candidate_id: candidate.external_candidate_id || null,
+              job_id: candidate.job?.uniqueId || String(candidate.job?._id || ''),
+              response: 'ACCEPTED',
+              responded_at: candidate.interviewConfig.respondedAt,
+              interview_mode: candidate.interviewConfig.mode
+            }, { entity_type: 'CANDIDATE', entity_id: candidate._id });
+          }
+        } catch (weErr) {
+          console.error('[INTERVIEW] Webhook emission failed:', weErr.message);
+        }
       } catch (err) {
         console.error("[INTERVIEW] Notification failed:", err.message);
       }
@@ -527,7 +545,7 @@ router.get("/interview/disagree/:token", async (req, res) => {
     const candidate = await Candidate.findOne({
       "interviewConfig.confirmationToken": token,
     })
-      .populate("job", "title")
+      .populate("job", "title uniqueId")
       .populate("company", "companyName user")
       .populate("submittedBy", "firmName user");
 
@@ -571,6 +589,24 @@ router.get("/interview/disagree/:token", async (req, res) => {
             data: { candidateId: candidate._id },
             channels: { inApp: true, email: true },
           });
+        }
+
+        // Emit webhook to ATS
+        try {
+          const webhookService = require("../services/webhookService");
+          const companyId = candidate.company?._id || candidate.company;
+          if (companyId) {
+            webhookService.emitEvent(companyId, 'interview.consent_received', {
+              candidate_id: candidate.uniqueId,
+              external_candidate_id: candidate.external_candidate_id || null,
+              job_id: candidate.job?.uniqueId || String(candidate.job?._id || ''),
+              response: 'DECLINED',
+              responded_at: candidate.interviewConfig.respondedAt,
+              interview_mode: candidate.interviewConfig.mode
+            }, { entity_type: 'CANDIDATE', entity_id: candidate._id });
+          }
+        } catch (weErr) {
+          console.error('[INTERVIEW] Webhook emission failed:', weErr.message);
         }
       } catch (err) {
         console.error("[INTERVIEW] Notification failed:", err.message);

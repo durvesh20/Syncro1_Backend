@@ -67,7 +67,8 @@ const interviewSlotSchema = new mongoose.Schema(
         partner: {
           type: mongoose.Schema.Types.ObjectId,
           ref: 'StaffingPartner',
-          required: true,
+          required: false,
+          default: null,
         },
         bookedAt: {
           type: Date,
@@ -145,6 +146,14 @@ const interviewSlotSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       default: null,
+    },
+
+    // Source channel (PLATFORM UI or developer API)
+    source_system: {
+      type: String,
+      enum: ['PLATFORM', 'API'],
+      default: 'PLATFORM',
+      index: true,
     },
   },
   {

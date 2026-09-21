@@ -20,6 +20,10 @@ const apiClientSchema = new mongoose.Schema(
       sparse: true,
       index: true
     },
+    api_key: {
+      type: String,
+      default: null
+    },
     environment: {
       type: String,
       enum: ['PRODUCTION', 'SANDBOX'],
@@ -65,7 +69,7 @@ const apiClientSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['ACTIVE', 'REVOKED'],
+      enum: ['ACTIVE', 'INACTIVE', 'REVOKED'],
       default: 'ACTIVE',
       index: true
     },

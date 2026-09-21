@@ -1807,6 +1807,22 @@ exports.rejectJob = async (req, res) => {
     job.addToHistory('REJECTED', req.user._id, {}, reason);
     await job.save();
 
+    // Emit developer webhook: job.rejected
+    try {
+      const webhookService = require('../services/webhookService');
+      const compId = job.company?._id || job.company;
+      webhookService.emitEvent(compId, 'job.rejected', {
+        job_id: job.uniqueId,
+        external_job_id: job.external_job_id,
+        title: job.title,
+        status: 'REJECTED',
+        rejection_reason: reason,
+        rejected_at: job.rejectedAt
+      }, { entity_type: 'JOB', entity_id: job._id });
+    } catch (whErr) {
+      console.error('[Admin rejectJob] Webhook emission error:', whErr.message);
+    }
+
     const companyName = job.company?.companyName || 'Unknown Company';
     const companyUserObj = job.company?.user;
     const recipientUserId = companyUserObj?._id || companyUserObj;
@@ -2180,6 +2196,27 @@ exports.approveEditRequest = async (req, res) => {
     editRequest.appliedChanges = appliedChanges;
     await editRequest.save();
 
+    // Emit Developer Webhook events
+    try {
+      const webhookService = require('../services/webhookService');
+      webhookService.emitEvent(job.company?._id || job.company, 'job.edit_approved', {
+        job_id: job.uniqueId,
+        external_job_id: job.external_job_id || null,
+        edit_request_id: editRequest._id,
+        applied_changes: appliedChanges,
+        status: 'ACTIVE'
+      }, { entity_type: 'JOB', entity_id: job._id });
+
+      webhookService.emitEvent(job.company?._id || job.company, 'job.updated', {
+        job_id: job.uniqueId,
+        external_job_id: job.external_job_id || null,
+        title: job.title,
+        status: 'ACTIVE'
+      }, { entity_type: 'JOB', entity_id: job._id });
+    } catch (whErr) {
+      console.error('[Admin approveEditRequest] Webhook emit error:', whErr.message);
+    }
+
     await auditService.log({
       actor: req.user._id,
       actorRole: req.user.role,
@@ -2311,6 +2348,20 @@ exports.rejectEditRequest = async (req, res) => {
     job.rejectedEditCount += 1;
     job.addToHistory('EDIT_REJECTED', req.user._id, editRequest.requestedChanges, reason);
     await job.save();
+
+    // Emit developer webhook: job.edit_rejected
+    try {
+      const webhookService = require('../services/webhookService');
+      webhookService.emitEvent(job.company?._id || job.company, 'job.edit_rejected', {
+        job_id: job.uniqueId,
+        external_job_id: job.external_job_id || null,
+        edit_request_id: editRequest._id,
+        reason: reason.trim(),
+        status: 'ACTIVE'
+      }, { entity_type: 'JOB', entity_id: job._id });
+    } catch (whErr) {
+      console.error('[Admin rejectEditRequest] Webhook emit error:', whErr.message);
+    }
 
     const jobStats = job.getEditStats();
     const shouldWarn = job.rejectedEditCount >= 3;

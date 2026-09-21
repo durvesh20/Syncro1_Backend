@@ -15,6 +15,9 @@ router.post('/change-password', protectDeveloperPortal, developerAuthController.
 // API Key management (protected by developer portal session)
 router.get('/api-keys', protectDeveloperPortal, developerApiKeyController.listApiKeys);
 router.post('/api-keys', protectDeveloperPortal, developerApiKeyController.createApiKey);
+router.patch('/api-keys/:id/status', protectDeveloperPortal, developerApiKeyController.updateApiKeyStatus);
+router.get('/api-keys/:id/logs', protectDeveloperPortal, developerApiKeyController.getApiKeyLogs);
 router.delete('/api-keys/:id', protectDeveloperPortal, developerApiKeyController.revokeApiKey);
 
 module.exports = router;
+

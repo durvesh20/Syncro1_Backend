@@ -108,12 +108,25 @@ exports.protectDeveloper = async (req, res, next) => {
     if (apiKey) {
       // API Key based access
       const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
-      const client = await ApiClient.findOne({ key_hash: keyHash, status: 'ACTIVE' });
+      const client = await ApiClient.findOne({
+        $or: [
+          { key_hash: keyHash },
+          { api_key: apiKey }
+        ]
+      });
       
-      if (!client) {
+      if (!client || client.status === 'REVOKED') {
         return res.status(401).json({
           success: false,
           error: { code: 'INVALID_TOKEN', message: 'API key is invalid or has been revoked' },
+          request_id: req.requestId || null
+        });
+      }
+
+      if (client.status === 'INACTIVE') {
+        return res.status(401).json({
+          success: false,
+          error: { code: 'KEY_DEACTIVATED', message: 'API key is currently deactivated. Please re-activate it in the Developer Portal.' },
           request_id: req.requestId || null
         });
       }
@@ -198,7 +211,7 @@ exports.protectDeveloper = async (req, res, next) => {
 
 /**
  * Require specific scope for developer API route
- * @param {string} scope e.g., 'jobs:read', 'jobs:write'
+ * @param {string|string[]} scope e.g., 'jobs:read', ['candidates:write', 'statuses:write']
  */
 exports.requireScope = (scope) => {
   return (req, res, next) => {
@@ -214,12 +227,15 @@ exports.requireScope = (scope) => {
     }
 
     const scopes = req.developer.scopes || [];
-    if (!scopes.includes(scope) && !scopes.includes('*')) {
+    const required = Array.isArray(scope) ? scope : [scope];
+    const hasPermission = scopes.includes('*') || required.some(s => scopes.includes(s));
+
+    if (!hasPermission) {
       return res.status(403).json({
         success: false,
         error: {
           code: 'INSUFFICIENT_SCOPE',
-          message: `This endpoint requires the '${scope}' scope`
+          message: `This endpoint requires one of the following scopes: ${required.join(', ')}`
         },
         request_id: req.requestId || null
       });
