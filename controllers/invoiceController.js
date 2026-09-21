@@ -547,11 +547,11 @@ exports.sendInvoice = async (req, res) => {
                 </tr>
                 <tr>
                   <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;"><strong>Candidate:</strong></td>
-                  <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${invoice.candidate.firstName} ${invoice.candidate.lastName}</td>
+                  <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${invoice.candidate ? `${invoice.candidate.firstName || ''} ${invoice.candidate.lastName || ''}`.trim() : 'N/A'}</td>
                 </tr>
                 <tr>
                   <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;"><strong>Position:</strong></td>
-                  <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${invoice.job.title}</td>
+                  <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${invoice.job?.title || 'N/A'}</td>
                 </tr>
                 <tr>
                   <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;"><strong>Amount:</strong></td>

@@ -72,10 +72,10 @@ class CandidateLifecycleService {
         order: r.order ?? i + 1
       }));
       candidate.pipelineTemplate = normalized;
-      candidate.rounds = normalized.map(r => ({
+      candidate.rounds = normalized.map((r, i) => ({
         roundType: r.roundType,
         order: r.order,
-        status: getInitialRoundState(r.roundType),
+        status: i === 0 ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
         slots: [],
         rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
       }));
