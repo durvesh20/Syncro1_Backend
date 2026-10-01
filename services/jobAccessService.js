@@ -186,7 +186,7 @@ class JobAccessService {
 
     // Build query
     const query = {
-      status: 'ACTIVE',
+      status: { $in: ['ACTIVE', 'PAUSED'] },
       eligiblePlans: { $in: accessiblePlans }
     };
 
@@ -492,7 +492,7 @@ class JobAccessService {
 
     // Fetch unique locations and companies for filter options
     const activeJobs = await Job.find({
-      status: 'ACTIVE',
+      status: { $in: ['ACTIVE', 'PAUSED'] },
       eligiblePlans: { $in: accessiblePlans }
     }).select('location company').populate('company', 'companyName').lean();
 
@@ -571,7 +571,7 @@ class JobAccessService {
     }
 
     const query = {
-      status: 'ACTIVE',
+      status: { $in: ['ACTIVE', 'PAUSED'] },
       eligiblePlans: { $in: accessiblePlans }
     };
 

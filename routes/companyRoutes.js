@@ -2,6 +2,7 @@
 const express = require('express');
 // NOTE: candidateRoutes.js handles public candidate-side offer routes (accept/reject via token).
 const router = express.Router();
+const jobOnHoldGuard = require('../middleware/jobOnHoldGuard');
 
 const {
   // Profile Management
@@ -45,6 +46,7 @@ const {
   confirmInterviewSlot,
   getJobInterviewSlots,
   cancelInterviewSlot,
+  updateInterviewSlot,
   confirmInterviewDetails,
   getInterviewSchedule,
   
@@ -364,21 +366,22 @@ router.delete(
 // ==================== CANDIDATE ROUTES ====================
 router.get('/candidates', checkCompanyPermission('VIEW_CANDIDATES'), getAllCandidates);
 router.get('/candidates/:id', checkCompanyPermission('VIEW_CANDIDATES'), getCandidate);
-router.put("/candidates/:id/shortlist", checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), shortlistCandidate);
-router.put("/candidates/:id/reject", checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), rejectCandidate);
+router.put("/candidates/:id/shortlist", checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), jobOnHoldGuard, shortlistCandidate);
+router.put("/candidates/:id/reject", checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), jobOnHoldGuard, rejectCandidate);
 
 // ── Interview Slot Flow ───────────────────────────────────────────────────────
-router.post('/jobs/:jobId/interview-slots', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), createInterviewSlots);
+router.post('/jobs/:jobId/interview-slots', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), jobOnHoldGuard, createInterviewSlots);
 router.get('/jobs/:jobId/interview-slots', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), getJobInterviewSlots);
-router.delete('/jobs/:jobId/interview-slots/:slotId', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), cancelInterviewSlot);
-router.post('/candidates/:id/confirm-interview', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), confirmInterviewDetails);
+router.put('/jobs/:jobId/interview-slots/:slotId', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), jobOnHoldGuard, updateInterviewSlot);
+router.delete('/jobs/:jobId/interview-slots/:slotId', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), jobOnHoldGuard, cancelInterviewSlot);
+router.post('/candidates/:id/confirm-interview', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), jobOnHoldGuard, confirmInterviewDetails);
 router.get('/interview-schedule', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), getInterviewSchedule);
 
 router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), addNote);
 
 // ==================== PIPELINE ROUTES (Phase 1–4) ====================
 // These sit alongside the existing candidate routes — no existing routes modified.
-const PIPELINE_MW = [checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES')];
+const PIPELINE_MW = [checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), jobOnHoldGuard];
 
 // Phase 1–2
 router.put('/candidates/:id/pipeline/shortlist',              ...PIPELINE_MW, pipelineShortlist);

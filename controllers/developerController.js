@@ -1529,6 +1529,112 @@ const _performDeveloperCandidateOverride = async ({
   const actorFirstName = company?.user?.firstName || company?.companyName || 'Developer';
   const actorLastName = company?.user?.lastName || 'API';
 
+  if (['REJECTED', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'].includes(targetState)) {
+    try {
+      const COMPLETED_INTERVIEW_STATES = [
+        'INTERVIEW_CONDUCTED',
+        'ROUND_SELECTED_NEXT',
+        'ROUND_SELECTED_DIRECT_HR',
+        'HR_SELECTED',
+        'OFFER_SENT',
+        'OFFER_ACCEPTED',
+        'ONBOARDING',
+        'JOINED',
+      ];
+      const candidateIdStr = candidate._id ? candidate._id.toString() : '';
+      const assignedSlotId = candidate.assignedSlot?._id || candidate.assignedSlot;
+      const assignedSlotIdStr = assignedSlotId ? assignedSlotId.toString() : '';
+
+      const queryConditions = [
+        { candidateId: candidate._id },
+        { 'bookedCandidates.candidate': candidate._id }
+      ];
+      if (assignedSlotId) {
+        queryConditions.unshift({ _id: assignedSlotId });
+      }
+
+      const slots = await InterviewSlot.find({ $or: queryConditions });
+      const now = new Date();
+
+      if (slots && slots.length > 0) {
+        for (const slot of slots) {
+          let isPastSlot = false;
+          if (slot.date) {
+            const slotDate = new Date(slot.date);
+            if (slot.startTime) {
+              const parts = slot.startTime.trim().split(' ');
+              if (parts.length === 2) {
+                let [hours, minutes] = parts[0].split(':').map(Number);
+                const modifier = parts[1].toUpperCase();
+                if (modifier === 'PM' && hours < 12) hours += 12;
+                if (modifier === 'AM' && hours === 12) hours = 0;
+                slotDate.setHours(hours, minutes, 0, 0);
+              }
+            } else {
+              slotDate.setHours(23, 59, 59, 999);
+            }
+            isPastSlot = slotDate < now;
+          }
+
+          const isCurrentAssignedSlot = assignedSlotIdStr && slot._id.toString() === assignedSlotIdStr;
+          const isTaggedToThisCand = Boolean(
+            slot.isTagged && slot.candidateId && slot.candidateId.toString() === candidateIdStr
+          );
+
+          if (isPastSlot && !isCurrentAssignedSlot && !isTaggedToThisCand) {
+            continue;
+          }
+
+          if (COMPLETED_INTERVIEW_STATES.includes(fromState) && isPastSlot) {
+            continue;
+          }
+
+          if (isTaggedToThisCand || (slot.candidateId && slot.candidateId.toString() === candidateIdStr)) {
+            slot.isTagged = false;
+            slot.candidateId = null;
+            slot.maxCandidates = slot.maxCandidates || 1;
+          }
+
+          slot.bookedCandidates = (slot.bookedCandidates || []).filter(
+            b => b.candidate && b.candidate.toString() !== candidateIdStr
+          );
+
+          const activeBookings = slot.bookedCandidates.filter(b => b.bookingStatus === 'BOOKED').length;
+          slot.availableSpots = Math.max(0, (slot.maxCandidates || 1) - activeBookings);
+
+          if (slot.availableSpots > 0 && slot.status !== 'CANCELLED') {
+            slot.status = 'ACTIVE';
+          }
+
+          slot.activityLogs = slot.activityLogs || [];
+          slot.activityLogs.push({
+            action: 'SLOT_OPENED_ON_REJECT',
+            performedBy: userId,
+            performedByRole: 'developer',
+            performedByName: `${actorFirstName} ${actorLastName}`.trim(),
+            details: `Candidate ${candidate.firstName} ${candidate.lastName} was rejected (${action}). Slot opened to candidate pool. Reason: ${reason || ''}`.trim(),
+            timestamp: new Date()
+          });
+
+          await slot.save();
+        }
+      }
+
+      candidate.assignedSlot = null;
+      candidate.interviewConfig = null;
+
+      if (Array.isArray(candidate.rounds)) {
+        for (const r of candidate.rounds) {
+          if (!COMPLETED_INTERVIEW_STATES.includes(r.status)) {
+            r.slots = [];
+          }
+        }
+      }
+    } catch (slotErr) {
+      console.error('[DEVELOPER API] Error freeing uncompleted slot:', slotErr);
+    }
+  }
+
   candidate.status = targetState;
   candidate.statusHistory = candidate.statusHistory || [];
   candidate.statusHistory.push({

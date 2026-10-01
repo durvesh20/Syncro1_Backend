@@ -427,6 +427,12 @@ exports.applyFromPool = async (req, res) => {
     // ── 2. Load job ──
     const job = await Job.findById(req.params.jobId).populate('company', 'companyName');
     if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+    if (job.status === 'PAUSED') {
+      return res.status(400).json({
+        success: false,
+        message: 'This job is currently paused. Candidate submissions cannot be uploaded until it is active.'
+      });
+    }
     if (job.status !== 'ACTIVE') {
       return res.status(400).json({ success: false, message: 'This job is no longer accepting applications' });
     }

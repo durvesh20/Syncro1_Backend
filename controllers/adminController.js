@@ -1146,15 +1146,199 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
     };
 
     const explodedSlots = [];
-    validSlots.forEach(slot => {
+    const Candidate = require('../models/Candidate');
+
+    const taggedIds = validSlots.map(s => s.taggedCandidateId).filter(Boolean).map(id => id.toString());
+    const duplicateId = taggedIds.find((id, idx) => taggedIds.indexOf(id) !== idx);
+    if (duplicateId) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot tag the same candidate to multiple interview slots at the same time.'
+      });
+    }
+
+    for (const slot of validSlots) {
       const avg = parseInt(slot.averageTime) || 30;
-      const count = parseInt(slot.maxCandidates) || 1;
+      const count = slot.taggedCandidateId ? 1 : (parseInt(slot.maxCandidates) || 1);
       let currentStartTime = slot.startTime;
+
+      let taggedCand = null;
+      if (slot.taggedCandidateId) {
+        taggedCand = await Candidate.findOne({
+          _id: slot.taggedCandidateId,
+          job: job._id
+        });
+
+        if (!taggedCand) {
+          return res.status(404).json({
+            success: false,
+            message: 'Tagged candidate not found for this job'
+          });
+        }
+
+        // 1. Consent validation
+        if (
+          taggedCand.status === 'CONSENT_PENDING' ||
+          taggedCand.status === 'CONSENT_SENT' ||
+          taggedCand.status === 'CONSENT_DENIED' ||
+          taggedCand.status === 'DRAFT' ||
+          taggedCand.whatsappConsent?.status === 'PENDING' ||
+          taggedCand.whatsappConsent?.status === 'DENIED' ||
+          taggedCand.consent?.consentStatus === 'PENDING_CONFIRMATION' ||
+          taggedCand.consent?.consentStatus === 'DENIED'
+        ) {
+          return res.status(400).json({
+            success: false,
+            message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is pending consent and cannot be tagged for an interview slot.`
+          });
+        }
+
+        // 2. Shortlisted pipeline status validation
+        const allowedCandidateStatuses = [
+          'SHORTLISTED',
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'ROUND_SELECTED_NEXT',
+          'ROUND_SELECTED_DIRECT_HR',
+          'HR_ROUND_PENDING',
+          'RESCHEDULE_REQUESTED',
+          'ASSESSMENT_PASSED'
+        ];
+        if (!allowedCandidateStatuses.includes(taggedCand.status)) {
+          return res.status(400).json({
+            success: false,
+            message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is not shortlisted or eligible for interview scheduling (status: ${taggedCand.status}).`
+          });
+        }
+
+        // Check if candidate is already tagged or assigned to an active slot for their current round
+        if (['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONFIRMED'].includes(taggedCand.status)) {
+          const existingTaggedSlot = await InterviewSlot.findOne({
+            job: job._id,
+            status: { $ne: 'CANCELLED' },
+            ...(roundType ? { roundType } : {}),
+            $or: [
+              { candidateId: taggedCand._id },
+              { 'bookedCandidates.candidate': taggedCand._id },
+              ...(taggedCand.assignedSlot ? [{ _id: taggedCand.assignedSlot }] : [])
+            ]
+          });
+
+          if (existingTaggedSlot) {
+            return res.status(400).json({
+              success: false,
+              message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is already tagged to an active interview slot (${existingTaggedSlot.startTime} - ${existingTaggedSlot.endTime}).`
+            });
+          }
+        }
+
+        // Check if candidate is eligible for the chosen roundType
+        if (roundType && taggedCand.rounds && taggedCand.rounds.length > 0) {
+          const sType = roundType.trim().toLowerCase();
+          const validHrNames = ['hr', 'hr round', 'hr_round', 'human resource', 'human resource round'];
+          const isSlotHr = validHrNames.includes(sType);
+
+          // Find candidate's current active round index
+          let currentActiveIdx = -1;
+          const ACTIVE_ROUND_STATES = [
+            'SLOTS_NOT_PUBLISHED',
+            'SLOTS_PUBLISHED',
+            'SLOT_ASSIGNED',
+            'RESCHEDULE_REQUESTED',
+            'SLOT_DETAILS_SHARED',
+            'INTERVIEW_CONDUCTED',
+            'ROUND_ON_HOLD',
+            'HR_ROUND_PENDING',
+            'ASSESSMENT_PENDING',
+            'ASSESSMENT_LINK_SENT',
+            'ASSESSMENT_LINK_COMPLETE'
+          ];
+          for (let rIdx = 0; rIdx < taggedCand.rounds.length; rIdx++) {
+            if (ACTIVE_ROUND_STATES.includes(taggedCand.rounds[rIdx].status)) {
+              currentActiveIdx = rIdx;
+              break;
+            }
+          }
+
+          if (currentActiveIdx === -1) {
+            for (let rIdx = 0; rIdx < taggedCand.rounds.length; rIdx++) {
+              const r = taggedCand.rounds[rIdx];
+              const isCleared = ['PASSED', 'ROUND_SELECTED_NEXT', 'ROUND_PASSED', 'ASSESSMENT_PASSED', 'CLEARED'].includes(r.status) ||
+                ['SELECTED_NEXT_ROUND', 'PASSED', 'PASS'].includes(r.outcome?.decision);
+              if (!isCleared) {
+                currentActiveIdx = rIdx;
+                break;
+              }
+            }
+          }
+          if (currentActiveIdx === -1) currentActiveIdx = 0;
+
+          let targetRoundIdx = taggedCand.rounds.findIndex(r => {
+            const rName = (r.roundType || '').trim().toLowerCase();
+            return isSlotHr ? validHrNames.includes(rName) : rName === sType;
+          });
+
+          // Match by job pipelineTemplate order if exact name didn't match
+          if (targetRoundIdx === -1 && job.pipelineTemplate && job.pipelineTemplate.length > 0) {
+            const pRound = job.pipelineTemplate.find(pr => {
+              const prName = (pr.roundType || '').trim().toLowerCase();
+              return isSlotHr ? validHrNames.includes(prName) : prName === sType;
+            });
+            if (pRound && pRound.order != null) {
+              targetRoundIdx = taggedCand.rounds.findIndex(r => r.order === pRound.order);
+            }
+          }
+
+          // Match by partial inclusion
+          if (targetRoundIdx === -1) {
+            targetRoundIdx = taggedCand.rounds.findIndex(r => {
+              const rName = (r.roundType || '').trim().toLowerCase();
+              return rName.includes(sType) || sType.includes(rName);
+            });
+          }
+
+          if (targetRoundIdx === -1) {
+            return res.status(400).json({
+              success: false,
+              message: `Round "${roundType}" is not part of candidate ${taggedCand.firstName} ${taggedCand.lastName}'s interview pipeline.`
+            });
+          }
+
+          if (targetRoundIdx < currentActiveIdx) {
+            return res.status(400).json({
+              success: false,
+              message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} has already cleared round "${roundType}".`
+            });
+          }
+
+          if (targetRoundIdx > currentActiveIdx) {
+            return res.status(400).json({
+              success: false,
+              message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} has not reached round "${roundType}" yet.`
+            });
+          }
+
+          const targetRound = taggedCand.rounds[targetRoundIdx];
+          if (['PASSED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED', 'CANDIDATE_DROP'].includes(targetRound.status)) {
+            return res.status(400).json({
+              success: false,
+              message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is not eligible for round "${roundType}" (round status: ${targetRound.status}).`
+            });
+          }
+
+          if (['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONFIRMED'].includes(targetRound.status)) {
+            return res.status(400).json({
+              success: false,
+              message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} already has an active slot assigned for round "${roundType}".`
+            });
+          }
+        }
+      }
 
       for (let i = 0; i < count; i++) {
         const currentEndTime = slot.endTime && count === 1 ? slot.endTime : addMinutesTo12h(currentStartTime, avg);
 
-        explodedSlots.push({
+        const slotObj = {
           job: job._id,
           company: job.company,
           date: new Date(slot.date),
@@ -1165,18 +1349,96 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
           interviewMode: slot.interviewMode || 'Virtual',
           interviewDetails: slot.interviewDetails || '',
           interviewerName: slot.interviewerName || '',
-          availableSpots: 1,
+          availableSpots: taggedCand ? 0 : 1,
           notes: slot.notes || null,
-          status: 'ACTIVE',
+          status: taggedCand ? 'FULL' : 'ACTIVE',
           roundType: roundType || 'INTERVIEW',
           createdBy: req.user._id,
-        });
+          isTagged: !!taggedCand,
+          candidateId: taggedCand ? taggedCand._id : null,
+          bookedCandidates: taggedCand ? [{
+            candidate: taggedCand._id,
+            partner: taggedCand.submittedBy,
+            bookedAt: new Date(),
+            bookingStatus: 'BOOKED'
+          }] : [],
+          activityLogs: [{
+            action: 'CREATED',
+            performedBy: req.user._id,
+            performedByRole: req.user.role || 'admin',
+            performedByName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Admin',
+            details: taggedCand
+              ? `Slot created and allotted to candidate ${taggedCand.firstName} ${taggedCand.lastName}`
+              : `Slot created for candidate pool (Capacity: 1)`,
+            timestamp: new Date()
+          }]
+        };
 
+        explodedSlots.push(slotObj);
         currentStartTime = currentEndTime;
       }
-    });
+    }
 
     const createdSlots = await InterviewSlot.insertMany(explodedSlots);
+
+    // Update tagged candidates
+    for (const createdSlot of createdSlots) {
+      if (createdSlot.isTagged && createdSlot.candidateId) {
+        const cand = await Candidate.findById(createdSlot.candidateId);
+        if (cand) {
+          cand.assignedSlot = createdSlot._id;
+          cand.status = 'SLOT_ASSIGNED';
+
+          // Update active round
+          for (let i = 0; i < (cand.rounds || []).length; i++) {
+            const r = cand.rounds[i];
+            if (['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SHORTLISTED', 'RESCHEDULE_REQUESTED'].includes(r.status)) {
+              r.status = 'SLOT_ASSIGNED';
+              r.slots = [{
+                date: createdSlot.date,
+                startTime: createdSlot.startTime,
+                endTime: createdSlot.endTime,
+                timezone: createdSlot.timezone || 'Asia/Kolkata',
+                mode: createdSlot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
+                interviewerName: createdSlot.interviewerName || '',
+                capacity: 1,
+                bookedBy: cand.submittedBy,
+                bookedAt: new Date(),
+                isTagged: true,
+                candidateId: cand._id,
+                roundType: createdSlot.roundType || r.roundType,
+                details: {
+                  meetingLink: createdSlot.interviewMode === 'Virtual' ? (createdSlot.interviewDetails || '') : '',
+                  address: createdSlot.interviewMode === 'Face-to-Face' ? (createdSlot.interviewDetails || '') : '',
+                  pointOfContact: {
+                    name: createdSlot.interviewerName || '',
+                    phone: '',
+                    email: ''
+                  }
+                }
+              }];
+              break;
+            }
+          }
+
+          cand.statusHistory.push({
+            status: 'SLOT_ASSIGNED',
+            changedBy: req.user._id,
+            changedAt: new Date(),
+            changedByRole: 'ADMIN',
+            notes: `Interview slot pre-allotted by admin on ${new Date(createdSlot.date).toDateString()} ${createdSlot.startTime} - ${createdSlot.endTime}. Awaiting talent partner confirmation.`,
+            metadata: {
+              slotId: createdSlot._id,
+              slotDate: createdSlot.date,
+              startTime: createdSlot.startTime,
+              endTime: createdSlot.endTime,
+            }
+          });
+
+          await cand.save();
+        }
+      }
+    }
 
     res.status(201).json({ success: true, message: `Successfully created ${createdSlots.length} interview slot(s)`, data: createdSlots });
   } catch (error) {
@@ -1203,11 +1465,393 @@ exports.adminCancelJobInterviewSlot = async (req, res) => {
     }
 
     slot.status = 'CANCELLED';
+    slot.activityLogs = slot.activityLogs || [];
+    slot.activityLogs.push({
+      action: 'CANCELLED',
+      performedBy: req.user._id,
+      performedByRole: req.user.role || 'admin',
+      performedByName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Admin',
+      details: 'Interview slot cancelled by Admin',
+      timestamp: new Date()
+    });
     await slot.save();
 
     res.status(200).json({ success: true, message: 'Interview slot cancelled successfully' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to cancel interview slot' });
+  }
+};
+
+// ADMIN: Update interview slot (edit timing, mode, details, interviewer, capacity, notes, or tagged candidate)
+// PUT /api/admin/jobs/:jobId/interview-slots/:slotId
+exports.adminUpdateJobInterviewSlot = async (req, res) => {
+  try {
+    const { jobId, slotId } = req.params;
+    const {
+      date,
+      startTime,
+      endTime,
+      interviewMode,
+      interviewDetails,
+      interviewerName,
+      averageTime,
+      maxCandidates,
+      notes,
+      roundType,
+      taggedCandidateId
+    } = req.body;
+
+    const Job = require('../models/Job');
+    const InterviewSlot = require('../models/InterviewSlot');
+    const Candidate = require('../models/Candidate');
+
+    const job = await Job.findById(jobId);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const slot = await InterviewSlot.findOne({ _id: slotId, job: jobId });
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Interview slot not found' });
+    }
+
+    if (slot.status === 'CANCELLED') {
+      return res.status(400).json({ success: false, message: 'Cannot edit a cancelled interview slot' });
+    }
+
+    const changes = [];
+    const before = {};
+    const after = {};
+
+    // Validate and update date
+    if (date) {
+      const newD = new Date(date);
+      newD.setHours(0, 0, 0, 0);
+      const oldD = new Date(slot.date);
+      oldD.setHours(0, 0, 0, 0);
+      if (newD.getTime() !== oldD.getTime()) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (newD < today) {
+          return res.status(400).json({ success: false, message: 'Slot date cannot be in the past' });
+        }
+        const oldStr = oldD.toISOString().split('T')[0];
+        const newStr = newD.toISOString().split('T')[0];
+        changes.push(`Date changed from ${oldStr} to ${newStr}`);
+        before.date = oldStr;
+        after.date = newStr;
+        slot.date = newD;
+      }
+    }
+
+    // Validate and update start/end time
+    if (startTime && startTime !== slot.startTime) {
+      changes.push(`Start time changed from ${slot.startTime} to ${startTime}`);
+      before.startTime = slot.startTime;
+      after.startTime = startTime;
+      slot.startTime = startTime;
+    }
+
+    if (endTime && endTime !== slot.endTime) {
+      changes.push(`End time changed from ${slot.endTime} to ${endTime}`);
+      before.endTime = slot.endTime;
+      after.endTime = endTime;
+      slot.endTime = endTime;
+    }
+
+    // Validate and update interview mode
+    if (interviewMode && interviewMode !== slot.interviewMode) {
+      changes.push(`Interview mode changed from ${slot.interviewMode} to ${interviewMode}`);
+      before.interviewMode = slot.interviewMode;
+      after.interviewMode = interviewMode;
+      slot.interviewMode = interviewMode;
+    }
+
+    // Validate and update details
+    if (interviewDetails !== undefined && interviewDetails !== slot.interviewDetails) {
+      changes.push(`Interview details updated`);
+      before.interviewDetails = slot.interviewDetails;
+      after.interviewDetails = interviewDetails;
+      slot.interviewDetails = interviewDetails;
+    }
+
+    // Interviewer name
+    if (interviewerName !== undefined && interviewerName !== slot.interviewerName) {
+      changes.push(`Interviewer changed from "${slot.interviewerName || 'N/A'}" to "${interviewerName}"`);
+      before.interviewerName = slot.interviewerName;
+      after.interviewerName = interviewerName;
+      slot.interviewerName = interviewerName;
+    }
+
+    // Average time
+    if (averageTime && Number(averageTime) !== slot.averageTime) {
+      changes.push(`Average time changed from ${slot.averageTime}m to ${averageTime}m`);
+      before.averageTime = slot.averageTime;
+      after.averageTime = Number(averageTime);
+      slot.averageTime = Number(averageTime);
+    }
+
+    // Notes
+    if (notes !== undefined && notes !== slot.notes) {
+      changes.push(`Notes updated`);
+      before.notes = slot.notes;
+      after.notes = notes;
+      slot.notes = notes;
+    }
+
+    // Round type
+    if (roundType && roundType !== slot.roundType) {
+      changes.push(`Round step changed from ${slot.roundType} to ${roundType}`);
+      before.roundType = slot.roundType;
+      after.roundType = roundType;
+      slot.roundType = roundType;
+    }
+
+    // Candidate Tagging / Untagging / Switching
+    const currentTaggedId = slot.candidateId?.toString() || (slot.isTagged ? slot.bookedCandidates?.[0]?.candidate?.toString() : null);
+    const newTaggedId = taggedCandidateId ? taggedCandidateId.toString() : null;
+
+    if (newTaggedId !== currentTaggedId) {
+      // If there was an old tagged candidate, untag them
+      if (currentTaggedId) {
+        const oldCand = await Candidate.findById(currentTaggedId);
+        if (oldCand && oldCand.assignedSlot?.toString() === slot._id.toString()) {
+          oldCand.assignedSlot = null;
+          oldCand.status = 'SHORTLISTED';
+          for (let i = 0; i < (oldCand.rounds || []).length; i++) {
+            const r = oldCand.rounds[i];
+            if (['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'].includes(r.status)) {
+              r.status = 'SHORTLISTED';
+              r.slots = [];
+              break;
+            }
+          }
+          oldCand.statusHistory.push({
+            status: 'SHORTLISTED',
+            changedBy: req.user._id,
+            changedAt: new Date(),
+            changedByRole: 'ADMIN',
+            notes: `Slot allotment removed during slot edit by Admin`
+          });
+          await oldCand.save();
+          changes.push(`Untagged candidate ${oldCand.firstName} ${oldCand.lastName}`);
+          before.taggedCandidate = `${oldCand.firstName} ${oldCand.lastName}`;
+        }
+      }
+
+      // If new candidate is to be tagged
+      if (newTaggedId) {
+        const newCand = await Candidate.findOne({ _id: newTaggedId, job: jobId });
+        if (!newCand) {
+          return res.status(404).json({ success: false, message: 'New candidate to tag was not found for this job' });
+        }
+
+        // Validate consent
+        if (
+          newCand.status === 'CONSENT_PENDING' ||
+          newCand.status === 'CONSENT_SENT' ||
+          newCand.status === 'CONSENT_DENIED' ||
+          newCand.status === 'DRAFT' ||
+          newCand.whatsappConsent?.status === 'PENDING' ||
+          newCand.whatsappConsent?.status === 'DENIED' ||
+          newCand.consent?.consentStatus === 'PENDING_CONFIRMATION' ||
+          newCand.consent?.consentStatus === 'DENIED'
+        ) {
+          return res.status(400).json({
+            success: false,
+            message: `Candidate ${newCand.firstName} ${newCand.lastName} is pending consent and cannot be tagged.`
+          });
+        }
+
+        // Validate shortlisted
+        const allowedStatuses = [
+          'SHORTLISTED',
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'ROUND_SELECTED_NEXT',
+          'ROUND_SELECTED_DIRECT_HR',
+          'HR_ROUND_PENDING',
+          'RESCHEDULE_REQUESTED',
+          'ASSESSMENT_PASSED'
+        ];
+        if (!allowedStatuses.includes(newCand.status)) {
+          return res.status(400).json({
+            success: false,
+            message: `Candidate ${newCand.firstName} ${newCand.lastName} is not shortlisted or eligible for interview scheduling (status: ${newCand.status}).`
+          });
+        }
+
+        // Check if candidate already has active assigned slot elsewhere in current round
+        if (['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONFIRMED'].includes(newCand.status)) {
+          const existingTaggedSlot = await InterviewSlot.findOne({
+            job: jobId,
+            _id: { $ne: slot._id },
+            status: { $ne: 'CANCELLED' },
+            ...(slot.roundType ? { roundType: slot.roundType } : {}),
+            $or: [
+              { candidateId: newCand._id },
+              { 'bookedCandidates.candidate': newCand._id },
+              ...(newCand.assignedSlot ? [{ _id: newCand.assignedSlot }] : [])
+            ]
+          });
+          if (existingTaggedSlot) {
+            return res.status(400).json({
+              success: false,
+              message: `Candidate ${newCand.firstName} ${newCand.lastName} is already tagged to another active interview slot (${existingTaggedSlot.startTime} - ${existingTaggedSlot.endTime}).`
+            });
+          }
+        }
+
+        slot.isTagged = true;
+        slot.candidateId = newCand._id;
+        slot.maxCandidates = 1;
+        slot.availableSpots = 0;
+        slot.status = 'FULL';
+        slot.bookedCandidates = [{
+          candidate: newCand._id,
+          partner: newCand.submittedBy,
+          bookedAt: new Date(),
+          bookingStatus: 'BOOKED'
+        }];
+
+        newCand.assignedSlot = slot._id;
+        newCand.status = 'SLOT_ASSIGNED';
+        for (let i = 0; i < (newCand.rounds || []).length; i++) {
+          const r = newCand.rounds[i];
+          if (['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SHORTLISTED', 'RESCHEDULE_REQUESTED'].includes(r.status)) {
+            r.status = 'SLOT_ASSIGNED';
+            r.slots = [{
+              date: slot.date,
+              startTime: slot.startTime,
+              endTime: slot.endTime,
+              timezone: slot.timezone || 'Asia/Kolkata',
+              mode: slot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
+              interviewerName: slot.interviewerName || '',
+              capacity: 1,
+              bookedBy: newCand.submittedBy,
+              bookedAt: new Date(),
+              details: {
+                meetingLink: slot.interviewMode === 'Virtual' ? (slot.interviewDetails || '') : '',
+                address: slot.interviewMode === 'Face-to-Face' ? (slot.interviewDetails || '') : '',
+                pointOfContact: {
+                  name: slot.interviewerName || '',
+                  phone: '',
+                  email: ''
+                }
+              }
+            }];
+            break;
+          }
+        }
+        newCand.statusHistory.push({
+          status: 'SLOT_ASSIGNED',
+          changedBy: req.user._id,
+          changedAt: new Date(),
+          changedByRole: 'ADMIN',
+          notes: `Assigned to slot (${slot.startTime} - ${slot.endTime}) during slot edit by Admin`
+        });
+        await newCand.save();
+
+        changes.push(`Allotted slot to candidate ${newCand.firstName} ${newCand.lastName}`);
+        after.taggedCandidate = `${newCand.firstName} ${newCand.lastName}`;
+      } else {
+        // Just untagged, now open to pool
+        slot.isTagged = false;
+        slot.candidateId = null;
+        slot.bookedCandidates = [];
+        const newMax = maxCandidates ? Math.max(1, Number(maxCandidates)) : 1;
+        slot.maxCandidates = newMax;
+        slot.availableSpots = newMax;
+        slot.status = 'ACTIVE';
+        changes.push(`Slot opened to general candidate pool (Capacity: ${newMax})`);
+        after.taggedCandidate = null;
+      }
+    } else if (slot.isTagged && slot.candidateId) {
+      // Candidate stayed the same, but slot details (date/time/mode/details) might have changed
+      const cand = await Candidate.findById(slot.candidateId);
+      if (cand && (before.date || before.startTime || before.endTime || before.interviewMode || before.interviewDetails || before.interviewerName)) {
+        for (let i = 0; i < (cand.rounds || []).length; i++) {
+          const r = cand.rounds[i];
+          if (r.slots && r.slots.length > 0) {
+            r.slots[0].date = slot.date;
+            r.slots[0].startTime = slot.startTime;
+            r.slots[0].endTime = slot.endTime;
+            r.slots[0].mode = slot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL';
+            r.slots[0].interviewerName = slot.interviewerName || '';
+            if (r.slots[0].details) {
+              r.slots[0].details.meetingLink = slot.interviewMode === 'Virtual' ? (slot.interviewDetails || '') : '';
+              r.slots[0].details.address = slot.interviewMode === 'Face-to-Face' ? (slot.interviewDetails || '') : '';
+              if (r.slots[0].details.pointOfContact) {
+                r.slots[0].details.pointOfContact.name = slot.interviewerName || '';
+              }
+            }
+            break;
+          }
+        }
+        if (cand.interviewConfig) {
+          cand.interviewConfig.mode = slot.interviewMode;
+          cand.interviewConfig.details = slot.interviewDetails || '';
+          cand.interviewConfig.interviewer = slot.interviewerName || '';
+        }
+        cand.statusHistory.push({
+          status: cand.status,
+          changedBy: req.user._id,
+          changedAt: new Date(),
+          changedByRole: 'ADMIN',
+          notes: `Slot details updated by Admin: ${changes.join(', ')}`
+        });
+        await cand.save();
+      }
+    } else if (!slot.isTagged && maxCandidates !== undefined) {
+      // Normal untagged slot capacity update
+      const newMax = Math.max(1, Number(maxCandidates));
+      const activeBookings = (slot.bookedCandidates || []).filter(b => b.bookingStatus === 'BOOKED').length;
+      if (newMax < activeBookings) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot set capacity to ${newMax} when ${activeBookings} candidate(s) are already booked.`
+        });
+      }
+      if (newMax !== slot.maxCandidates) {
+        changes.push(`Capacity changed from ${slot.maxCandidates} to ${newMax}`);
+        before.maxCandidates = slot.maxCandidates;
+        after.maxCandidates = newMax;
+        slot.maxCandidates = newMax;
+        slot.availableSpots = newMax - activeBookings;
+        if (slot.availableSpots === 0) {
+          slot.status = 'FULL';
+        } else if (slot.status === 'FULL') {
+          slot.status = 'ACTIVE';
+        }
+      }
+    }
+
+    if (changes.length === 0) {
+      return res.json({ success: true, message: 'No changes detected', data: slot });
+    }
+
+    // Append to activityLogs
+    slot.activityLogs = slot.activityLogs || [];
+    slot.activityLogs.push({
+      action: 'UPDATED',
+      performedBy: req.user._id,
+      performedByRole: req.user.role || 'admin',
+      performedByName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Admin',
+      details: changes.join('; '),
+      changes: { before, after },
+      timestamp: new Date()
+    });
+
+    await slot.save();
+
+    res.json({
+      success: true,
+      message: 'Interview slot updated successfully',
+      data: slot
+    });
+  } catch (error) {
+    console.error('[ADMIN UPDATE SLOT] Error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update interview slot', error: error.message });
   }
 };
 
@@ -2970,55 +3614,8 @@ exports.getAllCandidates = async (req, res) => {
 };
 
 async function checkAndElevateCandidateStatus(candidate, userId) {
-  if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
-    return;
-  }
-
-  const InterviewSlot = require('../models/InterviewSlot');
-  const getActiveRoundInfoLocal = (c) => {
-    for (let i = 0; i < c.rounds.length; i++) {
-      const r = c.rounds[i];
-      if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED') {
-        return { index: i, round: r };
-      }
-    }
-    return null;
-  };
-
-  const activeRoundInfo = getActiveRoundInfoLocal(candidate);
-  if (!activeRoundInfo) return;
-
-  const jobId = candidate.job?._id || candidate.job;
-  const activeSlots = await InterviewSlot.find({
-    job: jobId,
-    roundType: activeRoundInfo.round.roundType,
-    status: 'ACTIVE'
-  });
-
-  if (activeSlots.length > 0) {
-    candidate.status = 'SLOTS_PUBLISHED';
-    activeRoundInfo.round.status = 'SLOTS_PUBLISHED';
-    candidate.statusHistory.push({
-      status: 'SLOTS_PUBLISHED',
-      changedBy: userId || candidate._id,
-      changedAt: new Date(),
-      notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
-    });
-
-    candidate.auditTrail = candidate.auditTrail || [];
-    candidate.auditTrail.push({
-      actorId: userId || candidate._id,
-      actorRole: 'system',
-      action: 'PUBLISH_SLOTS',
-      fromState: 'SLOTS_NOT_PUBLISHED',
-      toState: 'SLOTS_PUBLISHED',
-      reason: 'Active slots exist for the job',
-      roundIndex: activeRoundInfo.index,
-      timestamp: new Date()
-    });
-
-    await candidate.save();
-  }
+  // Disabled: viewing candidate must not silently mutate their status to SLOTS_PUBLISHED in DB
+  return;
 }
 
 // @desc    Get single candidate full detail (admin)
@@ -3047,8 +3644,6 @@ exports.getCandidateDetail = async (req, res) => {
     }
 
     // Sub-admins can view any candidate details
-    await checkAndElevateCandidateStatus(candidate, req.user._id);
-
     res.json({
       success: true,
       data: candidate
@@ -4211,7 +4806,7 @@ exports.withdrawCandidateByAdmin = async (req, res) => {
 exports.updateJobStatusByAdmin = async (req, res) => {
   try {
     const { status } = req.body;
-    const allowedStatuses = ['ACTIVE', 'ON_HOLD', 'FILLED', 'CLOSED'];
+    const allowedStatuses = ['ACTIVE', 'PAUSED', 'ON_HOLD', 'FILLED', 'CLOSED'];
 
     if (!allowedStatuses.includes(status)) {
       return res.status(400).json({
@@ -5003,6 +5598,22 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
       'HR_ROUND_PENDING',
       'HR_SELECTED'
     ];
+    if (
+      candidate.status === 'CONSENT_PENDING' ||
+      candidate.status === 'CONSENT_SENT' ||
+      candidate.status === 'CONSENT_DENIED' ||
+      candidate.status === 'DRAFT' ||
+      candidate.whatsappConsent?.status === 'PENDING' ||
+      candidate.whatsappConsent?.status === 'DENIED' ||
+      candidate.consent?.consentStatus === 'PENDING_CONFIRMATION' ||
+      candidate.consent?.consentStatus === 'DENIED'
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: `Candidate ${candidate.firstName} ${candidate.lastName} is pending consent and cannot be assigned to an interview slot.`
+      });
+    }
+
     if (!allowedStatuses.includes(candidate.status)) {
       return res.status(400).json({ success: false, message: `Candidate current status: ${candidate.status} does not allow assignment.` });
     }
@@ -5574,4 +6185,426 @@ exports.updateIntegrationStatus = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to update integration status', error: error.message });
   }
 };
+
+// ============================================================
+// ADMIN ACTIONS FOR TAGGED INTERVIEW SLOTS
+// ============================================================
+
+// Helper to get active round info for candidate
+const getCandidateActiveRound = (c) => {
+  const status = c.status;
+  if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED', 'CANDIDATE_DROP'].includes(status)) return null;
+  const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+  if (hrStates.includes(status)) {
+    const idx = (c.rounds || []).findIndex(r => r.roundType === 'HR_ROUND');
+    if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+  }
+  for (let i = 0; i < (c.rounds || []).length; i++) {
+    const r = c.rounds[i];
+    const L_STATES = [
+      'SLOTS_NOT_PUBLISHED',
+      'SLOTS_PUBLISHED',
+      'SLOT_ASSIGNED',
+      'RESCHEDULE_REQUESTED',
+      'SLOT_DETAILS_SHARED',
+      'INTERVIEW_CONDUCTED',
+      'ROUND_ON_HOLD'
+    ];
+    if (L_STATES.includes(r.status)) return { index: i, round: r };
+  }
+  return null;
+};
+
+/**
+ * @desc    Admin: Confirm pre-allotted tagged slot & send consent to candidate
+ * @route   POST /api/admin/jobs/:jobId/tagged-slot/confirm
+ * @access  Admin / SubAdmin
+ */
+exports.adminConfirmTaggedSlot = async (req, res) => {
+  try {
+    const { candidateId, slotId } = req.body;
+    if (!candidateId) {
+      return res.status(400).json({ success: false, message: 'candidateId is required' });
+    }
+
+    const Candidate = require('../models/Candidate');
+    const InterviewSlot = require('../models/InterviewSlot');
+    const crypto = require('crypto');
+
+    const candidate = await Candidate.findOne({
+      _id: candidateId,
+      job: req.params.jobId
+    }).populate('job company');
+
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found for this job' });
+    }
+
+    const targetSlotId = slotId || candidate.assignedSlot;
+    if (!targetSlotId) {
+      return res.status(400).json({ success: false, message: 'Candidate does not have an assigned slot' });
+    }
+
+    const slot = await InterviewSlot.findById(targetSlotId);
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Interview slot not found' });
+    }
+
+    const confirmationToken = crypto.randomBytes(32).toString('hex');
+    const detailsVal = slot.interviewDetails || '';
+
+    candidate.assignedSlot = slot._id;
+    const oldStatus = candidate.status;
+    candidate.status = 'SLOT_DETAILS_SHARED';
+
+    const activeInfo = getCandidateActiveRound(candidate);
+    if (activeInfo) {
+      const { round } = activeInfo;
+      round.status = 'SLOT_DETAILS_SHARED';
+      round.slots = [{
+        date: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        timezone: slot.timezone || 'Asia/Kolkata',
+        mode: slot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
+        interviewerName: slot.interviewerName || '',
+        capacity: 1,
+        bookedBy: candidate.submittedBy,
+        bookedAt: new Date(),
+        details: {
+          meetingLink: slot.interviewMode === 'Virtual' ? detailsVal : '',
+          address: slot.interviewMode === 'Face-to-Face' ? detailsVal : '',
+          pointOfContact: {
+            name: slot.interviewerName || '',
+            phone: '',
+            email: ''
+          }
+        }
+      }];
+    }
+
+    candidate.interviewConfig = {
+      mode: slot.interviewMode === 'Face-to-Face' ? 'Face-to-Face' : 'Virtual',
+      details: detailsVal,
+      interviewer: slot.interviewerName || '',
+      isConfirmedByCompany: true,
+      confirmedAt: new Date(),
+      confirmationToken,
+      candidateResponse: 'PENDING'
+    };
+
+    candidate.statusHistory.push({
+      status: 'SLOT_DETAILS_SHARED',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: 'ADMIN',
+      notes: `Admin confirmed allotted slot on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}. Interview consent sent to candidate.`,
+      metadata: {
+        slotId: slot._id,
+        slotDate: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+      }
+    });
+
+    if (activeInfo) {
+      candidate.auditTrail = candidate.auditTrail || [];
+      candidate.auditTrail.push({
+        actorId: req.user._id,
+        actorRole: 'admin',
+        action: 'CONFIRM_TAGGED_SLOT',
+        fromState: oldStatus,
+        toState: 'SLOT_DETAILS_SHARED',
+        reason: `Admin confirmed allotted slot. Interview consent sent to candidate.`,
+        roundIndex: activeInfo.index,
+        timestamp: new Date()
+      });
+    }
+
+    // Ensure slot's bookedCandidates contains candidate
+    const isBooked = (slot.bookedCandidates || []).some(
+      b => b.candidate && b.candidate.toString() === candidate._id.toString()
+    );
+    if (!isBooked) {
+      slot.bookedCandidates = slot.bookedCandidates || [];
+      slot.bookedCandidates.push({
+        candidate: candidate._id,
+        partner: candidate.submittedBy,
+        bookedAt: new Date(),
+        bookingStatus: 'BOOKED'
+      });
+      slot.availableSpots = 0;
+      slot.status = 'FULL';
+      await slot.save();
+    }
+
+    await candidate.save();
+
+    // Trigger WhatsApp notification to candidate asynchronously
+    const Company = require('../models/Company');
+    const whatsappService = require('../services/whatsappService');
+    const companyDoc = await Company.findById(candidate.company?._id || candidate.company);
+    const companyName = companyDoc ? companyDoc.companyName : 'Syncro1 Employer';
+    const interviewDateStr = new Date(slot.date).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+
+    try {
+      await whatsappService.sendInterviewInvitation(
+        candidate.mobile,
+        candidate.firstName,
+        companyName,
+        interviewDateStr,
+        slot.startTime,
+        candidate.job?.title || 'Job Interview',
+        slot.interviewMode === 'Virtual' ? 'Online' : 'Offline',
+        detailsVal,
+        slot.interviewerName || 'Hiring Team',
+        confirmationToken
+      );
+    } catch (waErr) {
+      console.warn('[ADMIN CONFIRM SLOT] WhatsApp error:', waErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Interview consent sent to candidate and slot confirmed successfully.',
+      data: {
+        candidateId: candidate._id,
+        status: candidate.status,
+        slotId: slot._id
+      }
+    });
+  } catch (error) {
+    console.error('[ADMIN] Confirm tagged slot error:', error);
+    res.status(500).json({ success: false, message: 'Failed to confirm slot', error: error.message });
+  }
+};
+
+/**
+ * @desc    Admin: Candidate Reject / Drop - candidate does not want to proceed
+ * @route   POST /api/admin/jobs/:jobId/tagged-slot/reject
+ * @access  Admin / SubAdmin
+ */
+exports.adminRejectTaggedSlot = async (req, res) => {
+  try {
+    const { candidateId, slotId, reason } = req.body;
+    if (!candidateId) {
+      return res.status(400).json({ success: false, message: 'candidateId is required' });
+    }
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'A rejection reason is mandatory (minimum 5 characters).'
+      });
+    }
+
+    const Candidate = require('../models/Candidate');
+    const InterviewSlot = require('../models/InterviewSlot');
+
+    const candidate = await Candidate.findOne({
+      _id: candidateId,
+      job: req.params.jobId
+    });
+
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found for this job' });
+    }
+
+    const targetSlotId = slotId || candidate.assignedSlot;
+    if (targetSlotId) {
+      const slot = await InterviewSlot.findById(targetSlotId);
+      if (slot) {
+        slot.bookedCandidates = (slot.bookedCandidates || []).filter(
+          b => b.candidate && b.candidate.toString() !== candidate._id.toString()
+        );
+        slot.isTagged = false;
+        slot.candidateId = null;
+        slot.maxCandidates = slot.maxCandidates || 1;
+        slot.availableSpots = slot.maxCandidates;
+        slot.status = 'ACTIVE';
+        slot.activityLogs = slot.activityLogs || [];
+        slot.activityLogs.push({
+          action: 'SLOT_OPENED_ON_REJECT',
+          performedBy: req.user._id,
+          performedByRole: 'admin',
+          performedByName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Admin',
+          details: `Candidate ${candidate.firstName} ${candidate.lastName} was rejected by Admin. Slot opened to candidate pool. Reason: ${reason.trim()}`,
+          timestamp: new Date()
+        });
+        await slot.save();
+      }
+    }
+
+    const oldStatus = candidate.status;
+    candidate.status = 'REJECTED';
+    candidate.assignedSlot = null;
+    candidate.rejectionReason = reason.trim();
+    candidate.rejectionStage = 'INTERVIEW';
+
+    // Update active round
+    for (let i = 0; i < (candidate.rounds || []).length; i++) {
+      const r = candidate.rounds[i];
+      if (['SLOT_ASSIGNED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_DETAILS_SHARED', 'RESCHEDULE_REQUESTED'].includes(r.status)) {
+        r.status = 'REJECTED';
+        r.slots = [];
+        break;
+      }
+    }
+
+    candidate.statusHistory.push({
+      status: 'REJECTED',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: 'ADMIN',
+      notes: reason.trim()
+    });
+
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: req.user._id,
+      actorRole: 'admin',
+      action: 'REJECT_CANDIDATE',
+      fromState: oldStatus,
+      toState: 'REJECTED',
+      reason: reason.trim(),
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+
+    res.json({
+      success: true,
+      message: 'Candidate rejected successfully and slot cancelled.',
+      data: {
+        candidateId: candidate._id,
+        status: candidate.status
+      }
+    });
+  } catch (error) {
+    console.error('[ADMIN] Reject tagged slot error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reject slot', error: error.message });
+  }
+};
+
+/**
+ * @desc    Admin: Reschedule tagged candidate interview slot
+ * @route   POST /api/admin/jobs/:jobId/tagged-slot/reschedule
+ * @access  Admin / SubAdmin
+ */
+exports.adminRescheduleTaggedSlot = async (req, res) => {
+  try {
+    const { candidateId, slotId, reason, suggestedSlots } = req.body;
+    if (!candidateId) {
+      return res.status(400).json({ success: false, message: 'candidateId is required' });
+    }
+    if (!reason || reason.trim().length < 5) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid reason (min 5 characters) for rescheduling.' });
+    }
+
+    const slots = Array.isArray(suggestedSlots) ? suggestedSlots : [];
+    if (slots.length > 2) {
+      return res.status(400).json({ success: false, message: 'You can suggest at most 2 slots for rescheduling.' });
+    }
+
+    const Candidate = require('../models/Candidate');
+    const InterviewSlot = require('../models/InterviewSlot');
+
+    const candidate = await Candidate.findOne({
+      _id: candidateId,
+      job: req.params.jobId
+    }).populate('job company');
+
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found for this job' });
+    }
+
+    const targetSlotId = slotId || candidate.assignedSlot;
+    if (targetSlotId) {
+      const slot = await InterviewSlot.findById(targetSlotId);
+      if (slot) {
+        slot.bookedCandidates = (slot.bookedCandidates || []).filter(
+          b => b.candidate && b.candidate.toString() !== candidate._id.toString()
+        );
+        slot.isTagged = false;
+        slot.candidateId = null;
+        slot.maxCandidates = slot.maxCandidates || 1;
+        slot.availableSpots = slot.maxCandidates;
+        slot.status = 'ACTIVE';
+        slot.activityLogs = slot.activityLogs || [];
+        slot.activityLogs.push({
+          action: 'RESCHEDULED_AND_OPENED',
+          performedBy: req.user._id,
+          performedByRole: req.user.role || 'admin',
+          performedByName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'Admin',
+          details: `Tagged candidate ${candidate.firstName} ${candidate.lastName} was rescheduled. Slot is now opened to other candidates in pool. Reason: ${reason.trim()}`,
+          timestamp: new Date()
+        });
+        await slot.save();
+      }
+    }
+
+    const oldStatus = candidate.status;
+    candidate.status = 'RESCHEDULE_REQUESTED';
+    candidate.assignedSlot = null;
+
+    const activeInfo = getCandidateActiveRound(candidate);
+    if (activeInfo) {
+      activeInfo.round.slots = [];
+      activeInfo.round.status = 'RESCHEDULE_REQUESTED';
+      activeInfo.round.rescheduleRequest = {
+        status: 'PENDING',
+        requestedBy: 'ADMIN',
+        reason: reason.trim(),
+        requestedAt: new Date(),
+        suggestedSlots: slots.map(s => ({
+          slotId: s.slotId || s._id || s.id,
+          date: s.date,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          timezone: s.timezone || 'Asia/Kolkata',
+          mode: s.mode || 'VIRTUAL',
+          interviewerName: s.interviewerName || ''
+        }))
+      };
+    }
+
+    candidate.statusHistory.push({
+      status: 'RESCHEDULE_REQUESTED',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: 'ADMIN',
+      notes: `Reschedule requested by Admin. Reason: ${reason.trim()}`
+    });
+
+    candidate.auditTrail = candidate.auditTrail || [];
+    candidate.auditTrail.push({
+      actorId: req.user._id,
+      actorRole: 'admin',
+      action: 'REQUEST_RESCHEDULE',
+      fromState: oldStatus,
+      toState: 'RESCHEDULE_REQUESTED',
+      reason: reason.trim(),
+      roundIndex: activeInfo ? activeInfo.index : 0,
+      timestamp: new Date()
+    });
+
+    await candidate.save();
+
+    res.json({
+      success: true,
+      message: 'Reschedule requested successfully.',
+      data: {
+        candidateId: candidate._id,
+        status: candidate.status
+      }
+    });
+  } catch (error) {
+    console.error('[ADMIN] Reschedule tagged slot error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reschedule slot', error: error.message });
+  }
+};
+
 

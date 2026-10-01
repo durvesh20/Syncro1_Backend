@@ -53,7 +53,10 @@ const {
   assignVerification,
   revokeVerificationAssignment,
   bulkAssignVerification,
-  bulkRevokeVerificationAssignment
+  bulkRevokeVerificationAssignment,
+  adminConfirmTaggedSlot,
+  adminRejectTaggedSlot,
+  adminRescheduleTaggedSlot
 } = require('../controllers/adminController');
 
 const {
@@ -1296,13 +1299,14 @@ const {
   pipelineHRResolveHold,
 } = require('../controllers/pipelineController');
 const { getJobInterviewSlots } = require('../controllers/companyController');
-const { adminAssignCandidateToSlot, adminRemoveCandidateFromSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot } = require('../controllers/adminController');
+const { adminAssignCandidateToSlot, adminRemoveCandidateFromSlot, adminCreateJobInterviewSlots, adminCancelJobInterviewSlot, adminUpdateJobInterviewSlot } = require('../controllers/adminController');
 
 router.get('/candidates/:id/pipeline', adminGetPipeline);
 router.post('/candidates/:id/pipeline/repair-sync', adminRepairCandidatePipeline);
 router.get('/jobs/:jobId/pipeline/template', getJobPipelineTemplate);
 router.get('/jobs/:jobId/interview-slots', getJobInterviewSlots);
 router.post('/jobs/:jobId/interview-slots', adminCreateJobInterviewSlots);
+router.put('/jobs/:jobId/interview-slots/:slotId', adminUpdateJobInterviewSlot);
 router.delete('/jobs/:jobId/interview-slots/:slotId', adminCancelJobInterviewSlot);
 
 // Admin write access to pipeline templates
@@ -1338,6 +1342,11 @@ router.post('/candidates/:id/pipeline/hr/hold',                   pipelineHRHold
 router.post('/candidates/:id/pipeline/hr/resolve-hold',            pipelineHRResolveHold);
 router.post('/jobs/:jobId/interview-slots/:slotId/assign', adminAssignCandidateToSlot);
 router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', adminRemoveCandidateFromSlot);
+
+// Admin actions on tagged interview slots
+router.post('/jobs/:jobId/tagged-slot/confirm', adminConfirmTaggedSlot);
+router.post('/jobs/:jobId/tagged-slot/reject', adminRejectTaggedSlot);
+router.post('/jobs/:jobId/tagged-slot/reschedule', adminRescheduleTaggedSlot);
 
 // Phase 4: cross-candidate pipeline audit trail
 // GET /api/admin/pipeline/audit-log?page=1&limit=30&search=&action=&status=

@@ -139,6 +139,13 @@ const interviewSlotSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Candidate',
       default: null,
+      index: true,
+    },
+
+    isTagged: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
 
     // Who created this slot (can be main company owner or sub-admin)
@@ -155,6 +162,41 @@ const interviewSlotSchema = new mongoose.Schema(
       default: 'PLATFORM',
       index: true,
     },
+
+    // Audit & Activity Logs
+    activityLogs: [
+      {
+        action: {
+          type: String,
+          required: true,
+        },
+        performedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          default: null,
+        },
+        performedByRole: {
+          type: String,
+          default: null,
+        },
+        performedByName: {
+          type: String,
+          default: '',
+        },
+        details: {
+          type: String,
+          default: '',
+        },
+        changes: {
+          type: mongoose.Schema.Types.Mixed,
+          default: null,
+        },
+        timestamp: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
   },
   {
     timestamps: true,
@@ -164,6 +206,7 @@ const interviewSlotSchema = new mongoose.Schema(
 // ── Indexes ───────────────────────────────────────────────────────────────────
 interviewSlotSchema.index({ job: 1, date: 1 });
 interviewSlotSchema.index({ job: 1, status: 1 });
+interviewSlotSchema.index({ job: 1, isTagged: 1 });
 interviewSlotSchema.index({ company: 1, date: 1 });
 interviewSlotSchema.index({ 'bookedCandidates.candidate': 1 });
 interviewSlotSchema.index({ 'bookedCandidates.partner': 1 });

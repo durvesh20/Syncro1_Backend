@@ -46,6 +46,20 @@ class CandidateLifecycleService {
       throw error;
     }
 
+    // ── Safety net: block actions when parent job is ON_HOLD ──
+    // Admin/sub_admin are exempt (they get a frontend warning instead).
+    if (userRole !== 'admin' && userRole !== 'sub_admin') {
+      const jobDoc = typeof candidate.job === 'object'
+        ? candidate.job
+        : await Job.findById(candidate.job).select('status').lean();
+      if (jobDoc?.status === 'ON_HOLD') {
+        const error = new Error('This job is currently on hold. All actions are frozen until the job is reactivated.');
+        error.statusCode = 403;
+        error.code = 'JOB_ON_HOLD';
+        throw error;
+      }
+    }
+
     const previousStatus = candidate.status;
 
     // ✅ Step 1: Validate transition

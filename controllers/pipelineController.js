@@ -167,6 +167,131 @@ exports.pipelineShortlist = async (req, res) => {
   }
 };
 
+// ─── Helper: Free uncompleted allotted slot and open to others on rejection ──
+async function freeCandidateSlotIfUncompleted(candidate, actorUser, role, reason, action = 'REJECT') {
+  try {
+    const COMPLETED_INTERVIEW_STATES = [
+      PIPELINE_STATES.INTERVIEW_CONDUCTED,
+      PIPELINE_STATES.ROUND_SELECTED_NEXT,
+      PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR,
+      PIPELINE_STATES.HR_SELECTED,
+      PIPELINE_STATES.OFFER_SENT,
+      PIPELINE_STATES.OFFER_ACCEPTED,
+      PIPELINE_STATES.ONBOARDING,
+      PIPELINE_STATES.JOINED,
+    ];
+
+    const candidateIdStr = candidate._id ? candidate._id.toString() : '';
+    const assignedSlotId = candidate.assignedSlot?._id || candidate.assignedSlot;
+    const assignedSlotIdStr = assignedSlotId ? assignedSlotId.toString() : '';
+
+    const queryConditions = [
+      { candidateId: candidate._id },
+      { 'bookedCandidates.candidate': candidate._id }
+    ];
+    if (assignedSlotId) {
+      queryConditions.unshift({ _id: assignedSlotId });
+    }
+
+    const slots = await InterviewSlot.find({ $or: queryConditions });
+    const now = new Date();
+
+    if (slots && slots.length > 0) {
+      for (const slot of slots) {
+        // Determine slot date & time
+        let isPastSlot = false;
+        if (slot.date) {
+          const slotDate = new Date(slot.date);
+          if (slot.startTime) {
+            const parts = slot.startTime.trim().split(' ');
+            if (parts.length === 2) {
+              let [hours, minutes] = parts[0].split(':').map(Number);
+              const modifier = parts[1].toUpperCase();
+              if (modifier === 'PM' && hours < 12) hours += 12;
+              if (modifier === 'AM' && hours === 12) hours = 0;
+              slotDate.setHours(hours, minutes, 0, 0);
+            }
+          } else {
+            slotDate.setHours(23, 59, 59, 999);
+          }
+          isPastSlot = slotDate < now;
+        }
+
+        const isCurrentAssignedSlot = assignedSlotIdStr && slot._id.toString() === assignedSlotIdStr;
+        const isTaggedToThisCand = Boolean(
+          slot.isTagged && slot.candidateId && slot.candidateId.toString() === candidateIdStr
+        );
+
+        // If slot is in the past and NOT the candidate's currently assigned or tagged slot,
+        // it belongs to an older completed round — do not modify it.
+        if (isPastSlot && !isCurrentAssignedSlot && !isTaggedToThisCand) {
+          continue;
+        }
+
+        // If candidate's status before rejection was already marked as interview conducted or beyond,
+        // and the slot is in the past, then this interview was already conducted in reality.
+        if (COMPLETED_INTERVIEW_STATES.includes(candidate.status) && isPastSlot) {
+          continue;
+        }
+
+        // Untag slot if tagged for this candidate
+        if (isTaggedToThisCand || (slot.candidateId && slot.candidateId.toString() === candidateIdStr)) {
+          slot.isTagged = false;
+          slot.candidateId = null;
+          slot.maxCandidates = slot.maxCandidates || 1;
+        }
+
+        // Remove candidate from bookedCandidates
+        slot.bookedCandidates = (slot.bookedCandidates || []).filter(
+          b => b.candidate && b.candidate.toString() !== candidateIdStr
+        );
+
+        // Recalculate available spots
+        const activeBookings = slot.bookedCandidates.filter(b => b.bookingStatus === 'BOOKED').length;
+        slot.availableSpots = Math.max(0, (slot.maxCandidates || 1) - activeBookings);
+
+        // Reopen slot status to ACTIVE if spots are available and slot is not CANCELLED
+        if (slot.availableSpots > 0 && slot.status !== 'CANCELLED') {
+          slot.status = 'ACTIVE';
+        }
+
+        // Log slot activity
+        slot.activityLogs = slot.activityLogs || [];
+        const actorName = actorUser
+          ? `${actorUser.firstName || ''} ${actorUser.lastName || ''}`.trim() || actorUser.email || 'User'
+          : 'User';
+        const candName = `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim() || 'Candidate';
+
+        slot.activityLogs.push({
+          action: 'SLOT_OPENED_ON_REJECT',
+          performedBy: actorUser?._id || null,
+          performedByRole: role || 'company',
+          performedByName: actorName,
+          details: `${candName} was rejected (${action}). Slot opened to candidate pool. Reason: ${reason || ''}`.trim(),
+          timestamp: new Date()
+        });
+
+        await slot.save();
+      }
+    }
+
+    // Clear candidate slot assignments
+    candidate.assignedSlot = null;
+    candidate.interviewConfig = null;
+
+    // Clear active uncompleted round slots in candidate.rounds
+    if (Array.isArray(candidate.rounds)) {
+      for (const r of candidate.rounds) {
+        if (!COMPLETED_INTERVIEW_STATES.includes(r.status)) {
+          r.slots = [];
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[PIPELINE] Error in freeCandidateSlotIfUncompleted:', err);
+  }
+}
+
 // ─── PUT /api/companies/candidates/:id/pipeline/reject ───────────────────────
 exports.pipelineReject = async (req, res) => {
   try {
@@ -189,6 +314,9 @@ exports.pipelineReject = async (req, res) => {
       if (!fsm.ok) return handleFsmError(fsm, res);
       toState = fsm.nextState;
     }
+
+    // Free any allotted interview slot if interview was not completed
+    await freeCandidateSlotIfUncompleted(candidate, req.user, role, reason, ACTIONS.REJECT);
 
     candidate.status = toState;
     candidate.statusHistory.push({ status: toState, changedBy: req.user._id, changedAt: new Date(), notes: reason });
@@ -239,6 +367,9 @@ async function _performGlobalReject({ req, res, reason, action, auditAction, tar
     const actorFirstName = req.user.firstName || '';
     const actorLastName = req.user.lastName || '';
 
+    // Free any allotted interview slot if interview was not completed
+    await freeCandidateSlotIfUncompleted(candidate, req.user, role, reason, action);
+
     candidate.status = toState;
     candidate.statusHistory.push({
       status: toState,
@@ -258,6 +389,7 @@ async function _performGlobalReject({ req, res, reason, action, auditAction, tar
             decidedAt: new Date(),
             notes: reason
           };
+          r.slots = [];
           break;
         }
       }
@@ -365,9 +497,14 @@ exports.pipelineClientPortalDuplicate = async (req, res) => {
 // Available to company + admin/sub_admin. Blocked only if JOINED.
 exports.pipelineCandidateDrop = async (req, res) => {
   const customReason = req.body?.reason || req.body?.notes;
-  const finalReason = customReason && typeof customReason === 'string' && customReason.trim()
-    ? `Candidate Drop: ${customReason.trim()}`
-    : 'Candidate Drop';
+  if (!customReason || typeof customReason !== 'string' || customReason.trim().length < 5) {
+    return res.status(400).json({
+      success: false,
+      message: 'A rejection reason is mandatory (minimum 5 characters).',
+      code: 'REASON_REQUIRED'
+    });
+  }
+  const finalReason = `Candidate Drop: ${customReason.trim()}`;
 
   return _performGlobalReject({
     req, res,
@@ -387,6 +524,8 @@ exports.pipelineReShortlist = async (req, res) => {
 
     const fsm = transition({ currentState: fromState, action: ACTIONS.RE_SHORTLIST, role, payload: req.body });
     if (!fsm.ok) return handleFsmError(fsm, res);
+
+    await freeCandidateSlotIfUncompleted(candidate, req.user, role, 'Candidate re-shortlisted', 'RE_SHORTLIST');
 
     await candidate.populate('job');
 
@@ -416,6 +555,8 @@ exports.pipelineReShortlist = async (req, res) => {
     }
 
     candidate.status = toState;
+    candidate.assignedSlot = null;
+    candidate.interviewConfig = null;
     candidate.rejectionReason = undefined;
     candidate.rejectionNotes = undefined;
     candidate.rejection = undefined;
@@ -654,6 +795,9 @@ async function populateRoundsWithJobSlots(candidate) {
       averageTime: slot.averageTime,
       notes: slot.notes,
       status: slot.status,
+      candidateId: slot.candidateId || null,
+      isTagged: Boolean(slot.isTagged || slot.candidateId),
+      roundType: slot.roundType || null,
       createdAt: slot.createdAt,
       createdBy: slot.createdBy ? {
         _id: slot.createdBy._id,
@@ -704,93 +848,43 @@ async function populateRoundsWithJobSlots(candidate) {
 
     // If candidate already has slot(s) assigned in this round, preserve them directly!
     if (r.slots && r.slots.length > 0) {
-      roundObj.slots = r.slots.map(s => s.toObject ? s.toObject() : JSON.parse(JSON.stringify(s)));
+      roundObj.slots = r.slots.map(s => {
+        const slotData = s.toObject ? s.toObject() : JSON.parse(JSON.stringify(s));
+        if (bookedSlot) {
+          slotData.isTagged = Boolean(bookedSlot.isTagged || bookedSlot.candidateId || slotData.isTagged || slotData.candidateId);
+          slotData.candidateId = bookedSlot.candidateId || slotData.candidateId || null;
+          slotData.slotId = bookedSlot._id || slotData.slotId || slotData._id;
+          if (!slotData.roundType) slotData.roundType = bookedSlot.roundType || roundObj.roundType;
+        } else {
+          slotData.isTagged = Boolean(slotData.isTagged || slotData.candidateId);
+        }
+        return slotData;
+      });
       populatedRounds.push(roundObj);
       continue;
     }
 
-    // Otherwise, fetch active slots for booking from database
-    try {
-      const jobId = candidate.job?._id || candidate.job;
-      
-      const rt = (roundObj.roundType || '').trim().toUpperCase();
-      const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
-      const isHr = hrNames.includes(rt);
-      
-      const roundTypeQuery = isHr 
-        ? { $in: [roundObj.roundType, ...hrNames.map(n => new RegExp(`^${n}$`, 'i')), /HR_ROUND/i, /HR Round/i] }
-        : roundObj.roundType;
-
-      const allSlots = await InterviewSlot.find({
-        job: jobId,
-        roundType: roundTypeQuery
-      })
-        .populate('createdBy', 'email role')
-        .populate('bookedCandidates.candidate', 'firstName lastName email uniqueId interviewConfig')
-        .populate('bookedCandidates.partner', 'firmName firstName lastName uniqueId')
-        .sort({ date: -1, startTime: -1 });
-
-      if (allSlots.length > 0) {
-        // We only want to map slots if we didn't already set one from bookedSlot
-        // But wait, bookedSlot is just ONE slot the candidate is currently assigned to.
-        // If we want history, we should show ALL slots for this round.
-        // Let's merge or just use allSlots!
-        
-        // Let's use allSlots, but highlight the bookedSlot if it exists
-        // The mapping logic is the same:
-        roundObj.slots = allSlots.map(slot => {
-           const mapped = mapSlotDetails(slot);
-           
-           // If this specific slot is the booked slot, we inject the specific candidate coordinates
-           if (bookedSlot && slot._id.toString() === bookedSlot._id.toString()) {
-              const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
-              const isVirtual = displayMode.toLowerCase() === 'virtual';
-              const detailsVal = candidate.interviewConfig?.details || bookedSlot.interviewDetails || bookedSlot.notes || '';
-              mapped.details = {
-                address: !isVirtual ? detailsVal : '',
-                meetingLink: isVirtual ? detailsVal : '',
-                pointOfContact: {
-                  name: candidate.interviewConfig?.interviewer || bookedSlot.interviewerName || '',
-                  email: '',
-                  phone: ''
-                }
-              };
-           }
-           return mapped;
-        }).filter(Boolean);
-
-        // Dynamically elevate status to SLOTS_PUBLISHED so the frontend renders the booking UI
-        // ONLY if the round is currently SLOTS_NOT_PUBLISHED and there are ACTIVE slots
-        if (roundObj.status === 'SLOTS_NOT_PUBLISHED' && allSlots.some(s => s.status === 'ACTIVE')) {
-          roundObj.status = 'SLOTS_PUBLISHED';
-        }
-      } else {
-        // If we have a bookedSlot but no slots were found (edge case), keep the bookedSlot logic
-        if (bookedSlot && roundObj.roundType === bookedSlot.roundType) {
-          const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
-          const isVirtual = displayMode.toLowerCase() === 'virtual';
-          const mapped = mapSlotDetails(bookedSlot);
-          if (mapped) {
-            const detailsVal = candidate.interviewConfig?.details || bookedSlot.interviewDetails || bookedSlot.notes || '';
-            mapped.details = {
-              address: !isVirtual ? detailsVal : '',
-              meetingLink: isVirtual ? detailsVal : '',
-              pointOfContact: {
-                name: candidate.interviewConfig?.interviewer || bookedSlot.interviewerName || '',
-                email: '',
-                phone: ''
-              }
-            };
-            roundObj.slots = [mapped];
-          } else {
-            roundObj.slots = [];
+    // If candidate has a bookedSlot matching this round, map it
+    if (bookedSlot && roundObj.roundType === bookedSlot.roundType) {
+      const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
+      const isVirtual = displayMode.toLowerCase() === 'virtual';
+      const mapped = mapSlotDetails(bookedSlot);
+      if (mapped) {
+        const detailsVal = candidate.interviewConfig?.details || bookedSlot.interviewDetails || bookedSlot.notes || '';
+        mapped.details = {
+          address: !isVirtual ? detailsVal : '',
+          meetingLink: isVirtual ? detailsVal : '',
+          pointOfContact: {
+            name: candidate.interviewConfig?.interviewer || bookedSlot.interviewerName || '',
+            email: '',
+            phone: ''
           }
-        } else {
-          roundObj.slots = [];
-        }
+        };
+        roundObj.slots = [mapped];
+      } else {
+        roundObj.slots = [];
       }
-    } catch (err) {
-      console.error('[PIPELINE] Error fetching all slots:', err);
+    } else {
       roundObj.slots = [];
     }
 
@@ -1139,6 +1233,7 @@ exports.partnerGetPipeline = async (req, res) => {
       submittedBy: partner._id
     })
       .populate('job')
+      .populate('assignedSlot')
       .populate('auditTrail.actorId', 'email role');
 
     if (!candidate) return res.status(404).json({ success: false, message: 'Candidate/submission not found' });
@@ -1175,6 +1270,10 @@ exports.partnerGetPipeline = async (req, res) => {
       return { ...r, status: rStatus };
     });
 
+    const isTaggedCand = Boolean(
+      candidate.assignedSlot && (candidate.assignedSlot.isTagged || candidate.assignedSlot.candidateId || candidate.status === 'SLOT_ASSIGNED')
+    );
+
     res.json({
       success: true,
       data: {
@@ -1187,6 +1286,16 @@ exports.partnerGetPipeline = async (req, res) => {
         auditTrail: [],
         job: candidate.job,
         offer: candidate.offer,
+        assignedSlot: candidate.assignedSlot ? {
+          _id: candidate.assignedSlot._id,
+          date: candidate.assignedSlot.date,
+          startTime: candidate.assignedSlot.startTime,
+          endTime: candidate.assignedSlot.endTime,
+          isTagged: isTaggedCand,
+          candidateId: candidate.assignedSlot.candidateId,
+          roundType: candidate.assignedSlot.roundType,
+        } : null,
+        isTaggedCandidate: isTaggedCand,
       }
     });
   } catch (err) {
@@ -1759,12 +1868,29 @@ exports.pipelineRequestReschedule = async (req, res) => {
       const slot = await InterviewSlot.findById(activeSlotId);
       if (slot) {
         slot.bookedCandidates = slot.bookedCandidates.filter(
-          b => b.candidate.toString() !== candidateObj._id.toString()
+          b => b.candidate && b.candidate.toString() !== candidateObj._id.toString()
         );
-        slot.availableSpots += 1;
-        if (slot.status === 'FULL') {
+        if (slot.isTagged) {
+          slot.isTagged = false;
+          slot.candidateId = null;
+          slot.maxCandidates = slot.maxCandidates || 1;
+          slot.availableSpots = slot.maxCandidates;
           slot.status = 'ACTIVE';
+        } else {
+          slot.availableSpots += 1;
+          if (slot.status === 'FULL') {
+            slot.status = 'ACTIVE';
+          }
         }
+        slot.activityLogs = slot.activityLogs || [];
+        slot.activityLogs.push({
+          action: 'RESCHEDULED_AND_OPENED',
+          performedBy: req.user._id,
+          performedByRole: role,
+          performedByName: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || 'User',
+          details: `Reschedule requested (${role}). Slot opened to candidate pool. Reason: ${reason}`,
+          timestamp: new Date()
+        });
         await slot.save();
       }
     }
@@ -1835,8 +1961,9 @@ exports.partnerRequestReschedule = async (req, res) => {
   try {
     const { reason, suggestedSlots } = req.body;
 
-    if (!suggestedSlots || !Array.isArray(suggestedSlots) || suggestedSlots.length === 0 || suggestedSlots.length > 2) {
-      return res.status(400).json({ success: false, message: 'Please select up to 2 slots for rescheduling.' });
+    const slots = Array.isArray(suggestedSlots) ? suggestedSlots : [];
+    if (slots.length > 2) {
+      return res.status(400).json({ success: false, message: 'You can suggest at most 2 slots for rescheduling.' });
     }
 
     const StaffingPartner = require('../models/StaffingPartner');
@@ -1878,11 +2005,37 @@ exports.partnerRequestReschedule = async (req, res) => {
       const slot = await InterviewSlot.findById(activeSlotId);
       if (slot) {
         slot.bookedCandidates = slot.bookedCandidates.filter(
-          b => b.candidate.toString() !== candidateObj._id.toString()
+          b => b.candidate && b.candidate.toString() !== candidateObj._id.toString()
         );
-        slot.availableSpots += 1;
-        if (slot.status === 'FULL') {
+        if (slot.isTagged) {
+          slot.isTagged = false;
+          slot.candidateId = null;
+          slot.maxCandidates = slot.maxCandidates || 1;
+          slot.availableSpots = slot.maxCandidates;
           slot.status = 'ACTIVE';
+          slot.activityLogs = slot.activityLogs || [];
+          slot.activityLogs.push({
+            action: 'RESCHEDULED_AND_OPENED',
+            performedBy: req.user._id,
+            performedByRole: 'staffing_partner',
+            performedByName: `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Partner',
+            details: `Candidate ${candidateObj.firstName} ${candidateObj.lastName} requested reschedule. Slot opened to candidate pool. Reason: ${reason}`,
+            timestamp: new Date()
+          });
+        } else {
+          slot.availableSpots += 1;
+          if (slot.status === 'FULL') {
+            slot.status = 'ACTIVE';
+          }
+          slot.activityLogs = slot.activityLogs || [];
+          slot.activityLogs.push({
+            action: 'RESCHEDULED_AND_OPENED',
+            performedBy: req.user._id,
+            performedByRole: 'staffing_partner',
+            performedByName: `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Partner',
+            details: `Candidate ${candidateObj.firstName} ${candidateObj.lastName} requested reschedule. Spot released. Reason: ${reason}`,
+            timestamp: new Date()
+          });
         }
         await slot.save();
       }
@@ -1897,7 +2050,7 @@ exports.partnerRequestReschedule = async (req, res) => {
       requestedBy: 'PARTNER',
       reason,
       requestedAt: new Date(),
-      suggestedSlots: suggestedSlots.map(s => ({
+      suggestedSlots: slots.map(s => ({
         slotId: s.slotId,
         date: s.date,
         startTime: s.startTime,
@@ -1977,20 +2130,44 @@ exports.pipelineConfirmReschedule = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No pending reschedule request found' });
     }
 
-    // Find the chosen slot from suggested slots
-    const chosenSlot = reqInfo.suggestedSlots.find(s => s.slotId.toString() === selectedSlotId.toString() || s._id.toString() === selectedSlotId.toString());
-    if (!chosenSlot) {
-      return res.status(400).json({ success: false, message: 'Invalid slot selection. Must choose one of the suggested slots.' });
+    if (!selectedSlotId) {
+      return res.status(400).json({ success: false, message: 'selectedSlotId is required. Please select a slot to confirm the reschedule.' });
     }
 
-    // Book the slot in the InterviewSlot collection
-    const slotDoc = await InterviewSlot.findById(chosenSlot.slotId);
+    // Try to find the chosen slot from suggested slots first
+    let chosenSlotId = selectedSlotId;
+    const chosenFromSuggested = (reqInfo.suggestedSlots || []).find(s => {
+      const sId = s.slotId || s._id;
+      return sId && sId.toString() === selectedSlotId.toString();
+    });
+
+    if (chosenFromSuggested) {
+      chosenSlotId = chosenFromSuggested.slotId || chosenFromSuggested._id;
+    }
+
+    // Book the slot in the InterviewSlot collection — accept from suggestedSlots OR any active slot for this job
+    const slotDoc = await InterviewSlot.findById(chosenSlotId);
     if (!slotDoc) {
       return res.status(404).json({ success: false, message: 'Selected interview slot not found in database' });
     }
 
+    // Validate slot belongs to this candidate's job
+    const candidateJobId = (candidate.job?._id || candidate.job)?.toString();
+    const slotJobId = (slotDoc.job?._id || slotDoc.job)?.toString();
+    if (slotJobId !== candidateJobId) {
+      return res.status(400).json({ success: false, message: 'Selected slot does not belong to this job.' });
+    }
+
+    if (slotDoc.isTagged && slotDoc.candidateId && slotDoc.candidateId.toString() !== candidate._id.toString()) {
+      return res.status(400).json({ success: false, message: 'Selected slot is reserved for another candidate.' });
+    }
+
+    if (slotDoc.status !== 'ACTIVE' && slotDoc.status !== 'FULL') {
+      return res.status(400).json({ success: false, message: `Selected slot is not available. Status: ${slotDoc.status}` });
+    }
+
     if (slotDoc.availableSpots <= 0) {
-      return res.status(400).json({ success: false, message: 'Selected slot is no longer available. Please reject reschedule and request new slots.' });
+      return res.status(400).json({ success: false, message: 'Selected slot is no longer available (full). Please select another slot or reject the reschedule request.' });
     }
 
     // Book the candidate
@@ -2004,6 +2181,16 @@ exports.pipelineConfirmReschedule = async (req, res) => {
     if (slotDoc.availableSpots === 0) {
       slotDoc.status = 'FULL';
     }
+
+    // Log activity
+    slotDoc.activityLogs = slotDoc.activityLogs || [];
+    slotDoc.activityLogs.push({
+      action: 'BOOKED_RESCHEDULE',
+      performedBy: req.user._id,
+      performedByRole: role,
+      details: `Reschedule confirmed. Candidate ${candidate.firstName} ${candidate.lastName} booked into this slot.`,
+      timestamp: new Date()
+    });
     await slotDoc.save();
 
     const existingPocPhone = activeInfo.round.slots?.[0]?.details?.pointOfContact?.phone || '';
@@ -2431,6 +2618,9 @@ exports.pipelineRejectRound = async (req, res) => {
         decidedAt: new Date()
       };
     }
+
+    // Free any allotted interview slot if interview was not completed
+    await freeCandidateSlotIfUncompleted(candidate, req.user, role, reason, ACTIONS.REJECT_ROUND);
 
     candidate.status = fsm.nextState;
     candidate.statusHistory.push({ status: fsm.nextState, changedBy: req.user._id, changedAt: new Date(), notes: `Rejected: ${reason}` });

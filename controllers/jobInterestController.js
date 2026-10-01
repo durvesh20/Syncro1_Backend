@@ -45,6 +45,13 @@ exports.showInterest = async (req, res) => {
             });
         }
 
+        if (job.status === 'PAUSED') {
+            return res.status(400).json({
+                success: false,
+                message: 'This job is currently paused. You cannot show interest until it is active.'
+            });
+        }
+
         if (job.status !== 'ACTIVE') {
             return res.status(400).json({
                 success: false,

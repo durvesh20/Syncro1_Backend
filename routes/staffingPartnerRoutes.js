@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const StaffingPartner = require('../models/StaffingPartner');
+const jobOnHoldGuard = require('../middleware/jobOnHoldGuard');
 const { partnerGetPipeline, partnerRequestReschedule } = require('../controllers/pipelineController');
 
 const {
@@ -37,6 +38,8 @@ const {
   getAvailableSlotsForPartner,
   assignCandidateToSlot,
   removeCandidateFromSlot,
+  confirmTaggedSlot,
+  rejectTaggedSlotByCandidate,
   getWorkedJobs,
   resendConsent,
   updateSubmission,
@@ -290,6 +293,7 @@ router.post('/jobs/:jobId/check-fit', async (req, res) => {
 // @route   POST /api/staffing-partners/jobs/:jobId/candidates
 router.post(
   '/jobs/:jobId/candidates',
+  jobOnHoldGuard,
   safeUpload(uploadResumeMiddleware),
   handleUploadError,
   submitCandidate
@@ -299,18 +303,21 @@ router.post(
 // Must come BEFORE the generic interview-slots route to avoid :id collision
 router.post(
   '/jobs/:jobId/candidates/from-pool',
+  jobOnHoldGuard,
   applyFromPool
 );
 
 router.get('/jobs/:jobId/interview-slots', getAvailableSlotsForPartner);
-router.post('/jobs/:jobId/interview-slots/:slotId/assign', assignCandidateToSlot);
-router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', removeCandidateFromSlot);
+router.post('/jobs/:jobId/interview-slots/:slotId/assign', jobOnHoldGuard, assignCandidateToSlot);
+router.delete('/jobs/:jobId/interview-slots/:slotId/assign/:candidateId', jobOnHoldGuard, removeCandidateFromSlot);
+router.post('/jobs/:jobId/tagged-slot/confirm', jobOnHoldGuard, confirmTaggedSlot);
+router.post('/jobs/:jobId/tagged-slot/reject', jobOnHoldGuard, rejectTaggedSlotByCandidate);
 
 // ==================== SUBMISSIONS ROUTES ====================
 router.get('/submissions', getMySubmissions);
 router.get('/submissions/:id', getSubmission);
 router.get('/submissions/:id/pipeline', partnerGetPipeline);
-router.post('/submissions/:id/pipeline/reschedule', partnerRequestReschedule);
+router.post('/submissions/:id/pipeline/reschedule', jobOnHoldGuard, partnerRequestReschedule);
 router.get('/worked-jobs', getWorkedJobs);
 
 // @desc    Withdraw a submitted candidate

@@ -1186,6 +1186,13 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
+    if (job.status === 'PAUSED') {
+      return res.status(400).json({
+        success: false,
+        message: 'This job is currently paused. Candidate submissions cannot be uploaded until it is active.'
+      });
+    }
+
     if (job.status !== 'ACTIVE') {
       return res.status(400).json({
         success: false,
@@ -1767,10 +1774,12 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
-    // Get all ACTIVE slots for this job
+    // Get all ACTIVE slots for this job that are NOT tagged for a specific candidate
     const slots = await InterviewSlot.find({
       job: req.params.jobId,
       status: 'ACTIVE',
+      isTagged: { $ne: true },
+      candidateId: null,
     }).sort({ date: 1, startTime: 1 });
 
     const now = new Date();
@@ -1793,7 +1802,9 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
       job: req.params.jobId,
       submittedBy: partner._id,
       status: { $in: ['SHORTLISTED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED', 'RESCHEDULE_REQUESTED'] },
-    }).select('firstName lastName email mobile status assignedSlot profile.currentDesignation rounds');
+    })
+      .populate('assignedSlot')
+      .select('firstName lastName email mobile status assignedSlot profile.currentDesignation rounds');
 
     // For each slot show what partner needs to know
     const formattedSlots = slots.map((slot) => {
@@ -1831,6 +1842,7 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
       data: {
         jobId: job._id,
         jobTitle: job.title,
+        jobStatus: job.status,
         company: job.company?.companyName,
         jobDeadline: job.applicationDeadline,
 
@@ -1874,6 +1886,10 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
           };
 
           const activeRoundInfo = getActiveRoundInfo(c);
+          const slotDoc = c.assignedSlot;
+          const isSlotTagged = Boolean(
+            slotDoc && (slotDoc.isTagged || slotDoc.candidateId || c.status === 'SLOT_ASSIGNED')
+          );
 
           return {
             candidateId: c._id,
@@ -1882,8 +1898,19 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
             designation: c.profile?.currentDesignation,
             status: c.status,
             alreadyAssigned: !!c.assignedSlot,
-            assignedSlotId: c.assignedSlot,
-            activeRoundType: activeRoundInfo ? activeRoundInfo.round.roundType : null,
+            assignedSlotId: slotDoc?._id || c.assignedSlot,
+            isSlotTagged,
+            taggedSlot: isSlotTagged && slotDoc ? {
+              slotId: slotDoc._id,
+              date: slotDoc.date,
+              startTime: slotDoc.startTime,
+              endTime: slotDoc.endTime,
+              interviewMode: slotDoc.interviewMode,
+              roundType: slotDoc.roundType || (activeRoundInfo ? activeRoundInfo.round.roundType : null),
+              isTagged: true,
+            } : null,
+            activeRoundType: activeRoundInfo ? activeRoundInfo.round.roundType : (slotDoc?.roundType || null),
+            activeRoundName: activeRoundInfo ? (activeRoundInfo.round.name || activeRoundInfo.round.roundType) : (slotDoc?.roundType || null),
             rescheduleRequest: activeRoundInfo && activeRoundInfo.round.rescheduleRequest ? activeRoundInfo.round.rescheduleRequest : null
           };
         }),
@@ -1939,11 +1966,19 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    // Candidate must be SHORTLISTED (legacy), SLOTS_PUBLISHED (pipeline), SLOTS_NOT_PUBLISHED, or RESCHEDULE_REQUESTED
-    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED' && candidate.status !== 'RESCHEDULE_REQUESTED') {
+    // Block candidates with a pending reschedule request — talent partner must wait for company confirmation
+    if (candidate.status === 'RESCHEDULE_REQUESTED') {
       return res.status(400).json({
         success: false,
-        message: `Only SHORTLISTED, SLOTS_PUBLISHED, SLOTS_NOT_PUBLISHED, or RESCHEDULE_REQUESTED candidates can be assigned to slots. Current status: ${candidate.status}`,
+        message: 'Candidate has a pending reschedule request. Please wait for company confirmation before assigning slots.',
+      });
+    }
+
+    // Candidate must be SHORTLISTED (legacy), SLOTS_PUBLISHED (pipeline), or SLOTS_NOT_PUBLISHED
+    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+      return res.status(400).json({
+        success: false,
+        message: `Only SHORTLISTED, SLOTS_PUBLISHED, or SLOTS_NOT_PUBLISHED candidates can be assigned to slots. Current status: ${candidate.status}`,
       });
     }
 
@@ -2449,6 +2484,275 @@ exports.removeCandidateFromSlot = async (req, res) => {
     });
   }
 };
+
+// PARTNER: Confirm pre-allotted tagged slot & send consent to candidate
+// POST /api/staffing-partners/jobs/:jobId/tagged-slot/confirm
+exports.confirmTaggedSlot = async (req, res) => {
+  try {
+    const { candidateId, slotId } = req.body;
+    if (!candidateId) {
+      return res.status(400).json({ success: false, message: 'candidateId is required' });
+    }
+
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({ success: false, message: 'Partner not found' });
+    }
+
+    const candidate = await Candidate.findOne({
+      _id: candidateId,
+      submittedBy: partner._id,
+      job: req.params.jobId
+    }).populate('job company');
+
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found or unauthorized' });
+    }
+
+    const targetSlotId = slotId || candidate.assignedSlot;
+    if (!targetSlotId) {
+      return res.status(400).json({ success: false, message: 'Candidate does not have an assigned slot' });
+    }
+
+    const slot = await InterviewSlot.findById(targetSlotId);
+    if (!slot) {
+      return res.status(404).json({ success: false, message: 'Interview slot not found' });
+    }
+
+    const crypto = require('crypto');
+    const confirmationToken = crypto.randomBytes(32).toString('hex');
+    const detailsVal = slot.interviewDetails || '';
+
+    candidate.assignedSlot = slot._id;
+    const oldStatus = candidate.status;
+    candidate.status = 'SLOT_DETAILS_SHARED';
+
+    // Helper to get active round info
+    const getActiveRoundInfo = (c) => {
+      const status = c.status;
+      if (['SHORTLISTED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED'].includes(status)) return null;
+      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      if (hrStates.includes(status)) {
+        const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        if (idx !== -1) return { index: idx, round: c.rounds[idx] };
+      }
+      for (let i = 0; i < c.rounds.length; i++) {
+        const r = c.rounds[i];
+        const L_STATES = [
+          'SLOTS_NOT_PUBLISHED',
+          'SLOTS_PUBLISHED',
+          'SLOT_ASSIGNED',
+          'RESCHEDULE_REQUESTED',
+          'SLOT_DETAILS_SHARED',
+          'INTERVIEW_CONDUCTED',
+          'ROUND_ON_HOLD'
+        ];
+        if (L_STATES.includes(r.status)) return { index: i, round: r };
+      }
+      return null;
+    };
+
+    const activeInfo = getActiveRoundInfo(candidate);
+    if (activeInfo) {
+      const { round } = activeInfo;
+      round.status = 'SLOT_DETAILS_SHARED';
+      round.slots = [{
+        date: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        timezone: slot.timezone || 'Asia/Kolkata',
+        mode: slot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
+        interviewerName: slot.interviewerName || '',
+        capacity: 1,
+        bookedBy: partner._id,
+        bookedAt: new Date(),
+        details: {
+          meetingLink: slot.interviewMode === 'Virtual' ? detailsVal : '',
+          address: slot.interviewMode === 'Face-to-Face' ? detailsVal : '',
+          pointOfContact: {
+            name: slot.interviewerName || '',
+            phone: '',
+            email: ''
+          }
+        }
+      }];
+    }
+
+    candidate.interviewConfig = {
+      mode: slot.interviewMode === 'Face-to-Face' ? 'Face-to-Face' : 'Virtual',
+      details: detailsVal,
+      interviewer: slot.interviewerName || '',
+      isConfirmedByCompany: true,
+      confirmedAt: new Date(),
+      confirmationToken,
+      candidateResponse: 'PENDING'
+    };
+
+    candidate.statusHistory.push({
+      status: 'SLOT_DETAILS_SHARED',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: 'PARTNER',
+      notes: `Talent partner confirmed allotted slot on ${new Date(slot.date).toDateString()} ${slot.startTime} - ${slot.endTime}. Interview consent sent to candidate.`,
+      metadata: {
+        slotId: slot._id,
+        slotDate: slot.date,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+      }
+    });
+
+    if (activeInfo) {
+      candidate.auditTrail = candidate.auditTrail || [];
+      candidate.auditTrail.push({
+        actorId: req.user._id,
+        actorRole: 'staffing_partner',
+        action: 'CONFIRM_TAGGED_SLOT',
+        fromState: oldStatus,
+        toState: 'SLOT_DETAILS_SHARED',
+        reason: `Talent partner confirmed allotted slot. Interview consent sent to candidate.`,
+        roundIndex: activeInfo.index,
+        timestamp: new Date()
+      });
+    }
+
+    await candidate.save();
+
+    // Trigger WhatsApp notification to candidate asynchronously
+    const Company = require('../models/Company');
+    const whatsappService = require('../services/whatsappService');
+    const companyDoc = await Company.findById(candidate.company?._id || candidate.company);
+    const companyName = companyDoc ? companyDoc.companyName : 'Syncro1 Employer';
+    const interviewDateStr = new Date(slot.date).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+
+    try {
+      await whatsappService.sendInterviewInvitation(
+        candidate.mobile,
+        candidate.firstName,
+        companyName,
+        interviewDateStr,
+        slot.startTime,
+        candidate.job?.title || 'Job Interview',
+        slot.interviewMode === 'Virtual' ? 'Online' : 'Offline',
+        detailsVal,
+        slot.interviewerName || 'Hiring Team',
+        confirmationToken
+      );
+    } catch (waErr) {
+      console.warn('[PARTNER CONFIRM SLOT] WhatsApp error:', waErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Interview consent sent to candidate and slot confirmed successfully.',
+      data: {
+        candidateId: candidate._id,
+        status: candidate.status,
+        slotId: slot._id
+      }
+    });
+  } catch (error) {
+    console.error('[PARTNER] Confirm tagged slot error:', error);
+    res.status(500).json({ success: false, message: 'Failed to confirm slot', error: error.message });
+  }
+};
+
+// PARTNER: Candidate Reject - candidate does not want to proceed with application
+// POST /api/staffing-partners/jobs/:jobId/tagged-slot/reject
+exports.rejectTaggedSlotByCandidate = async (req, res) => {
+  try {
+    const { candidateId, slotId, reason } = req.body;
+    if (!candidateId) {
+      return res.status(400).json({ success: false, message: 'candidateId is required' });
+    }
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'A rejection reason is mandatory (minimum 5 characters).'
+      });
+    }
+
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({ success: false, message: 'Partner not found' });
+    }
+
+    const candidate = await Candidate.findOne({
+      _id: candidateId,
+      submittedBy: partner._id,
+      job: req.params.jobId
+    });
+
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found or unauthorized' });
+    }
+
+    const targetSlotId = slotId || candidate.assignedSlot;
+    if (targetSlotId) {
+      const slot = await InterviewSlot.findById(targetSlotId);
+      if (slot) {
+        slot.bookedCandidates = (slot.bookedCandidates || []).filter(
+          b => b.candidate && b.candidate.toString() !== candidate._id.toString()
+        );
+        slot.isTagged = false;
+        slot.candidateId = null;
+        slot.maxCandidates = slot.maxCandidates || 1;
+        slot.availableSpots = slot.maxCandidates;
+        slot.status = 'ACTIVE';
+        slot.activityLogs = slot.activityLogs || [];
+        slot.activityLogs.push({
+          action: 'SLOT_OPENED_ON_REJECT',
+          performedBy: req.user._id,
+          performedByRole: 'staffing_partner',
+          performedByName: `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Partner',
+          details: `Candidate ${candidate.firstName} ${candidate.lastName} dropped application. Slot opened to candidate pool. Reason: ${reason || ''}`.trim(),
+          timestamp: new Date()
+        });
+        await slot.save();
+      }
+    }
+
+    candidate.status = 'CANDIDATE_DROP';
+    candidate.assignedSlot = null;
+    candidate.rejectionReason = reason || 'Candidate rejected / does not want to proceed with application';
+
+    // Update active round
+    for (let i = 0; i < (candidate.rounds || []).length; i++) {
+      const r = candidate.rounds[i];
+      if (r.status === 'SLOT_ASSIGNED' || r.status === 'SLOTS_PUBLISHED' || r.status === 'RESCHEDULE_REQUESTED') {
+        r.status = 'CANDIDATE_DROP';
+        r.slots = [];
+        break;
+      }
+    }
+
+    candidate.statusHistory.push({
+      status: 'CANDIDATE_DROP',
+      changedBy: req.user._id,
+      changedAt: new Date(),
+      changedByRole: 'PARTNER',
+      notes: reason || 'Candidate rejected / opted not to proceed with application. Slot released.'
+    });
+
+    await candidate.save();
+
+    res.json({
+      success: true,
+      message: 'Candidate application closed (Candidate rejected / dropped) and slot released.',
+      data: {
+        candidateId: candidate._id,
+        status: candidate.status
+      }
+    });
+  } catch (error) {
+    console.error('[PARTNER] Reject tagged slot error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reject slot', error: error.message });
+  }
+};
 // ============================================================
 // RESUME UPDATE (after submission — separate route)
 // ============================================================
@@ -2625,9 +2929,9 @@ exports.getMySubmissions = async (req, res) => {
           'profile.noticePeriod profile.currentSalary profile.expectedSalary ' +
           'profile.writeup profile.currentCompany profile.currentDesignation ' +
           'resume interviewConfig whatsappConsent.status resumeAnalysis.profileScore ' +
-          'resumeAnalysis.matchLevel createdAt job company assignedSlot commission payout'
+          'resumeAnalysis.matchLevel createdAt job company assignedSlot commission payout rounds statusHistory'
         )
-        .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName')
+        .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName notes isTagged candidateId')
         .lean(),
       Candidate.countDocuments(query),
       Candidate.countDocuments({ submittedBy: partner._id }),
@@ -2676,55 +2980,8 @@ exports.getMySubmissions = async (req, res) => {
 };
 
 async function checkAndElevateCandidateStatus(candidate, userId) {
-  if (!candidate || candidate.status !== 'SLOTS_NOT_PUBLISHED') {
-    return;
-  }
-
-  const InterviewSlot = require('../models/InterviewSlot');
-  const getActiveRoundInfoLocal = (c) => {
-    for (let i = 0; i < c.rounds.length; i++) {
-      const r = c.rounds[i];
-      if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED') {
-        return { index: i, round: r };
-      }
-    }
-    return null;
-  };
-
-  const activeRoundInfo = getActiveRoundInfoLocal(candidate);
-  if (!activeRoundInfo) return;
-
-  const jobId = candidate.job?._id || candidate.job;
-  const activeSlots = await InterviewSlot.find({
-    job: jobId,
-    roundType: activeRoundInfo.round.roundType,
-    status: 'ACTIVE'
-  });
-
-  if (activeSlots.length > 0) {
-    candidate.status = 'SLOTS_PUBLISHED';
-    activeRoundInfo.round.status = 'SLOTS_PUBLISHED';
-    candidate.statusHistory.push({
-      status: 'SLOTS_PUBLISHED',
-      changedBy: userId || candidate._id,
-      changedAt: new Date(),
-      notes: 'System auto-elevated status to SLOTS_PUBLISHED because active slots exist for this round.'
-    });
-
-    candidate.auditTrail = candidate.auditTrail || [];
-    candidate.auditTrail.push({
-      actorId: userId || candidate._id,
-      actorRole: 'system',
-      action: 'PUBLISH_SLOTS',
-      fromState: 'SLOTS_NOT_PUBLISHED',
-      toState: 'SLOTS_PUBLISHED',
-      reason: 'Active slots exist for the job',
-      roundIndex: activeRoundInfo.index,
-      timestamp: new Date()
-    });
-
-    await candidate.save();
-  }
+  // Disabled: viewing candidate must not silently mutate their status to SLOTS_PUBLISHED in DB
+  return;
 }
 
 // @desc    Get Single Submission
@@ -2739,7 +2996,7 @@ exports.getSubmission = async (req, res) => {
     })
       .populate('job', 'title company commission salary uniqueId pipelineTemplate')
       .populate('company', 'companyName')
-      .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName');
+      .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName notes isTagged candidateId roundType');
 
     if (!submission) {
       return res.status(404).json({
@@ -2747,8 +3004,6 @@ exports.getSubmission = async (req, res) => {
         message: 'Submission not found'
       });
     }
-
-    await checkAndElevateCandidateStatus(submission, req.user._id);
 
     const submissionObj = submission.toObject();
     if (submissionObj.status === 'ROUND_ON_HOLD') {
