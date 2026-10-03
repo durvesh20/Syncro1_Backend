@@ -27,6 +27,7 @@ const {
   getJob,
   updateJob,
   deleteJob,
+  setJobReportTracker,
 
   // Job Approval Workflow
   submitJobForApproval,
@@ -330,6 +331,13 @@ router.route('/jobs/:id')
   .get(checkCompanyPermission('VIEW_JOBS'), getJob)
   .put(checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('EDIT_JOB'), updateJob)
   .delete(checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('CLOSE_JOB'), deleteJob);
+
+// Report Tracker — lightweight tracker update, bypasses edit-request flow (tracker is not job content)
+router.patch(
+  '/jobs/:id/report-tracker',
+  checkCompanyPermission('EDIT_JOB'),
+  setJobReportTracker
+);
 
 router.get('/jobs/:jobId/candidates', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_APPLICANTS'), getJobCandidates);
 

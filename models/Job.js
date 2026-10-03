@@ -313,6 +313,63 @@ const jobSchema = new mongoose.Schema({
     }
   ],
 
+  // ==================== REPORT TRACKER ====================
+  // Optional: stores a saved report config for this job so reports can be
+  // downloaded in one click without reconfiguring fields/filters every time.
+  reportTracker: {
+    reportType: { type: String, default: null },
+    selectedFields: { type: [String], default: [] },
+    selectedFilters: { type: mongoose.Schema.Types.Mixed, default: {} },
+    templateId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ReportTemplate',
+      default: null
+    },
+    templateName: { type: String, default: null },
+    setAt: { type: Date, default: null },
+    setBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+    createdAt: { type: Date, default: null },
+    createdByName: { type: String, default: null },
+    createdByRole: { type: String, default: null },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+    updatedAt: { type: Date, default: null },
+    updatedByName: { type: String, default: null },
+    updatedByRole: { type: String, default: null },
+    history: [
+      {
+        action: {
+          type: String,
+          enum: ['CREATED', 'UPDATED', 'CLEARED', 'REORDERED'],
+          default: 'UPDATED'
+        },
+        performedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          default: null
+        },
+        performedByName: { type: String, default: null },
+        performedByRole: { type: String, default: null },
+        selectedFieldsCount: { type: Number, default: 0 },
+        selectedFields: { type: [String], default: [] },
+        timestamp: { type: Date, default: Date.now },
+        details: { type: String, default: null }
+      }
+    ]
+  },
+
   // ==================== DEVELOPER INTEGRATION ====================
   external_job_id: {
     type: String,

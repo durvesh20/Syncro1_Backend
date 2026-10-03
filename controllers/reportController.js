@@ -88,8 +88,27 @@ exports.saveReportTemplate = async (req, res) => {
     const { reportType } = req.params;
     if (!assertAllowed(req, res, reportType)) return;
 
-    const { selectedFields = [], selectedFilters = {}, name } = req.body || {};
+    const { selectedFields = [], selectedFilters = {}, name, templateId } = req.body || {};
     const templateName = name?.trim() || `Structure - ${new Date().toLocaleString('en-IN')}`;
+
+    // Check if a template with this name already exists for this user and reportType
+    const escapedName = templateName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const duplicateQuery = {
+      userId: req.user._id,
+      reportType,
+      name: { $regex: new RegExp(`^${escapedName}$`, 'i') }
+    };
+    if (templateId) {
+      duplicateQuery._id = { $ne: templateId };
+    }
+    const duplicate = await ReportTemplate.findOne(duplicateQuery).lean();
+
+    if (duplicate) {
+      return res.status(400).json({
+        success: false,
+        message: `"${templateName}" already exists`
+      });
+    }
 
     // Validate selected fields against the registry (reject unknown keys)
     const validKeys = new Set(getValidFieldKeys(reportType));
@@ -97,18 +116,29 @@ exports.saveReportTemplate = async (req, res) => {
       (k) => typeof k === 'string' && validKeys.has(k)
     );
 
-    const updated = await ReportTemplate.findOneAndUpdate(
-      { userId: req.user._id, reportType, name: templateName },
-      {
+    let updated;
+    if (templateId) {
+      updated = await ReportTemplate.findOneAndUpdate(
+        { _id: templateId, userId: req.user._id },
+        {
+          role: req.user.role,
+          reportType,
+          name: templateName,
+          selectedFields: cleanFields,
+          selectedFilters
+        },
+        { new: true }
+      ).lean();
+    } else {
+      updated = await ReportTemplate.create({
         userId: req.user._id,
         role: req.user.role,
         reportType,
         name: templateName,
         selectedFields: cleanFields,
         selectedFilters
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    ).lean();
+      });
+    }
 
     res.json({
       success: true,

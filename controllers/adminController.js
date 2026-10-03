@@ -3450,7 +3450,11 @@ exports.getJobDetail = async (req, res) => {
       .populate('rejectedBy', 'email role')
       .populate('discontinuedBy', 'email role')
       .populate('changeHistory.changedBy', 'email role')
-      .populate('assignedTo', 'email role');
+      .populate('assignedTo', 'email role')
+      .populate('reportTracker.setBy', 'email role firstName lastName')
+      .populate('reportTracker.createdBy', 'email role firstName lastName')
+      .populate('reportTracker.updatedBy', 'email role firstName lastName')
+      .populate('reportTracker.history.performedBy', 'email role firstName lastName');
 
     if (!job) {
       return res.status(404).json({
@@ -3533,6 +3537,146 @@ exports.adminDownloadJobPositionPdf = async (req, res) => {
       message: 'Failed to generate Job Description PDF',
       error: error.message
     });
+  }
+};
+
+// @desc    Set / update report tracker for a job (Admin)
+// @route   PATCH /api/admin/jobs/:id/report-tracker
+// @access  Admin / Sub-admin
+exports.setJobReportTrackerByAdmin = async (req, res) => {
+  try {
+    const Job = require('../models/Job');
+    const job = await Job.findById(req.params.id);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const { reportType, selectedFields, selectedFilters, templateId, templateName } = req.body;
+    const actorName = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || req.user.email;
+    const actorRole = req.user.role || 'admin';
+    const now = new Date();
+
+    const hadExistingTracker = Boolean(
+      job.reportTracker &&
+      Array.isArray(job.reportTracker.selectedFields) &&
+      job.reportTracker.selectedFields.length > 0
+    );
+
+    const existingCreatedBy = job.reportTracker?.createdBy || req.user._id;
+    const existingCreatedAt = job.reportTracker?.createdAt || job.reportTracker?.setAt || now;
+    const existingCreatedByName = job.reportTracker?.createdByName || actorName;
+    const existingCreatedByRole = job.reportTracker?.createdByRole || actorRole;
+    const existingHistory = Array.isArray(job.reportTracker?.history) ? job.reportTracker.history : [];
+
+    const isClearRequest = reportType === null || reportType === undefined || (Array.isArray(selectedFields) && selectedFields.length === 0);
+
+    let action;
+    let newFields = [];
+
+    if (isClearRequest) {
+      action = 'CLEARED';
+      const historyEntry = {
+        action: 'CLEARED',
+        performedBy: req.user._id,
+        performedByName: actorName,
+        performedByRole: actorRole,
+        selectedFieldsCount: 0,
+        selectedFields: [],
+        timestamp: now,
+        details: `Report tracker cleared by Admin: ${actorName} (${actorRole})`
+      };
+
+      job.reportTracker = {
+        reportType: null,
+        selectedFields: [],
+        selectedFilters: {},
+        templateId: null,
+        templateName: null,
+        setAt: now,
+        setBy: req.user._id,
+        createdBy: existingCreatedBy,
+        createdAt: existingCreatedAt,
+        createdByName: existingCreatedByName,
+        createdByRole: existingCreatedByRole,
+        updatedBy: req.user._id,
+        updatedAt: now,
+        updatedByName: actorName,
+        updatedByRole: actorRole,
+        history: [...existingHistory, historyEntry]
+      };
+    } else {
+      action = hadExistingTracker ? 'UPDATED' : 'CREATED';
+      newFields = Array.isArray(selectedFields) ? selectedFields : [];
+
+      const historyEntry = {
+        action,
+        performedBy: req.user._id,
+        performedByName: actorName,
+        performedByRole: actorRole,
+        selectedFieldsCount: newFields.length,
+        selectedFields: newFields,
+        timestamp: now,
+        details: `Report tracker ${action.toLowerCase()} with ${newFields.length} columns by Admin: ${actorName} (${actorRole})`
+      };
+
+      job.reportTracker = {
+        reportType: reportType || 'JOB_WITH_CANDIDATES',
+        selectedFields: newFields,
+        selectedFilters: selectedFilters && typeof selectedFilters === 'object' ? selectedFilters : {},
+        templateId: templateId || null,
+        templateName: templateName || null,
+        setAt: now,
+        setBy: req.user._id,
+        createdBy: hadExistingTracker ? existingCreatedBy : req.user._id,
+        createdAt: hadExistingTracker ? existingCreatedAt : now,
+        createdByName: hadExistingTracker ? existingCreatedByName : actorName,
+        createdByRole: hadExistingTracker ? existingCreatedByRole : actorRole,
+        updatedBy: req.user._id,
+        updatedAt: now,
+        updatedByName: actorName,
+        updatedByRole: actorRole,
+        history: [...existingHistory, historyEntry]
+      };
+    }
+
+    job.markModified('reportTracker');
+    await Job.findByIdAndUpdate(
+      req.params.id,
+      { $set: { reportTracker: job.reportTracker } },
+      { new: false, runValidators: false }
+    );
+
+    // Centralized Audit Log
+    try {
+      const auditService = require('../services/auditService');
+      await auditService.log({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        actorEmail: req.user.email,
+        action: `REPORT_TRACKER_${action}`,
+        entityType: 'Job',
+        entityId: job._id,
+        description: `Report tracker ${action.toLowerCase()} by admin for job "${job.title}" (${newFields.length} columns) by ${actorName}`,
+        before: { selectedFields: job.reportTracker?.selectedFields || [] },
+        after: { selectedFields: newFields },
+        ipAddress: auditService.getIp(req),
+        userAgent: auditService.getUserAgent(req)
+      });
+    } catch (auditErr) {
+      console.error('[REPORT_TRACKER_AUDIT] Audit service error:', auditErr.message);
+    }
+
+    // Structured Console Log
+    console.log(`[REPORT_TRACKER_AUDIT] Action: ${action} | Job: ${job._id} ("${job.title}") | By: Admin ${actorName} (${req.user.email}, ${actorRole}) | Fields: ${newFields.length} | At: ${now.toISOString()}`);
+
+    res.json({
+      success: true,
+      message: 'Report tracker updated successfully',
+      data: { reportTracker: job.reportTracker },
+    });
+  } catch (error) {
+    console.error('[ADMIN] Set report tracker error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update report tracker', error: error.message });
   }
 };
 

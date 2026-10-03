@@ -1100,9 +1100,39 @@ exports.createJob = async (req, res) => {
       company: company._id,
       postedBy: req.user._id,
       status: "DRAFT",
-      status: "DRAFT",
       eligiblePlans,
     };
+
+    if (req.body.reportTracker && Array.isArray(req.body.reportTracker.selectedFields) && req.body.reportTracker.selectedFields.length > 0) {
+      const actorName = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || req.user.email;
+      const now = new Date();
+      jobData.reportTracker = {
+        ...req.body.reportTracker,
+        setAt: now,
+        setBy: req.user._id,
+        createdBy: req.user._id,
+        createdAt: now,
+        createdByName: actorName,
+        createdByRole: req.user.role || 'company',
+        updatedBy: req.user._id,
+        updatedAt: now,
+        updatedByName: actorName,
+        updatedByRole: req.user.role || 'company',
+        history: [
+          {
+            action: 'CREATED',
+            performedBy: req.user._id,
+            performedByName: actorName,
+            performedByRole: req.user.role || 'company',
+            selectedFieldsCount: req.body.reportTracker.selectedFields.length,
+            selectedFields: req.body.reportTracker.selectedFields,
+            timestamp: now,
+            details: `Report tracker created on job post with ${req.body.reportTracker.selectedFields.length} columns by ${actorName} (${req.user.role || 'company'})`
+          }
+        ]
+      };
+      console.log(`[REPORT_TRACKER_AUDIT] Action: CREATED | Job: new draft ("${jobData.title}") | By: ${actorName} (${req.user.email}, ${req.user.role || 'company'}) | Fields: ${req.body.reportTracker.selectedFields.length} | At: ${now.toISOString()}`);
+    }
 
     const job = await Job.create(jobData);
 
@@ -1435,6 +1465,148 @@ exports.updateJob = async (req, res) => {
       message: "Update failed",
       error: error.message,
     });
+  }
+};
+
+// @desc    Set / update the report tracker for a job
+// @route   PATCH /api/companies/jobs/:id/report-tracker
+// @access  Company (EDIT_JOB permission) — bypasses edit-request flow.
+//          ONLY updates the reportTracker subdocument; no other job fields are touched.
+exports.setJobReportTracker = async (req, res) => {
+  try {
+    const job = await Job.findById(req.params.id);
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    // Strictly whitelist only tracker fields — prevent any other job field from being updated.
+    const { reportType, selectedFields, selectedFilters, templateId, templateName } = req.body;
+    const actorName = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || req.user.email;
+    const actorRole = req.user.role || 'company';
+    const now = new Date();
+
+    const hadExistingTracker = Boolean(
+      job.reportTracker &&
+      Array.isArray(job.reportTracker.selectedFields) &&
+      job.reportTracker.selectedFields.length > 0
+    );
+
+    const existingCreatedBy = job.reportTracker?.createdBy || req.user._id;
+    const existingCreatedAt = job.reportTracker?.createdAt || job.reportTracker?.setAt || now;
+    const existingCreatedByName = job.reportTracker?.createdByName || actorName;
+    const existingCreatedByRole = job.reportTracker?.createdByRole || actorRole;
+    const existingHistory = Array.isArray(job.reportTracker?.history) ? job.reportTracker.history : [];
+
+    const isClearRequest = reportType === null || reportType === undefined || (Array.isArray(selectedFields) && selectedFields.length === 0);
+
+    let action;
+    let newFields = [];
+
+    if (isClearRequest) {
+      action = 'CLEARED';
+      const historyEntry = {
+        action: 'CLEARED',
+        performedBy: req.user._id,
+        performedByName: actorName,
+        performedByRole: actorRole,
+        selectedFieldsCount: 0,
+        selectedFields: [],
+        timestamp: now,
+        details: `Report tracker cleared by ${actorName} (${actorRole})`
+      };
+
+      job.reportTracker = {
+        reportType: null,
+        selectedFields: [],
+        selectedFilters: {},
+        templateId: null,
+        templateName: null,
+        setAt: now,
+        setBy: req.user._id,
+        createdBy: existingCreatedBy,
+        createdAt: existingCreatedAt,
+        createdByName: existingCreatedByName,
+        createdByRole: existingCreatedByRole,
+        updatedBy: req.user._id,
+        updatedAt: now,
+        updatedByName: actorName,
+        updatedByRole: actorRole,
+        history: [...existingHistory, historyEntry]
+      };
+    } else {
+      action = hadExistingTracker ? 'UPDATED' : 'CREATED';
+      newFields = Array.isArray(selectedFields) ? selectedFields : [];
+
+      const historyEntry = {
+        action,
+        performedBy: req.user._id,
+        performedByName: actorName,
+        performedByRole: actorRole,
+        selectedFieldsCount: newFields.length,
+        selectedFields: newFields,
+        timestamp: now,
+        details: `Report tracker ${action.toLowerCase()} with ${newFields.length} columns by ${actorName} (${actorRole})`
+      };
+
+      job.reportTracker = {
+        reportType: reportType || 'JOB_WITH_CANDIDATES',
+        selectedFields: newFields,
+        selectedFilters: selectedFilters && typeof selectedFilters === 'object' ? selectedFilters : {},
+        templateId: templateId || null,
+        templateName: templateName || null,
+        setAt: now,
+        setBy: req.user._id,
+        createdBy: hadExistingTracker ? existingCreatedBy : req.user._id,
+        createdAt: hadExistingTracker ? existingCreatedAt : now,
+        createdByName: hadExistingTracker ? existingCreatedByName : actorName,
+        createdByRole: hadExistingTracker ? existingCreatedByRole : actorRole,
+        updatedBy: req.user._id,
+        updatedAt: now,
+        updatedByName: actorName,
+        updatedByRole: actorRole,
+        history: [...existingHistory, historyEntry]
+      };
+    }
+
+    // Use $set so only the reportTracker path is written — validation on other fields is skipped.
+    job.markModified('reportTracker');
+    await Job.findByIdAndUpdate(
+      req.params.id,
+      { $set: { reportTracker: job.reportTracker } },
+      { new: false, runValidators: false }
+    );
+
+    // Centralized Audit Log
+    try {
+      const auditService = require('../services/auditService');
+      await auditService.log({
+        actor: req.user._id,
+        actorRole: req.user.role,
+        actorEmail: req.user.email,
+        action: `REPORT_TRACKER_${action}`,
+        entityType: 'Job',
+        entityId: job._id,
+        description: `Report tracker ${action.toLowerCase()} for job "${job.title}" (${newFields.length} columns) by ${actorName}`,
+        before: { selectedFields: job.reportTracker?.selectedFields || [] },
+        after: { selectedFields: newFields },
+        ipAddress: auditService.getIp(req),
+        userAgent: auditService.getUserAgent(req)
+      });
+    } catch (auditErr) {
+      console.error('[REPORT_TRACKER_AUDIT] Audit service error:', auditErr.message);
+    }
+
+    // Structured Console Log
+    console.log(`[REPORT_TRACKER_AUDIT] Action: ${action} | Job: ${job._id} ("${job.title}") | By: ${actorName} (${req.user.email}, ${actorRole}) | Fields: ${newFields.length} | At: ${now.toISOString()}`);
+
+    res.json({
+      success: true,
+      message: 'Report tracker updated successfully',
+      data: { reportTracker: job.reportTracker },
+    });
+  } catch (error) {
+    console.error('[COMPANY] Set report tracker error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update report tracker', error: error.message });
   }
 };
 

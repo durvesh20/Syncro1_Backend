@@ -80,8 +80,11 @@ const adminActionLogSchema = new mongoose.Schema({
             // Agreement query
             'AGREEMENT_QUERY_RESPONDED',
 
-            // Report downloads
+            // Report downloads & tracker
             'REPORT_DOWNLOAD',
+            'REPORT_TRACKER_CREATED',
+            'REPORT_TRACKER_UPDATED',
+            'REPORT_TRACKER_CLEARED',
 
             // Pipeline actions (company-side candidate pipeline)
             'PIPELINE_SHORTLIST',

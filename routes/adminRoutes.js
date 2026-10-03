@@ -56,7 +56,8 @@ const {
   bulkRevokeVerificationAssignment,
   adminConfirmTaggedSlot,
   adminRejectTaggedSlot,
-  adminRescheduleTaggedSlot
+  adminRescheduleTaggedSlot,
+  setJobReportTrackerByAdmin
 } = require('../controllers/adminController');
 
 const {
@@ -251,6 +252,11 @@ router.get(
 router.get(
   '/jobs/:id/download-jd',
   adminDownloadJobPositionPdf
+);
+
+router.patch(
+  '/jobs/:id/report-tracker',
+  setJobReportTrackerByAdmin
 );
 
 // All candidates

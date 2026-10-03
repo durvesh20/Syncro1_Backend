@@ -45,18 +45,20 @@ const CANDIDATE_DETAILS_SECTION = {
     { key: 'cand_mobile', label: 'Mobile', path: 'mobile', type: 'string', default: false },
     { key: 'cand_status', label: 'Current Status', path: 'status', type: 'string', default: true },
     { key: 'cand_education', label: 'Education (Candidate Profile)', type: 'string', compute: 'cand_education', default: false },
-    { key: 'cand_aiEducation', label: 'Education (Resume / AI)', type: 'string', compute: 'cand_aiEducation', default: false },
+    { key: 'cand_aiEducation', label: 'Education (Resume)', type: 'string', compute: 'cand_aiEducation', default: false },
     { key: 'cand_writeup', label: 'Remark / Writeup', type: 'string', compute: 'cand_writeup', default: false },
     { key: 'cand_location', label: 'Location', path: 'profile.location', type: 'string', default: false },
     { key: 'cand_totalExp', label: 'Total Experience (yrs)', path: 'profile.totalExperience', type: 'number', default: false },
     { key: 'cand_relExp', label: 'Relevant Experience (yrs)', path: 'profile.relevantExperience', type: 'number', default: false },
     { key: 'cand_notice', label: 'Notice Period', path: 'profile.noticePeriod', type: 'string', default: false },
+    { key: 'cand_lastWorkingDay', label: 'Last Working Day (LWD)', path: 'profile.lastWorkingDay', type: 'date', compute: 'cand_lastWorkingDay', default: false },
     { key: 'cand_currentSalary', label: 'Current CTC', path: 'profile.currentSalary', type: 'number', default: false },
     { key: 'cand_expectedSalary', label: 'Expected CTC', path: 'profile.expectedSalary', type: 'number', default: false },
     { key: 'cand_currentCompany', label: 'Current Company (Candidate Profile)', type: 'string', compute: 'cand_currentCompany', default: false },
-    { key: 'cand_aiCurrentCompany', label: 'Current Company (Resume / AI)', type: 'string', compute: 'cand_aiCurrentCompany', default: false },
+    { key: 'cand_aiCurrentCompany', label: 'Current Company (Resume)', type: 'string', compute: 'cand_aiCurrentCompany', default: false },
     { key: 'cand_currentDesignation', label: 'Current Designation', path: 'profile.currentDesignation', type: 'string', default: false },
     { key: 'cand_skills', label: 'Skills', path: 'profile.skills', type: 'array', default: false },
+    { key: 'cand_resume', label: 'Resume', path: 'resume.url', type: 'string', compute: 'cand_resume', default: false },
     { key: 'cand_linkedin', label: 'LinkedIn', path: 'profile.linkedinProfile', type: 'string', default: false },
     { key: 'cand_consentStatus', label: 'Consent Status', path: 'consent.consentStatus', type: 'string', default: false },
     { key: 'cand_submittedAt', label: 'Submitted At', path: 'createdAt', type: 'date', default: false }
@@ -65,7 +67,7 @@ const CANDIDATE_DETAILS_SECTION = {
 
 const CANDIDATE_SCORING_SECTION = {
   sectionKey: 'candidateScoring',
-  label: 'AI Scoring',
+  label: 'Candidate Scoring',
   fields: [
     { key: 'score_match', label: 'Match Score %', path: 'submissionMetadata.matchScore', type: 'number', default: false },
     { key: 'score_matchLevel', label: 'Match Level', path: 'resumeAnalysis.matchLevel', type: 'string', default: false },
@@ -356,7 +358,7 @@ const reportFieldRegistry = {
   JOB_WITH_CANDIDATES: {
     label: 'Job + Candidate Report',
     description: 'Job-wise list of all candidates who applied, with stage and score.',
-    allowedRoles: ['admin', 'sub_admin'],
+    allowedRoles: ['admin', 'sub_admin', 'company'],
     base: 'candidates',
     scope: null,
     lookups: CANDIDATE_LOOKUPS,
@@ -491,6 +493,15 @@ function getFieldMap(reportType, role) {
       map[f.key] = f;
     });
   });
+
+  // Aliases for resume and LWD
+  if (map['cand_resume']) {
+    map['cand_resumeUrl'] = map['cand_resume'];
+  }
+  if (map['cand_lastWorkingDay']) {
+    map['cand_lwd'] = map['cand_lastWorkingDay'];
+  }
+
   return map;
 }
 

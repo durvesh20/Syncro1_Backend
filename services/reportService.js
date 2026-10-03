@@ -261,6 +261,24 @@ function computeValue(doc, fieldDef) {
         getPath(doc, 'resumeAnalysis.summary');
       return writeup || 'N/A';
     }
+    case 'cand_resume':
+    case 'cand_resumeUrl': {
+      const url =
+        getPath(doc, 'resume.url') ||
+        getPath(doc, 'resumeAnalysis.resumeUrl') ||
+        getPath(doc, 'resumeAnalysis.aiData.resumeUrl') ||
+        getPath(doc, 'resume.fileName');
+      return url || '';
+    }
+    case 'cand_lastWorkingDay':
+    case 'cand_lwd': {
+      const lwd =
+        getPath(doc, 'profile.lastWorkingDay') ||
+        getPath(doc, 'lastWorkingDay');
+      if (!lwd) return '';
+      const d = new Date(lwd);
+      return isNaN(d.getTime()) ? '' : d;
+    }
     case 'rej_rejectedBy': {
       // reviewedByUser is the $lookup result from users collection
       const user = doc.reviewedByUser;
@@ -457,7 +475,9 @@ async function streamReportToResponse({ res, reportType, selectedFields, cursor,
   ws.columns = orderedFields.map((f) => ({
     header: f.label,
     key: f.key,
-    width: Math.min(Math.max((f.label || '').length + 4, 12), 48),
+    width: ['cand_resume', 'cand_resumeUrl', 'cand_linkedin'].includes(f.key)
+      ? 36
+      : Math.min(Math.max((f.label || '').length + 4, 12), 48),
     style: f.type === 'date' ? { numFmt: 'yyyy-mm-dd' } : undefined
   }));
 
