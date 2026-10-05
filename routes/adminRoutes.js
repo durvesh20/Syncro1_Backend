@@ -1534,4 +1534,30 @@ router.get('/integrations', getAllIntegrations);
 router.get('/integrations/:id', getIntegrationDetail);
 router.put('/integrations/:id/status', updateIntegrationStatus);
 
+// ==================== PARTNER PROGRAM & PERFORMANCE CHALLENGE ====================
+const {
+  getAllTournaments,
+  getTournamentById,
+  getCurrentTournament,
+  createTournament,
+  updateTournament,
+  deleteTournament,
+  saveTournament,
+  getAdminRankings,
+  getAdminPartnerAudit,
+  triggerBackfill
+} = require('../controllers/partnerProgramController');
+
+router.get('/partner-program/tournaments', getAllTournaments);
+router.get('/partner-program/tournaments/:id', getTournamentById);
+router.post('/partner-program/tournaments', createTournament);
+router.put('/partner-program/tournaments/:id', updateTournament);
+router.delete('/partner-program/tournaments/:id', deleteTournament);
+
+router.get('/partner-program/tournament', getCurrentTournament);
+router.post('/partner-program/tournament', saveTournament);
+router.get('/partner-program/rankings', getAdminRankings);
+router.get('/partner-program/:partnerId/audit', getAdminPartnerAudit);
+router.post('/partner-program/backfill', triggerBackfill);
+
 module.exports = router;

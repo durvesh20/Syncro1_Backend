@@ -390,4 +390,19 @@ router.delete('/my-candidates/:id', deletePoolCandidate);
 // @route GET /api/staffing-partners/jobs/:jobId/screening-questions
 router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForPartner);
 
+// ==================== PARTNER PROGRAM & PERFORMANCE CHALLENGE ====================
+const {
+  getAllTournaments,
+  getTournamentById,
+  getCurrentTournament,
+  getLeaderboard,
+  getPartnerStats
+} = require('../controllers/partnerProgramController');
+
+router.get('/partner-program/tournaments', getAllTournaments);
+router.get('/partner-program/tournaments/:id', getTournamentById);
+router.get('/partner-program/tournament', getCurrentTournament);
+router.get('/partner-program/leaderboard', getLeaderboard);
+router.get('/partner-program/stats', getPartnerStats);
+
 module.exports = router;

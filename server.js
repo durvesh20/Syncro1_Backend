@@ -42,6 +42,8 @@ require('./models/WebhookEndpoint');
 require('./models/WebhookDelivery');
 require('./models/ApiLog');
 require('./models/IntegrationEvent');
+require('./models/PartnerTournament');
+require('./models/PartnerPointEvent');
 
 const app = express();
 

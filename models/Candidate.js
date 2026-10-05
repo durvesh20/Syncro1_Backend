@@ -953,4 +953,23 @@ candidateSchema.pre('save', function (next) {
   next();
 });
 
+// Real-time Partner Program points calculation hook
+candidateSchema.post('save', async function (doc) {
+  try {
+    if (doc && doc.submittedBy) {
+      const { processCandidateStageChange } = require('../services/partnerProgramService');
+      // Fire and handle asynchronously without blocking response
+      setImmediate(async () => {
+        try {
+          await processCandidateStageChange(doc);
+        } catch (e) {
+          console.error('[PARTNER_PROGRAM_HOOK] Error calculating points:', e.message);
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[PARTNER_PROGRAM_HOOK] Initialization error:', err.message);
+  }
+});
+
 module.exports = mongoose.model('Candidate', candidateSchema);
