@@ -5366,3 +5366,72 @@ exports.getJobScreeningQuestionsForAdmin = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
   }
 };
+
+// @desc    Set or update report tracker configuration for a job (admin side)
+// @route   PATCH /api/admin/jobs/:jobId/report-tracker
+// @access  Admin / SubAdmin
+exports.updateJobReportTrackerByAdmin = async (req, res) => {
+  try {
+    const jobId = req.params.jobId || req.params.id;
+    const Job = require('../models/Job');
+    const job = await Job.findById(jobId);
+
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const { reportType, selectedFields, selectedFilters, templateId, templateName, clear } = req.body || {};
+
+    if (clear === true || reportType === null) {
+      job.reportTracker = null;
+    } else {
+      job.reportTracker = {
+        reportType: reportType || 'JOB_WITH_CANDIDATES',
+        selectedFields: Array.isArray(selectedFields) ? selectedFields : [],
+        selectedFilters: selectedFilters || {},
+        templateId: templateId || null,
+        templateName: templateName || (job.uniqueId ? `${job.uniqueId} Tracker` : 'Job Tracker'),
+        updatedAt: new Date()
+      };
+    }
+
+    await job.save();
+
+    return res.json({
+      success: true,
+      message: 'Excel column sequence saved successfully',
+      data: {
+        reportTracker: job.reportTracker,
+        job
+      }
+    });
+  } catch (error) {
+    console.error('updateJobReportTrackerByAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update report tracker', error: error.message });
+  }
+};
+
+// @desc    Get report tracker configuration for a job (admin side)
+// @route   GET /api/admin/jobs/:jobId/report-tracker
+// @access  Admin / SubAdmin
+exports.getJobReportTrackerByAdmin = async (req, res) => {
+  try {
+    const jobId = req.params.jobId || req.params.id;
+    const Job = require('../models/Job');
+    const job = await Job.findById(jobId).select('reportTracker title uniqueId');
+
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        reportTracker: job.reportTracker || null
+      }
+    });
+  } catch (error) {
+    console.error('getJobReportTrackerByAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch report tracker', error: error.message });
+  }
+};

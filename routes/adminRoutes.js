@@ -1348,8 +1348,14 @@ const { pipelineResendInterviewConsent } = require('../controllers/pipelineResen
 router.post('/candidates/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
 
 // Screening Questions Admin endpoint
-const { getJobScreeningQuestionsForAdmin } = require('../controllers/adminController');
+const { 
+  getJobScreeningQuestionsForAdmin,
+  updateJobReportTrackerByAdmin,
+  getJobReportTrackerByAdmin
+} = require('../controllers/adminController');
 router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForAdmin);
+router.patch('/jobs/:jobId/report-tracker', updateJobReportTrackerByAdmin);
+router.get('/jobs/:jobId/report-tracker', getJobReportTrackerByAdmin);
 
 // ==================== PRE-SCREEN & MANUAL AI MATCH ====================
 

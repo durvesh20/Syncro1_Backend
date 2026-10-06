@@ -311,7 +311,30 @@ const jobSchema = new mongoose.Schema({
       },
       order: { type: Number, required: true } // 1-based
     }
-  ]
+  ],
+
+  // Report tracker configuration for 1-click candidate report downloads
+  reportTracker: {
+    reportType: {
+      type: String,
+      default: 'JOB_WITH_CANDIDATES'
+    },
+    selectedFields: [String],
+    selectedFilters: mongoose.Schema.Types.Mixed,
+    templateId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ReportTemplate',
+      default: null
+    },
+    templateName: {
+      type: String,
+      default: 'Job Tracker'
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }
 }, {
   timestamps: true,
   validateModifiedOnly: true

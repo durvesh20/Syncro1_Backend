@@ -3648,3 +3648,88 @@ exports.deleteJobScreeningQuestion = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to delete screening question', error: error.message });
   }
 };
+
+/**
+ * @desc   Set or update report tracker configuration for a job (company side)
+ * @route  PATCH /api/companies/jobs/:jobId/report-tracker
+ * @access Company
+ */
+exports.updateJobReportTracker = async (req, res) => {
+  try {
+    const jobId = req.params.jobId || req.params.id;
+    let company = await Company.findOne({ user: req.user._id });
+    if (!company && req.user.company) {
+      company = await Company.findById(req.user.company);
+    }
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const job = await Job.findOne({ _id: jobId, company: company._id });
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const { reportType, selectedFields, selectedFilters, templateId, templateName, clear } = req.body || {};
+
+    if (clear === true || reportType === null) {
+      job.reportTracker = null;
+    } else {
+      job.reportTracker = {
+        reportType: reportType || 'JOB_WITH_CANDIDATES',
+        selectedFields: Array.isArray(selectedFields) ? selectedFields : [],
+        selectedFilters: selectedFilters || {},
+        templateId: templateId || null,
+        templateName: templateName || (job.uniqueId ? `${job.uniqueId} Tracker` : 'Job Tracker'),
+        updatedAt: new Date()
+      };
+    }
+
+    await job.save();
+
+    return res.json({
+      success: true,
+      message: 'Excel column sequence saved successfully',
+      data: {
+        reportTracker: job.reportTracker,
+        job
+      }
+    });
+  } catch (error) {
+    console.error('updateJobReportTracker error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update report tracker', error: error.message });
+  }
+};
+
+/**
+ * @desc   Get report tracker configuration for a job (company side)
+ * @route  GET /api/companies/jobs/:jobId/report-tracker
+ * @access Company
+ */
+exports.getJobReportTracker = async (req, res) => {
+  try {
+    const jobId = req.params.jobId || req.params.id;
+    let company = await Company.findOne({ user: req.user._id });
+    if (!company && req.user.company) {
+      company = await Company.findById(req.user.company);
+    }
+    if (!company) {
+      return res.status(404).json({ success: false, message: 'Company not found' });
+    }
+
+    const job = await Job.findOne({ _id: jobId, company: company._id }).select('reportTracker title uniqueId');
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        reportTracker: job.reportTracker || null
+      }
+    });
+  } catch (error) {
+    console.error('getJobReportTracker error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch report tracker', error: error.message });
+  }
+};
