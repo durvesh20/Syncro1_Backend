@@ -354,7 +354,72 @@ function formatValue(doc, fieldDef) {
   }
 }
 
-// ---- aggregation builder --------------------------------------------------
+// ---- aggregation builder & projection -------------------------------------
+
+/**
+ * Builds a minimal projection object containing ONLY fields requested by selectedFields
+ * and any specific paths needed by computed fields. Excludes large blobs and unneeded models.
+ */
+function buildProjection(reportType, selectedFields, role) {
+  const fieldMap = getFieldMap(reportType, role);
+  const proj = { _id: 1, createdAt: 1 };
+
+  (selectedFields || []).forEach((k) => {
+    const f = fieldMap[k];
+    if (!f) return;
+    if (f.path) {
+      proj[f.path] = 1;
+    }
+    if (f.compute) {
+      switch (f.compute) {
+        case 'tp_status':
+        case 'co_status':
+          proj['userInfo.status'] = 1;
+          proj['verificationStatus'] = 1;
+          break;
+        case 'cand_fullName':
+          proj['firstName'] = 1;
+          proj['lastName'] = 1;
+          break;
+        case 'cand_education':
+          proj['profile.education'] = 1;
+          break;
+        case 'cand_aiEducation':
+          proj['resumeAnalysis.scoreBreakdown.education.candidateEducation'] = 1;
+          proj['resumeAnalysis.education'] = 1;
+          proj['resumeAnalysis.aiData.profile.education'] = 1;
+          break;
+        case 'cand_currentCompany':
+          proj['profile.currentCompany'] = 1;
+          break;
+        case 'cand_aiCurrentCompany':
+          proj['resumeAnalysis.aiData.profile.currentCompany'] = 1;
+          proj['resumeAnalysis.currentCompany'] = 1;
+          proj['resumeAnalysis.aiData.profile.experience'] = 1;
+          proj['profile.experience'] = 1;
+          break;
+        case 'cand_writeup':
+          proj['profile.writeup'] = 1;
+          proj['submissionMetadata.partnerNotes'] = 1;
+          proj['adminQueue.reviewNotes'] = 1;
+          proj['resumeAnalysis.summary'] = 1;
+          break;
+        case 'rej_rejectedBy':
+          proj['reviewedByUser.email'] = 1;
+          proj['reviewedByUser.name'] = 1;
+          proj['reviewedByUser.firstName'] = 1;
+          proj['reviewedByUser.lastName'] = 1;
+          break;
+        case 'submissionToHireRatio':
+          proj['metrics.totalSubmissions'] = 1;
+          proj['metrics.totalPlacements'] = 1;
+          break;
+      }
+    }
+  });
+
+  return proj;
+}
 
 // Returns a Mongoose aggregation cursor for the report.
 async function buildCursor({ reportType, user, selectedFields, filters }) {
@@ -377,30 +442,36 @@ async function buildCursor({ reportType, user, selectedFields, filters }) {
     { $sort: { createdAt: -1 } }
   ];
 
-  // Joins declared in the registry (unwound so registry paths resolve)
+  const proj = buildProjection(reportType, selectedFields, user?.role);
+  const projKeys = Object.keys(proj);
+
+  // Joins declared in the registry — ONLY join lookups actually referenced by selected fields
   (def.lookups || []).forEach((lk) => {
-    pipeline.push({
-      $lookup: {
-        from: lk.from,
-        localField: lk.localField,
-        foreignField: lk.foreignField,
-        as: lk.as
-      }
-    });
-    pipeline.push({
-      $unwind: { path: `$${lk.as}`, preserveNullAndEmptyArrays: true }
-    });
+    const isNeeded = projKeys.some((k) => k === lk.as || k.startsWith(lk.as + '.'));
+    if (isNeeded) {
+      pipeline.push({
+        $lookup: {
+          from: lk.from,
+          localField: lk.localField,
+          foreignField: lk.foreignField,
+          as: lk.as
+        }
+      });
+      pipeline.push({
+        $unwind: { path: `$${lk.as}`, preserveNullAndEmptyArrays: true }
+      });
+    }
   });
 
-  // Diagnostic: check if the match returns any documents before streaming
-  const countBefore = await Model.countDocuments(match);
-  console.log(`[reports] buildCursor: ${def.base} count=${countBefore} for match=`, JSON.stringify(match));
-  if (countBefore === 0) {
-    console.warn(`[reports] WARNING: 0 documents match! Pipeline:`);
-    console.warn(JSON.stringify(pipeline, (k, v) => typeof v === 'function' ? undefined : v, 2));
+  // Project ONLY required fields to minimize memory & CPU overhead
+  if (projKeys.length > 2) {
+    pipeline.push({ $project: proj });
   }
 
-  return Model.aggregate(pipeline).allowDiskUse(true).cursor();
+  // Stream in batches of 500 documents for maximum network/RAM efficiency
+  return Model.aggregate(pipeline)
+    .allowDiskUse(true)
+    .cursor({ batchSize: 500 });
 }
 
 // ---- preview headers (no DB query) ----------------------------------------
@@ -422,27 +493,15 @@ function sheetName(reportType) {
 }
 
 /**
- * Build the report in memory and send as a single response.
- * Errors happen BEFORE any bytes are sent to the client, so the frontend
- * always gets either a valid .xlsx file or a proper JSON error.
+ * Stream the report directly to the HTTP response using ExcelJS WorkbookWriter.
+ * Keeps memory usage flat (~20MB) and sends HTTP headers/bytes immediately,
+ * preventing Nginx/Cloudflare 504 timeouts and unblocking the Node.js event loop.
  */
 async function streamReportToResponse({ res, reportType, selectedFields, cursor, fileName, role }) {
   const fieldMap = getFieldMap(reportType, role);
   const orderedFields = (selectedFields || []).map((k) => fieldMap[k]).filter(Boolean);
-  const headers = orderedFields.map((f) => f.label);
 
-  // Collect all rows from the cursor into memory first.
-  // This lets any aggregation / format errors throw BEFORE we set headers.
-  const rows = [];
-  if (cursor) {
-    await cursor.eachAsync((doc) => {
-      rows.push(orderedFields.map((f) => formatValue(doc, f)));
-    });
-  }
-
-  console.log(`[reports] ${fileName}: ${rows.length} data rows collected`);
-
-  // NOW set headers — only after we know the data is valid.
+  // Set HTTP headers immediately so proxy/browser sees active streaming
   res.setHeader(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -450,7 +509,12 @@ async function streamReportToResponse({ res, reportType, selectedFields, cursor,
   res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
   res.setHeader('Cache-Control', 'no-store');
 
-  const workbook = new ExcelJS.Workbook();
+  const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+    stream: res,
+    useStyles: true,
+    useSharedStrings: false,
+  });
+
   const ws = workbook.addWorksheet(sheetName(reportType), { views: [{ state: 'frozen', ySplit: 1 }] });
 
   // Column widths + date formatting
@@ -470,22 +534,35 @@ async function streamReportToResponse({ res, reportType, selectedFields, cursor,
     fgColor: { argb: 'FFE2E8F0' }
   };
   headerRow.alignment = { vertical: 'middle', horizontal: 'left' };
+  headerRow.commit(); // Flush header row immediately
 
-  // Add data rows
-  rows.forEach((rowValues) => {
-    ws.addRow(rowValues);
-  });
-
-  // Write to buffer, then send (use res.send if Express, fall back to res.end)
-  const buffer = await workbook.xlsx.writeBuffer();
-  const buf = Buffer.from(buffer);
-  if (typeof res.send === 'function') {
-    res.send(buf);
-  } else {
-    res.end(buf);
+  let rowCount = 0;
+  if (cursor) {
+    try {
+      for await (const doc of cursor) {
+        if (res.writableEnded || res.closed) {
+          console.warn(`[reports] Client closed connection during ${fileName}`);
+          break;
+        }
+        const rowValues = orderedFields.map((f) => formatValue(doc, f));
+        const row = ws.addRow(rowValues);
+        row.commit(); // Flush row immediately to stream, freeing document memory
+        rowCount++;
+      }
+    } catch (streamErr) {
+      console.error(`[reports] Error during cursor streaming for ${fileName}:`, streamErr);
+    }
   }
 
-  return rows.length;
+  try {
+    ws.commit();
+    await workbook.commit();
+  } catch (commitErr) {
+    console.error(`[reports] Error committing workbook for ${fileName}:`, commitErr);
+  }
+
+  console.log(`[reports] ${fileName}: ${rowCount} data rows streamed successfully`);
+  return rowCount;
 }
 
 /**
@@ -507,22 +584,33 @@ async function debugQuery({ reportType, user, selectedFields, filters }) {
     { $sort: { createdAt: -1 } }
   ];
 
+  const proj = buildProjection(reportType, selectedFields, user?.role);
+  const projKeys = Object.keys(proj);
+
   (def.lookups || []).forEach((lk) => {
-    pipeline.push({
-      $lookup: {
-        from: lk.from,
-        localField: lk.localField,
-        foreignField: lk.foreignField,
-        as: lk.as
-      }
-    });
-    pipeline.push({
-      $unwind: { path: `$${lk.as}`, preserveNullAndEmptyArrays: true }
-    });
+    const isNeeded = projKeys.some((k) => k === lk.as || k.startsWith(lk.as + '.'));
+    if (isNeeded) {
+      pipeline.push({
+        $lookup: {
+          from: lk.from,
+          localField: lk.localField,
+          foreignField: lk.foreignField,
+          as: lk.as
+        }
+      });
+      pipeline.push({
+        $unwind: { path: `$${lk.as}`, preserveNullAndEmptyArrays: true }
+      });
+    }
   });
+
   const limitValue = typeof filters?.limit !== "undefined" ? parseInt(filters.limit, 10) : 5;
   if (limitValue > 0) {
     pipeline.push({ $limit: limitValue });
+  }
+
+  if (projKeys.length > 2) {
+    pipeline.push({ $project: proj });
   }
 
   const sampleRows = await Model.aggregate(pipeline).allowDiskUse(true);

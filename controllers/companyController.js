@@ -1494,7 +1494,9 @@ exports.getJobCandidates = async (req, res) => {
       .populate("assignedSlot", "date startTime endTime status interviewMode")
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .select('-statusHistory -notes -qualityCheck')
+      .lean();
 
     const total = await Candidate.countDocuments(query);
 
@@ -1578,7 +1580,9 @@ exports.getAllCandidates = async (req, res) => {
       .populate("assignedSlot", "date startTime endTime status interviewMode")
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .select('-statusHistory -notes -qualityCheck')
+      .lean();
 
     const total = await Candidate.countDocuments(query);
 

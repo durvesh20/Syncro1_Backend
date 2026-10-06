@@ -241,11 +241,6 @@ exports.generateReport = async (req, res) => {
       });
     }
 
-    // Diagnostic: verify the base collection has documents
-    const Candidate = mongoose.model('Candidate');
-    const totalCandidates = await Candidate.countDocuments({});
-    console.log(`[reports] DB check: total candidates in collection = ${totalCandidates}`);
-
     const cursor = await reportService.buildCursor({
       reportType,
       user: req.user,

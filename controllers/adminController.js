@@ -2870,7 +2870,8 @@ exports.getAllCandidates = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(sanitizedLimit)
-        .select('-statusHistory -notes -qualityCheck'),
+        .select('-statusHistory -notes -qualityCheck')
+        .lean(),
       Candidate.countDocuments(query)
     ]);
 
