@@ -35,6 +35,16 @@ const partnerTournamentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  participants: [{
+    partner: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'StaffingPartner'
+    },
+    joinedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   rules: {
     screenedPoints: { type: Number, default: 2 },
     submittedPoints: { type: Number, default: 5 },

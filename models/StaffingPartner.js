@@ -5,8 +5,14 @@ const staffingPartnerSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
-    unique: true
+    required: false,
+    unique: true,
+    sparse: true
+  },
+  isManualProgramPartner: {
+    type: Boolean,
+    default: false,
+    index: true
   },
 
   // ✅ Added uniqueId field

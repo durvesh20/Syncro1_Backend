@@ -317,7 +317,7 @@ const jobSchema = new mongoose.Schema({
   // Optional: stores a saved report config for this job so reports can be
   // downloaded in one click without reconfiguring fields/filters every time.
   reportTracker: {
-    reportType: { type: String, default: null },
+    reportType: { type: String, default: 'JOB_WITH_CANDIDATES' },
     selectedFields: { type: [String], default: [] },
     selectedFilters: { type: mongoose.Schema.Types.Mixed, default: {} },
     templateId: {
@@ -325,7 +325,7 @@ const jobSchema = new mongoose.Schema({
       ref: 'ReportTemplate',
       default: null
     },
-    templateName: { type: String, default: null },
+    templateName: { type: String, default: 'Job Tracker' },
     setAt: { type: Date, default: null },
     setBy: {
       type: mongoose.Schema.Types.ObjectId,

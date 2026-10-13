@@ -148,7 +148,7 @@ const corsOptions = {
     'X-Syncro1-Signature',
     'X-Syncro1-Timestamp'
   ],
-  exposedHeaders: ['Set-Cookie', 'X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset']
+  exposedHeaders: ['Set-Cookie', 'Content-Disposition', 'X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset']
 };
 
 app.use(cors(corsOptions));
@@ -192,6 +192,7 @@ app.use(sanitizeErrors);
 
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/staffing-partners', require('./routes/staffingPartnerRoutes'));
+
 app.use('/api/companies', require('./routes/companyRoutes'));
 app.use('/api/jobs', require('./routes/jobRoutes'));
 app.use('/api/candidates', require('./routes/candidateRoutes'));

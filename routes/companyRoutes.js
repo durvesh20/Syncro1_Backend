@@ -62,7 +62,11 @@ const {
   // Screening Questions
   saveJobScreeningQuestions,
   getJobScreeningQuestions,
-  deleteJobScreeningQuestion
+  deleteJobScreeningQuestion,
+
+  // Report Tracker
+  updateJobReportTracker,
+  getJobReportTracker
 } = require('../controllers/companyController');
 
 const {
@@ -459,6 +463,10 @@ router.post('/candidates/:id/pipeline/resend-interview-consent', ...PIPELINE_MW,
 router.post('/jobs/:jobId/screening-questions', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('POST_JOB'), saveJobScreeningQuestions);
 router.get('/jobs/:jobId/screening-questions', checkCompanyPermission('VIEW_JOBS'), getJobScreeningQuestions);
 router.delete('/jobs/:jobId/screening-questions/:qId', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('POST_JOB'), deleteJobScreeningQuestion);
+
+// ==================== REPORT TRACKER ROUTES ====================
+router.patch('/jobs/:jobId/report-tracker', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('POST_JOB'), updateJobReportTracker);
+router.get('/jobs/:jobId/report-tracker', checkCompanyPermission('VIEW_JOBS'), getJobReportTracker);
 
 // ==================== DEVELOPER API SETTINGS ====================
 const {

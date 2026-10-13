@@ -396,11 +396,13 @@ const {
   getTournamentById,
   getCurrentTournament,
   getLeaderboard,
-  getPartnerStats
+  getPartnerStats,
+  enterTournament
 } = require('../controllers/partnerProgramController');
 
 router.get('/partner-program/tournaments', getAllTournaments);
 router.get('/partner-program/tournaments/:id', getTournamentById);
+router.post('/partner-program/tournaments/:id/enter', enterTournament);
 router.get('/partner-program/tournament', getCurrentTournament);
 router.get('/partner-program/leaderboard', getLeaderboard);
 router.get('/partner-program/stats', getPartnerStats);

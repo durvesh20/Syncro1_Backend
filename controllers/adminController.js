@@ -3722,7 +3722,8 @@ exports.getAllCandidates = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(sanitizedLimit)
-        .select('-statusHistory -notes -qualityCheck'),
+        .select('-statusHistory -notes -qualityCheck')
+        .lean(),
       Candidate.countDocuments(query)
     ]);
 
@@ -5809,7 +5810,8 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
       if (!cand.rounds || cand.rounds.length === 0) return 0;
       for (let i = 0; i < cand.rounds.length; i++) {
         const r = cand.rounds[i];
-        const isCleared = r.status === 'PASSED' || r.status === 'ROUND_SELECTED_NEXT' || r.outcome?.decision === 'SELECTED_NEXT_ROUND';
+        const isCleared = r.status === 'PASSED' || r.status === 'ROUND_SELECTED_NEXT' || r.status === 'ROUND_SELECTED_DIRECT_HR' ||
+          r.outcome?.decision === 'SELECTED_NEXT_ROUND' || r.outcome?.decision === 'SELECTED_DIRECT_HR' || r.outcome?.decision === 'SKIPPED_TO_HR';
         if (!isCleared) {
           return i;
         }
@@ -5862,7 +5864,8 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
     // ── STRICT BLOCK 2: Prevent assigning candidate to PASSED or REJECTED round ──
     if (activeRoundInfo.round) {
       const rStatus = activeRoundInfo.round.status;
-      if (rStatus === 'PASSED' || rStatus === 'ROUND_SELECTED_NEXT' || activeRoundInfo.round.outcome?.decision === 'SELECTED_NEXT_ROUND') {
+      if (rStatus === 'PASSED' || rStatus === 'ROUND_SELECTED_NEXT' || rStatus === 'ROUND_SELECTED_DIRECT_HR' ||
+          activeRoundInfo.round.outcome?.decision === 'SELECTED_NEXT_ROUND' || activeRoundInfo.round.outcome?.decision === 'SELECTED_DIRECT_HR' || activeRoundInfo.round.outcome?.decision === 'SKIPPED_TO_HR') {
         return res.status(400).json({
           success: false,
           message: `Candidate has already cleared/passed the "${activeRoundInfo.round.roundType}" round and cannot be assigned to a slot for it.`
@@ -6182,6 +6185,75 @@ exports.getJobScreeningQuestionsForAdmin = async (req, res) => {
   } catch (error) {
     console.error('getJobScreeningQuestionsForAdmin error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
+  }
+};
+
+// @desc    Set or update report tracker configuration for a job (admin side)
+// @route   PATCH /api/admin/jobs/:jobId/report-tracker
+// @access  Admin / SubAdmin
+exports.updateJobReportTrackerByAdmin = async (req, res) => {
+  try {
+    const jobId = req.params.jobId || req.params.id;
+    const Job = require('../models/Job');
+    const job = await Job.findById(jobId);
+
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    const { reportType, selectedFields, selectedFilters, templateId, templateName, clear } = req.body || {};
+
+    if (clear === true || reportType === null) {
+      job.reportTracker = null;
+    } else {
+      job.reportTracker = {
+        reportType: reportType || 'JOB_WITH_CANDIDATES',
+        selectedFields: Array.isArray(selectedFields) ? selectedFields : [],
+        selectedFilters: selectedFilters || {},
+        templateId: templateId || null,
+        templateName: templateName || (job.uniqueId ? `${job.uniqueId} Tracker` : 'Job Tracker'),
+        updatedAt: new Date()
+      };
+    }
+
+    await job.save();
+
+    return res.json({
+      success: true,
+      message: 'Excel column sequence saved successfully',
+      data: {
+        reportTracker: job.reportTracker,
+        job
+      }
+    });
+  } catch (error) {
+    console.error('updateJobReportTrackerByAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update report tracker', error: error.message });
+  }
+};
+
+// @desc    Get report tracker configuration for a job (admin side)
+// @route   GET /api/admin/jobs/:jobId/report-tracker
+// @access  Admin / SubAdmin
+exports.getJobReportTrackerByAdmin = async (req, res) => {
+  try {
+    const jobId = req.params.jobId || req.params.id;
+    const Job = require('../models/Job');
+    const job = await Job.findById(jobId).select('reportTracker title uniqueId');
+
+    if (!job) {
+      return res.status(404).json({ success: false, message: 'Job not found' });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        reportTracker: job.reportTracker || null
+      }
+    });
+  } catch (error) {
+    console.error('getJobReportTrackerByAdmin error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch report tracker', error: error.message });
   }
 };
 

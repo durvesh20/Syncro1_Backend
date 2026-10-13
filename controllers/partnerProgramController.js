@@ -9,7 +9,14 @@ const StaffingPartner = require('../models/StaffingPartner');
  */
 exports.getAllTournaments = async (req, res) => {
   try {
-    const tournaments = await partnerProgramService.getAllTournaments();
+    let partnerId = null;
+    if (req.user) {
+      const partner = await StaffingPartner.findOne({ user: req.user._id });
+      if (partner) {
+        partnerId = partner._id;
+      }
+    }
+    const tournaments = await partnerProgramService.getAllTournaments(partnerId);
     return res.status(200).json({
       success: true,
       data: tournaments
@@ -19,6 +26,45 @@ exports.getAllTournaments = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch tournaments list',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * POST /api/staffing-partners/partner-program/tournaments/:id/enter
+ * Talent partner enters / signs up for a tournament challenge
+ */
+exports.enterTournament = async (req, res) => {
+  try {
+    const tournamentId = req.params.id;
+    if (!tournamentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tournament ID is required'
+      });
+    }
+
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Staffing partner profile not found'
+      });
+    }
+
+    const result = await partnerProgramService.enterTournament(tournamentId, partner._id);
+
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error entering tournament:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to enter tournament',
       error: error.message
     });
   }
@@ -322,6 +368,86 @@ exports.triggerBackfill = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to backfill points',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * POST /api/admin/partner-program/partners
+ * Admin create 1 or N talent partners for the Partner Program
+ */
+exports.createProgramPartners = async (req, res) => {
+  try {
+    const { tournamentId, partners } = req.body;
+    const result = await partnerProgramService.createProgramPartners({
+      tournamentId,
+      partners: Array.isArray(partners) ? partners : [partners],
+      adminUserId: req.user?._id
+    });
+    return res.status(201).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error creating program partners:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to create program partners',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * PUT /api/admin/partner-program/partners/:partnerId/rank-points
+ * Admin update partner points or target rank with auto rank/points management
+ */
+exports.updatePartnerPointsAndRank = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    const { tournamentId, points, targetRank, customBreakdown } = req.body;
+    const result = await partnerProgramService.updatePartnerPointsAndRank({
+      tournamentId,
+      partnerId,
+      points,
+      targetRank,
+      customBreakdown,
+      adminUserId: req.user?._id
+    });
+    return res.status(200).json({
+      success: true,
+      message: 'Partner score and rank updated successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Error updating partner points and rank:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update partner points and rank',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * DELETE /api/admin/partner-program/partners/:partnerId
+ * Admin delete / remove program partner
+ */
+exports.deleteProgramPartner = async (req, res) => {
+  try {
+    const { partnerId } = req.params;
+    const { tournamentId } = req.query;
+    const result = await partnerProgramService.deleteProgramPartner({
+      tournamentId,
+      partnerId
+    });
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('Error deleting program partner:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to delete program partner',
       error: error.message
     });
   }

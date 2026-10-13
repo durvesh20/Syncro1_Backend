@@ -2718,15 +2718,10 @@ exports.pipelineSelectDirectHR = async (req, res) => {
     const currentOrder = activeInfo ? (activeInfo.round.order || activeInfo.index + 1) : 0;
     const hrOrder = hrRound.order || hrRoundIndex + 1;
 
-    const INACTIVE_ROUND_STATES = [
-      PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
-      PIPELINE_STATES.ASSESSMENT_PENDING,
-    ];
-
     candidate.rounds.forEach((r, idx) => {
       const rOrder = r.order || idx + 1;
       // Skip rounds that are between current and HR round (exclusive)
-      if (rOrder > currentOrder && rOrder < hrOrder && INACTIVE_ROUND_STATES.includes(r.status)) {
+      if (rOrder > currentOrder && rOrder < hrOrder) {
         r.status = PIPELINE_STATES.ROUND_SELECTED_DIRECT_HR;
         r.outcome = {
           decision: 'SKIPPED_TO_HR',
