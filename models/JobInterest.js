@@ -45,6 +45,11 @@ const jobInterestSchema = new mongoose.Schema({
     limitExtendedAt: {
         type: Date,
         default: null
+    },
+    isDemo: {
+        type: Boolean,
+        default: false,
+        index: true
     }
 }, {
     timestamps: true

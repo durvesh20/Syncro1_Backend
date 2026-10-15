@@ -385,6 +385,12 @@ const jobSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Integration',
     default: null
+  },
+  // ── Demo flag ──────────────────────────────────────────────────────────────
+  isDemo: {
+    type: Boolean,
+    default: false,
+    index: true
   }
 }, {
   timestamps: true,
@@ -416,6 +422,22 @@ jobSchema.virtual('requiresApproval').get(function () {
 });
 
 // ==================== MIDDLEWARE ====================
+
+// Auto-inherit isDemo flag from parent company if not explicitly set
+jobSchema.pre('save', async function (next) {
+  try {
+    if (this.isNew && !this.isDemo && this.company) {
+      const Company = mongoose.models.Company || mongoose.model('Company');
+      const comp = await Company.findById(this.company).select('isDemo');
+      if (comp && comp.isDemo) {
+        this.isDemo = true;
+      }
+    }
+  } catch (err) {
+    // Non-blocking
+  }
+  next();
+});
 
 // Auto-sync deprecated `approvalStatus` field from `status` for backward compat.
 // New code should always read/write `status` only.

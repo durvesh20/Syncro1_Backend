@@ -302,6 +302,13 @@ const staffingPartnerSchema = new mongoose.Schema({
     pdfPublicId: String,
     generatedAt: Date,
   },
+
+  // ── Demo flag ──────────────────────────────────────────────────────────────
+  isDemo: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
 }, {
   timestamps: true
 });

@@ -227,6 +227,13 @@ const companySchema = new mongoose.Schema({
     totalSpent: { type: Number, default: 0 }
   },
 
+  // ── Demo flag ──────────────────────────────────────────────────────────────
+  isDemo: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+
   isActive: { type: Boolean, default: true }
 }, {
   timestamps: true

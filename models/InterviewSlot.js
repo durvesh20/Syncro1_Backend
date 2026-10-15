@@ -197,11 +197,43 @@ const interviewSlotSchema = new mongoose.Schema(
         },
       },
     ],
+
+    // ── Demo flag ────────────────────────────────────────────────────────────
+    isDemo: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
   },
   {
     timestamps: true,
   }
 );
+
+// ── Pre-save: Auto-inherit isDemo flag ───────────────────────────────────────
+interviewSlotSchema.pre('save', async function (next) {
+  if (this.isNew && !this.isDemo) {
+    try {
+      if (this.company) {
+        const Company = mongoose.models.Company || mongoose.model('Company');
+        const comp = await Company.findById(this.company).select('isDemo');
+        if (comp && comp.isDemo) {
+          this.isDemo = true;
+        }
+      }
+      if (!this.isDemo && this.job) {
+        const Job = mongoose.models.Job || mongoose.model('Job');
+        const j = await Job.findById(this.job).select('isDemo');
+        if (j && j.isDemo) {
+          this.isDemo = true;
+        }
+      }
+    } catch (err) {
+      // Non-blocking
+    }
+  }
+  next();
+});
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
 interviewSlotSchema.index({ job: 1, date: 1 });

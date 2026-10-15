@@ -181,13 +181,21 @@ class JobAccessService {
       ctcLimit = ctcLimits[plan] || 500000;
     }
 
-    // NOTE: Deadline-based auto ON_HOLD removed intentionally.
-    // Status is changed only via explicit action.
+    // Check if partner is a demo account
+    const StaffingPartner = require('../models/StaffingPartner');
+    let isDemoPartner = false;
+    try {
+      const partnerDoc = await StaffingPartner.findById(partnerId).select('isDemo');
+      isDemoPartner = Boolean(partnerDoc && partnerDoc.isDemo);
+    } catch (err) {
+      isDemoPartner = false;
+    }
 
     // Build query
     const query = {
       status: { $in: ['ACTIVE', 'PAUSED'] },
-      eligiblePlans: { $in: accessiblePlans }
+      eligiblePlans: { $in: accessiblePlans },
+      isDemo: isDemoPartner ? true : { $ne: true }
     };
 
     // Apply experience level filter if provided by parameters

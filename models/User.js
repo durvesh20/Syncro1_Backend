@@ -121,6 +121,13 @@ const userSchema = new mongoose.Schema({
     default: Date.now
   },
 
+  // ── Demo flag — segregate demo users from real users ──────────────────────
+  isDemo: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+
   // Sub-admin activity tracking logs
   subAdminActivityLogs: [{
     action: {

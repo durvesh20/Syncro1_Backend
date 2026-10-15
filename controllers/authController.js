@@ -898,7 +898,8 @@ exports.login = async (req, res) => {
       isPasswordChanged: user.isPasswordChanged,
       createdBy: user.createdBy,
       firstName: user.firstName,
-      lastName: user.lastName
+      lastName: user.lastName,
+      isDemo: Boolean(user.isDemo)
     };
 
     return sendTokenResponse(res, token, userPayload, {
@@ -1247,7 +1248,8 @@ exports.getMe = async (req, res) => {
           createdAt: user.createdAt,
           createdBy: user.createdBy,
           firstName: user.firstName,
-          lastName: user.lastName
+          lastName: user.lastName,
+          isDemo: Boolean(user.isDemo)
         },
         profile,
         profileMeta,
@@ -1407,4 +1409,111 @@ exports.logout = async (req, res) => {
     success: true,
     message: 'Logged out successfully'
   });
+};
+
+// @desc Demo Login — Authenticate as a demo user
+// @route POST /api/auth/demo-login
+exports.demoLogin = async (req, res) => {
+  try {
+    const { role, email } = req.body;
+
+    let query = { isDemo: true };
+    if (email) {
+      query.email = email.toLowerCase().trim();
+    } else if (role) {
+      query.role = role;
+    } else {
+      query.role = 'company';
+    }
+
+    const user = await User.findOne(query);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No demo user found matching criteria. Please ensure demo data is seeded.'
+      });
+    }
+
+    user.lastLogin = new Date();
+    await user.save();
+
+    const { profile, profileMeta, nextStep } = await getPostLoginNextStep(user);
+    const token = generateToken(user._id, user.role);
+
+    const userPayload = {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+      status: user.status,
+      permissions: user.permissions || [],
+      emailVerified: user.emailVerified,
+      mobileVerified: user.mobileVerified,
+      isPasswordChanged: user.isPasswordChanged,
+      createdBy: user.createdBy,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      isDemo: true
+    };
+
+    return sendTokenResponse(res, token, userPayload, {
+      profile,
+      profileMeta,
+      canLogin: true,
+      nextStep
+    });
+  } catch (error) {
+    console.error('Demo login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Demo login failed',
+      error: error.message
+    });
+  }
+};
+
+// @desc Get List of Demo Accounts (for Admin Dashboard / Switcher)
+// @route GET /api/auth/demo-accounts
+exports.getDemoAccounts = async (req, res) => {
+  try {
+    const demoUsers = await User.find({ isDemo: true })
+      .select('email role firstName lastName status createdAt lastLogin')
+      .sort({ role: 1, email: 1 });
+
+    const companies = await Company.find({ isDemo: true })
+      .populate('user', 'email firstName lastName')
+      .select('companyName decisionMakerName city state metrics uniqueId');
+
+    const partners = await StaffingPartner.find({ isDemo: true })
+      .populate('user', 'email firstName lastName')
+      .select('firmName firstName lastName city state uniqueId');
+
+    const Candidate = require('../models/Candidate');
+    const candidateCount = await Candidate.countDocuments({ isDemo: true });
+
+    const Job = require('../models/Job');
+    const jobCount = await Job.countDocuments({ isDemo: true });
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalUsers: demoUsers.length,
+          companiesCount: companies.length,
+          partnersCount: partners.length,
+          candidatesCount: candidateCount,
+          jobsCount: jobCount
+        },
+        users: demoUsers,
+        companies,
+        partners
+      }
+    });
+  } catch (error) {
+    console.error('Get demo accounts error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch demo accounts',
+      error: error.message
+    });
+  }
 };

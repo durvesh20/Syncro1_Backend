@@ -10,7 +10,8 @@ router.get('/:slug', async (req, res) => {
   try {
     const job = await Job.findOne({
       slug: req.params.slug,
-      status: 'ACTIVE'
+      status: 'ACTIVE',
+      isDemo: { $ne: true }
     }).populate('company', 'companyName kyc.logo kyc.industry kyc.companyType kyc.website kyc.description');
 
     if (!job) {
@@ -74,7 +75,7 @@ router.get('/', async (req, res) => {
   try {
     const { page = 1, limit = 10, category, location, experienceLevel } = req.query;
 
-    const query = { status: 'ACTIVE' };
+    const query = { status: 'ACTIVE', isDemo: { $ne: true } };
     if (category) query.category = category;
     if (location) query['location.city'] = new RegExp(location, 'i');
     if (experienceLevel) query.experienceLevel = experienceLevel;

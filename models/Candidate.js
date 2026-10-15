@@ -813,6 +813,12 @@ const candidateSchema = new mongoose.Schema({
     experience_detail: String,
   },
 
+  // ── Demo flag ──────────────────────────────────────────────────────────────
+  isDemo: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
 }, {
   timestamps: true
 });
@@ -937,7 +943,28 @@ candidateSchema.methods.getCommissionSummary = function () {
   };
 };
 
-candidateSchema.pre('save', function (next) {
+candidateSchema.pre('save', async function (next) {
+  if (this.isNew && !this.isDemo) {
+    try {
+      if (this.job) {
+        const Job = mongoose.models.Job || mongoose.model('Job');
+        const jobDoc = await Job.findById(this.job).select('isDemo');
+        if (jobDoc && jobDoc.isDemo) {
+          this.isDemo = true;
+        }
+      }
+      if (!this.isDemo && this.submittedBy) {
+        const StaffingPartner = mongoose.models.StaffingPartner || mongoose.model('StaffingPartner');
+        const spDoc = await StaffingPartner.findById(this.submittedBy).select('isDemo');
+        if (spDoc && spDoc.isDemo) {
+          this.isDemo = true;
+        }
+      }
+    } catch (err) {
+      // Non-blocking
+    }
+  }
+
   if (!this.uniqueId) {
     const now = new Date();
     const year = now.getFullYear();

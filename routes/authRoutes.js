@@ -17,7 +17,9 @@ const {
   getMe,
   forgotPassword,
   resetPassword,
-  logout
+  logout,
+  demoLogin,
+  getDemoAccounts
 } = require('../controllers/authController');
 
 const { protect } = require('../middleware/auth');
@@ -47,6 +49,8 @@ router.post('/resend-mobile-otp', resendMobileOTP);
 
 // ==================== AUTH ====================
 router.post('/login', login);
+router.post('/demo-login', demoLogin);
+router.get('/demo-accounts', protect, getDemoAccounts);
 router.post('/logout', protect, logout);
 
 // ==================== PASSWORD ====================
