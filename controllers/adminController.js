@@ -1884,24 +1884,53 @@ exports.getUsers = async (req, res) => {
 
     const query = {};
     if (role) query.role = role;
-    if (status) query.status = status;
-    if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
-    if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
+
+    // Fetch profile status maps for role
+    let approvedUserIds = [];
+    let underReviewUserIds = [];
+    let rejectedUserIds = [];
+
+    if (role === 'staffing_partner') {
+      const [approved, underReview, rejected] = await Promise.all([
+        StaffingPartner.find({ verificationStatus: 'APPROVED' }).select('user'),
+        StaffingPartner.find({ verificationStatus: 'UNDER_REVIEW' }).select('user'),
+        StaffingPartner.find({ verificationStatus: 'REJECTED' }).select('user')
+      ]);
+      approvedUserIds = approved.map(p => p.user?.toString()).filter(Boolean);
+      underReviewUserIds = underReview.map(p => p.user?.toString()).filter(Boolean);
+      rejectedUserIds = rejected.map(p => p.user?.toString()).filter(Boolean);
+    } else if (role === 'company') {
+      const [approved, underReview, rejected] = await Promise.all([
+        Company.find({ verificationStatus: 'APPROVED' }).select('user'),
+        Company.find({ verificationStatus: 'UNDER_REVIEW' }).select('user'),
+        Company.find({ verificationStatus: 'REJECTED' }).select('user')
+      ]);
+      approvedUserIds = approved.map(c => c.user?.toString()).filter(Boolean);
+      underReviewUserIds = underReview.map(c => c.user?.toString()).filter(Boolean);
+      rejectedUserIds = rejected.map(c => c.user?.toString()).filter(Boolean);
+    }
+
+    const nonActiveUserIds = [
+      ...approvedUserIds,
+      ...underReviewUserIds,
+      ...rejectedUserIds
+    ];
 
     if (verified === 'true') {
-      let verifiedUserIds = [];
-      if (role === 'staffing_partner') {
-        const partners = await StaffingPartner.find({ verificationStatus: 'APPROVED' }).select('user');
-        verifiedUserIds = partners.map(p => p.user).filter(Boolean);
-      } else if (role === 'company') {
-        const companies = await Company.find({ verificationStatus: 'APPROVED' }).select('user');
-        verifiedUserIds = companies.map(c => c.user).filter(Boolean);
-      } else {
-        const partners = await StaffingPartner.find({ verificationStatus: 'APPROVED' }).select('user');
-        const companies = await Company.find({ verificationStatus: 'APPROVED' }).select('user');
-        verifiedUserIds = [...partners, ...companies].map(x => x.user).filter(Boolean);
-      }
-      query._id = { $in: verifiedUserIds };
+      query._id = { $in: approvedUserIds };
+    } else if (status === 'UNDER_VERIFICATION') {
+      query._id = { $in: underReviewUserIds };
+    } else if (status === 'REJECTED') {
+      query._id = { $in: rejectedUserIds };
+    } else if (status === 'ACTIVE') {
+      query._id = { $nin: nonActiveUserIds };
+      if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
+      if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
+    } else if (status) {
+      query.status = status;
+    } else {
+      if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
+      if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
     }
 
     if (search) {
@@ -1957,67 +1986,87 @@ exports.getUsers = async (req, res) => {
       .limit(sanitizedLimit);
 
     const userIds = users.map(u => u._id);
-    let enrichedUsers = users.map(u => u.toObject());
+    let companyMap = {};
+    let partnerMap = {};
 
     if (role === 'company') {
-      const companies = await Company.find({ user: { $in: userIds } }).select('user companyName');
-      const companyMap = {};
+      const companies = await Company.find({ user: { $in: userIds } }).select('user companyName verificationStatus');
       companies.forEach(c => {
-        if (c.user) {
-          companyMap[c.user.toString()] = c.companyName;
-        }
+        if (c.user) companyMap[c.user.toString()] = c.companyName;
       });
-      enrichedUsers = enrichedUsers.map(u => ({
-        ...u,
-        companyName: companyMap[u._id.toString()] || null
-      }));
     } else if (role === 'staffing_partner') {
-      const partners = await StaffingPartner.find({ user: { $in: userIds } }).select('user firmName');
-      const partnerMap = {};
+      const partners = await StaffingPartner.find({ user: { $in: userIds } }).select('user firmName verificationStatus');
       partners.forEach(p => {
-        if (p.user) {
-          partnerMap[p.user.toString()] = p.firmName;
-        }
+        if (p.user) partnerMap[p.user.toString()] = p.firmName;
       });
-      enrichedUsers = enrichedUsers.map(u => ({
-        ...u,
-        firmName: partnerMap[u._id.toString()] || null
-      }));
     }
+
+    let enrichedUsers = users.map(u => {
+      const uObj = u.toObject();
+      const uIdStr = u._id.toString();
+
+      let vStatus = 'ACTIVE';
+      if (approvedUserIds.includes(uIdStr)) {
+        vStatus = 'APPROVED';
+      } else if (underReviewUserIds.includes(uIdStr)) {
+        vStatus = 'UNDER_REVIEW';
+      } else if (rejectedUserIds.includes(uIdStr)) {
+        vStatus = 'REJECTED';
+      }
+
+      let subStatus = null;
+      if (vStatus === 'ACTIVE') {
+        if (!u.emailVerified) {
+          subStatus = 'PENDING_EMAIL';
+        } else if (!u.mobileVerified) {
+          subStatus = 'PENDING_MOBILE';
+        } else {
+          subStatus = 'ACTIVE';
+        }
+      }
+
+      return {
+        ...uObj,
+        verificationStatus: vStatus,
+        subStatus,
+        ...(role === 'company' ? { companyName: companyMap[uIdStr] || null } : {}),
+        ...(role === 'staffing_partner' ? { firmName: partnerMap[uIdStr] || null } : {})
+      };
+    });
 
     const total = await User.countDocuments(query);
 
     // Calculate stats
     let stats = null;
     if (role) {
-      const statsQuery = { role };
-      // If the main query was scoped to specific user IDs (sub_admin restriction), apply same scope to stats
-      if (query._id) {
-        statsQuery._id = query._id;
-      }
-      const totalCount = await User.countDocuments(statsQuery);
-      const activeCount = await User.countDocuments({
-        ...statsQuery,
-        status: { $in: ['ACTIVE', 'VERIFIED'] }
-      });
-      const emailPendingCount = await User.countDocuments({ ...statsQuery, emailVerified: false });
-      const mobilePendingCount = await User.countDocuments({ ...statsQuery, mobileVerified: false });
+      const activeStageQuery = {
+        role,
+        _id: { $nin: nonActiveUserIds }
+      };
 
-      let verifiedCount = 0;
-      if (role === 'staffing_partner') {
-        const spQuery = { verificationStatus: 'APPROVED' };
-        verifiedCount = await StaffingPartner.countDocuments(spQuery);
-      } else if (role === 'company') {
-        const coQuery = { verificationStatus: 'APPROVED' };
-        verifiedCount = await Company.countDocuments(coQuery);
-      }
+      const [
+        totalCount,
+        activeTotalCount,
+        emailPendingCount,
+        mobilePendingCount,
+        activeCompletedOtpCount
+      ] = await Promise.all([
+        User.countDocuments({ role }),
+        User.countDocuments(activeStageQuery),
+        User.countDocuments({ ...activeStageQuery, emailVerified: false }),
+        User.countDocuments({ ...activeStageQuery, emailVerified: true, mobileVerified: false }),
+        User.countDocuments({ ...activeStageQuery, emailVerified: true, mobileVerified: true })
+      ]);
 
       stats = {
         total: totalCount,
-        active: activeCount,
+        verified: approvedUserIds.length,
+        underVerification: underReviewUserIds.length,
+        rejected: rejectedUserIds.length,
+        active: activeTotalCount,
         emailPending: emailPendingCount,
         mobilePending: mobilePendingCount,
-        verified: verifiedCount
+        activeCompleted: activeCompletedOtpCount
       };
     }
 
