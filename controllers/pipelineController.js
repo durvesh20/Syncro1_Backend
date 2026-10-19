@@ -865,7 +865,16 @@ async function populateRoundsWithJobSlots(candidate) {
     }
 
     // If candidate has a bookedSlot matching this round, map it
-    if (bookedSlot && roundObj.roundType === bookedSlot.roundType) {
+    const norm = str => (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const isMatchingRound = bookedSlot && (
+      norm(roundObj.roundType) === norm(bookedSlot.roundType) ||
+      (bookedSlot.roundType && (
+        (norm(bookedSlot.roundType).includes('hr') && norm(roundObj.roundType).includes('hr')) ||
+        (norm(bookedSlot.roundType).includes('tech') && norm(roundObj.roundType).includes('tech'))
+      ))
+    );
+
+    if (isMatchingRound) {
       const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
       const isVirtual = displayMode.toLowerCase() === 'virtual';
       const mapped = mapSlotDetails(bookedSlot);
@@ -889,6 +898,28 @@ async function populateRoundsWithJobSlots(candidate) {
     }
 
     populatedRounds.push(roundObj);
+  }
+
+  // If candidate has a bookedSlot but no round matched roundType, map it to the active or last non-assessment round
+  if (bookedSlot && !populatedRounds.some(r => r.slots && r.slots.length > 0) && populatedRounds.length > 0) {
+    const hrIdx = populatedRounds.findIndex(r => (r.roundType || '').toUpperCase().includes('HR'));
+    const targetIdx = hrIdx !== -1 ? hrIdx : (populatedRounds.length - 1);
+    const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
+    const isVirtual = displayMode.toLowerCase() === 'virtual';
+    const mapped = mapSlotDetails(bookedSlot);
+    if (mapped) {
+      const detailsVal = candidate.interviewConfig?.details || bookedSlot.interviewDetails || bookedSlot.notes || '';
+      mapped.details = {
+        address: !isVirtual ? detailsVal : '',
+        meetingLink: isVirtual ? detailsVal : '',
+        pointOfContact: {
+          name: candidate.interviewConfig?.interviewer || bookedSlot.interviewerName || '',
+          email: '',
+          phone: ''
+        }
+      };
+      populatedRounds[targetIdx].slots = [mapped];
+    }
   }
 
   return populatedRounds;
@@ -1101,6 +1132,7 @@ exports.getPipelinePreview = async (req, res) => {
         auditTrail: [],
         job: candidate.job,
         offer: candidate.offer,
+        assignedSlot: candidate.assignedSlot || null,
       }
     });
   } catch (err) {
@@ -1148,6 +1180,7 @@ exports.adminGetPipeline = async (req, res) => {
         auditTrail: candidate.auditTrail,
         job: candidate.job,
         offer: candidate.offer,
+        assignedSlot: candidate.assignedSlot || null,
       }
     });
   } catch (err) {
@@ -1380,6 +1413,8 @@ function getActiveRoundInfo(candidate) {
       PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
       PIPELINE_STATES.SLOTS_PUBLISHED,
       PIPELINE_STATES.SLOT_ASSIGNED,
+      'INTERVIEW_SCHEDULED',
+      'INTERVIEW_CONFIRMED',
       PIPELINE_STATES.RESCHEDULE_REQUESTED,
       PIPELINE_STATES.SLOT_DETAILS_SHARED,
       PIPELINE_STATES.INTERVIEW_CONDUCTED,
@@ -1388,6 +1423,17 @@ function getActiveRoundInfo(candidate) {
     if (L_STATES.includes(r.status)) {
       return { index: i, round: r };
     }
+  }
+
+  // Active scheduled/confirmed interview state resolution
+  const isScheduledOrConfirmed = ['INTERVIEW_CONFIRMED', 'INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED'].includes(status);
+  if (isScheduledOrConfirmed && candidate.rounds && candidate.rounds.length > 0) {
+    const roundWithSlot = candidate.rounds.findIndex(r => r.slots && r.slots.length > 0);
+    if (roundWithSlot !== -1) return { index: roundWithSlot, round: candidate.rounds[roundWithSlot] };
+
+    const hrIdx = candidate.rounds.findIndex(r => (r.roundType || '').toUpperCase().includes('HR'));
+    const targetIdx = hrIdx !== -1 ? hrIdx : (candidate.rounds.length - 1);
+    return { index: targetIdx, round: candidate.rounds[targetIdx] };
   }
 
   // Fallback for SHORTLISTED or un-matched states: find first uncleared round
