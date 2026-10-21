@@ -41,7 +41,7 @@ const JOINED_STATES = new Set(['JOINED', 'HIRED']);
 /**
  * Helper to compute live metadata for a tournament
  */
-function formatTournament(tournament) {
+function formatTournament(tournament, partnerId = null) {
   if (!tournament) return null;
   const tObj = typeof tournament.toObject === 'function' ? tournament.toObject() : { ...tournament };
   const now = new Date();
@@ -68,12 +68,18 @@ function formatTournament(tournament) {
   const remainingDays = Math.floor(timeRemainingMs / (1000 * 60 * 60 * 24));
   const remainingHours = Math.floor((timeRemainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
 
+  const partnerIdStr = partnerId ? String(partnerId) : null;
+  const hasJoined = partnerIdStr
+    ? Array.isArray(tObj.participants) && tObj.participants.some(p => String(p.partner?._id || p.partner || p) === partnerIdStr)
+    : false;
+
   return {
     ...tObj,
     liveStatus: status,
     progressPercent,
     remainingDays,
     remainingHours,
+    hasJoined: Boolean(hasJoined),
     timeRemainingFormatted: status === 'COMPLETED' ? 'Tournament Ended' : (status === 'UPCOMING' ? 'Starts Soon' : `${remainingDays}d ${remainingHours}h remaining`)
   };
 }
@@ -81,7 +87,7 @@ function formatTournament(tournament) {
 /**
  * Get or initialize current active tournament (defaults to latest active or latest created)
  */
-async function getCurrentTournament() {
+async function getCurrentTournament(partnerId = null) {
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
@@ -118,7 +124,7 @@ async function getCurrentTournament() {
     });
   }
 
-  return formatTournament(tournament);
+  return formatTournament(tournament, partnerId);
 }
 
 /**
@@ -129,18 +135,25 @@ async function getAllTournaments(partnerId = null) {
   let tournaments = await PartnerTournament.find().sort({ startDate: -1, createdAt: -1 });
 
   if (!tournaments || tournaments.length === 0) {
-    await getCurrentTournament();
+    await getCurrentTournament(partnerId);
     tournaments = await PartnerTournament.find().sort({ startDate: -1, createdAt: -1 });
   }
 
   const formattedTournaments = tournaments.map(t => {
-    const formatted = formatTournament(t);
+    const formatted = formatTournament(t, partnerId);
     formatted.participantsCount = (t.participants && t.participants.length) || 0;
     return formatted;
   });
 
   if (!partnerId) {
-    return formattedTournaments;
+    return formattedTournaments.map(t => ({
+      ...t,
+      hasJoined: false,
+      userRank: null,
+      userPoints: 0,
+      userBreakdown: null,
+      userBadges: []
+    }));
   }
 
   const partnerIdStr = String(partnerId);
@@ -190,22 +203,22 @@ async function getAllTournaments(partnerId = null) {
 /**
  * Get a specific tournament by ID with formatted live status
  */
-async function getTournamentById(id) {
+async function getTournamentById(id, partnerId = null) {
   if (!id || !mongoose.Types.ObjectId.isValid(id)) {
-    return getCurrentTournament();
+    return getCurrentTournament(partnerId);
   }
   const tournament = await PartnerTournament.findById(id);
   if (!tournament) {
-    return getCurrentTournament();
+    return getCurrentTournament(partnerId);
   }
-  return formatTournament(tournament);
+  return formatTournament(tournament, partnerId);
 }
 
 /**
  * Create a new tournament / program
  */
 async function createTournament(data, userId) {
-  const { title, description, startDate, endDate, isActive, rules } = data;
+  const { title, description, bgImage, startDate, endDate, isActive, rules, recognitionBadges } = data;
   const now = new Date();
   const start = startDate ? new Date(startDate) : now;
   const end = endDate ? new Date(endDate) : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -221,21 +234,18 @@ async function createTournament(data, userId) {
   const tournament = await PartnerTournament.create({
     title: title || 'Syncro1 Vendor Performance Challenge 🏆',
     description: description || 'Quality + Speed + Consistency = Higher Score & Recognition 🏆',
+    bgImage: bgImage || '',
     startDate: start,
     endDate: end,
     isActive: activeFlag,
     status,
     rules: rules || {},
+    recognitionBadges: Array.isArray(recognitionBadges) && recognitionBadges.length > 0 ? recognitionBadges : undefined,
     createdBy: userId
   });
 
-  // Synchronously calibrate existing candidate points so the leaderboard is immediately populated
-  try {
-    await backfillExistingPoints(tournament._id);
-  } catch (err) {
-    console.error('[PARTNER_PROGRAM] Backfill for new tournament failed:', err.message);
-  }
-
+  // New tournament starts completely clean with 0 participants.
+  // Talent partners will only participate and earn points once they explicitly enter the challenge.
   return formatTournament(tournament);
 }
 
@@ -252,7 +262,7 @@ async function updateTournament(id, data, userId) {
     throw new Error('Tournament not found');
   }
 
-  const { title, description, startDate, endDate, isActive, rules } = data;
+  const { title, description, bgImage, startDate, endDate, isActive, rules, recognitionBadges } = data;
   const now = new Date();
   const start = startDate ? new Date(startDate) : tournament.startDate;
   const end = endDate ? new Date(endDate) : tournament.endDate;
@@ -267,11 +277,15 @@ async function updateTournament(id, data, userId) {
 
   if (title) tournament.title = title;
   if (description !== undefined) tournament.description = description;
+  if (bgImage !== undefined) tournament.bgImage = bgImage;
   tournament.startDate = start;
   tournament.endDate = end;
   tournament.isActive = activeFlag;
   tournament.status = status;
   if (rules) tournament.rules = { ...tournament.rules, ...rules };
+  if (recognitionBadges !== undefined) {
+    tournament.recognitionBadges = Array.isArray(recognitionBadges) ? recognitionBadges : [];
+  }
   tournament.createdBy = userId || tournament.createdBy;
 
   await tournament.save();
@@ -614,8 +628,17 @@ async function processCandidateStageChange(candidateDoc) {
   const isSelectedEligible = SELECTED_STATES.has(status);
   const isJoinedEligible = JOINED_STATES.has(status);
 
-  // Award points independently for each active tournament
+  // Award points independently for each active tournament ONLY IF partner has entered the tournament
+  const partnerIdStr = String(partnerId);
   for (const activeTournament of activeTournaments) {
+    const isEnrolled = Array.isArray(activeTournament.participants) &&
+      activeTournament.participants.some(p => String(p.partner?._id || p.partner || p) === partnerIdStr);
+
+    if (!isEnrolled) {
+      // Talent partner has not entered this tournament challenge
+      continue;
+    }
+
     const tournamentId = activeTournament._id;
     const start = new Date(activeTournament.startDate);
     const end = new Date(activeTournament.endDate);
@@ -653,10 +676,28 @@ async function processCandidateStageChange(candidateDoc) {
  */
 async function getLeaderboard({ limit = 15, tournamentId = null } = {}) {
   let effectiveTournamentId = tournamentId;
+  let tournamentDoc = null;
   if (!effectiveTournamentId || effectiveTournamentId === 'current') {
-    const currentT = await getCurrentTournament();
-    if (currentT) {
-      effectiveTournamentId = currentT._id;
+    tournamentDoc = await getCurrentTournament();
+    if (tournamentDoc) {
+      effectiveTournamentId = tournamentDoc._id;
+    }
+  } else if (effectiveTournamentId !== 'all' && mongoose.Types.ObjectId.isValid(effectiveTournamentId)) {
+    tournamentDoc = await PartnerTournament.findById(effectiveTournamentId).populate('participants.partner').lean();
+  }
+
+  // Build lookup of partners who have actually joined/entered this tournament
+  const enrolledPartnerMap = new Map();
+  if (tournamentDoc && Array.isArray(tournamentDoc.participants)) {
+    for (const p of tournamentDoc.participants) {
+      const pid = String(p.partner?._id || p.partner || p);
+      if (pid) {
+        enrolledPartnerMap.set(pid, {
+          partnerId: pid,
+          partnerObj: (p.partner && typeof p.partner === 'object' && p.partner._id) ? p.partner : null,
+          joinedAt: p.joinedAt || new Date()
+        });
+      }
     }
   }
 
@@ -721,7 +762,13 @@ async function getLeaderboard({ limit = 15, tournamentId = null } = {}) {
 
   const results = await PartnerPointEvent.aggregate(agg);
 
-  const rankedPartners = results.map((item, index) => {
+  // Filter: ONLY include partners who have actually joined this tournament OR are simulated manual partners created for this program
+  const eligibleResults = results.filter(item => {
+    const pIdStr = String(item._id);
+    return enrolledPartnerMap.has(pIdStr) || Boolean(item.partnerDetails?.isManualProgramPartner);
+  });
+
+  const rankedPartners = eligibleResults.map((item, index) => {
     const rank = index + 1;
 
     const badges = [];
@@ -759,55 +806,66 @@ async function getLeaderboard({ limit = 15, tournamentId = null } = {}) {
     };
   });
 
-  // If fewer than limit partners have points, fill the remaining top slots with unranked partners
-  let fullList = [...rankedPartners];
-  if (fullList.length < limit) {
-    try {
-      const existingIds = new Set(fullList.map(p => String(p.partnerId)));
-      const otherPartners = await StaffingPartner.find({
-        _id: { $nin: Array.from(existingIds) }
-      }).limit(limit - fullList.length).lean();
-
-      for (const op of otherPartners) {
-        const nextRank = fullList.length + 1;
-        const badges = [];
-        if (nextRank >= 1 && nextRank <= 5) {
-          badges.push({ type: 'GOLD_MEDAL', title: 'Top Performing Partner (Gold Medal • Rank 1–5)', icon: '🥇' });
-        } else if (nextRank >= 6 && nextRank <= 10) {
-          badges.push({ type: 'SILVER_MEDAL', title: 'Runner-Up Partner (Silver Medal • Rank 6–10)', icon: '🥈' });
-        } else if (nextRank >= 11 && nextRank <= 15) {
-          badges.push({ type: 'BRONZE_MEDAL', title: 'Bronze Medal Partner (Bronze Medal • Rank 11–15)', icon: '🥉' });
-        }
-
-        fullList.push({
-          rank: nextRank,
-          partnerId: op._id,
-          partnerName: `${op.firstName || ''} ${op.lastName || ''}`.trim() || 'Partner',
-          firmName: op.firmName || 'Partner Firm',
-          city: op.city || '',
-          state: op.state || '',
-          totalPoints: 0,
-          isManualProgramPartner: Boolean(op.isManualProgramPartner),
-          breakdown: {
-            screened: { count: 0, points: 0 },
-            submitted: { count: 0, points: 0 },
-            interviewed: { count: 0, points: 0 },
-            selected: { count: 0, points: 0 },
-            joined: { count: 0, points: 0 },
-            manual: { count: 0, points: 0 }
-          },
-          badges,
-          lastAwardedAt: null
-        });
-      }
-    } catch (_) {}
+  // For partners who entered the tournament but have not scored points yet (0 points),
+  // include them in rankings below the partners with points.
+  const rankedPartnerIdSet = new Set(rankedPartners.map(p => String(p.partnerId)));
+  const unrankedEnrolled = [];
+  for (const [pid, info] of enrolledPartnerMap.entries()) {
+    if (!rankedPartnerIdSet.has(pid)) {
+      unrankedEnrolled.push(info);
+    }
   }
 
-  const top15 = fullList.slice(0, limit);
+  if (unrankedEnrolled.length > 0) {
+    const missingIds = unrankedEnrolled.filter(e => !e.partnerObj).map(e => e.partnerId);
+    let missingDocsMap = new Map();
+    if (missingIds.length > 0) {
+      const fetched = await StaffingPartner.find({ _id: { $in: missingIds } }).lean();
+      for (const f of fetched) {
+        missingDocsMap.set(String(f._id), f);
+      }
+    }
+
+    for (const info of unrankedEnrolled) {
+      const pDoc = info.partnerObj || missingDocsMap.get(info.partnerId);
+      const nextRank = rankedPartners.length + 1;
+      const badges = [];
+      if (nextRank >= 1 && nextRank <= 5) {
+        badges.push({ type: 'GOLD_MEDAL', title: 'Top Performing Partner (Gold Medal • Rank 1–5)', icon: '🥇' });
+      } else if (nextRank >= 6 && nextRank <= 10) {
+        badges.push({ type: 'SILVER_MEDAL', title: 'Runner-Up Partner (Silver Medal • Rank 6–10)', icon: '🥈' });
+      } else if (nextRank >= 11 && nextRank <= 15) {
+        badges.push({ type: 'BRONZE_MEDAL', title: 'Bronze Medal Partner (Bronze Medal • Rank 11–15)', icon: '🥉' });
+      }
+
+      rankedPartners.push({
+        rank: nextRank,
+        partnerId: info.partnerId,
+        partnerName: pDoc ? `${pDoc.firstName || ''} ${pDoc.lastName || ''}`.trim() || 'Partner' : 'Partner',
+        firmName: pDoc?.firmName || 'Partner Firm',
+        city: pDoc?.city || '',
+        state: pDoc?.state || '',
+        totalPoints: 0,
+        isManualProgramPartner: Boolean(pDoc?.isManualProgramPartner),
+        breakdown: {
+          screened: { count: 0, points: 0 },
+          submitted: { count: 0, points: 0 },
+          interviewed: { count: 0, points: 0 },
+          selected: { count: 0, points: 0 },
+          joined: { count: 0, points: 0 },
+          manual: { count: 0, points: 0 }
+        },
+        badges,
+        lastAwardedAt: null
+      });
+    }
+  }
+
+  const topLimit = rankedPartners.slice(0, limit);
 
   return {
-    totalParticipants: fullList.length,
-    leaderboard: top15,
+    totalParticipants: rankedPartners.length,
+    leaderboard: topLimit,
     allRankings: rankedPartners
   };
 }
@@ -817,11 +875,14 @@ async function getLeaderboard({ limit = 15, tournamentId = null } = {}) {
  */
 async function getPartnerProgramStats(partnerId, { tournamentId = null } = {}) {
   let effectiveTournamentId = tournamentId;
+  let tournamentDoc = null;
   if (!effectiveTournamentId || effectiveTournamentId === 'current') {
-    const currentT = await getCurrentTournament();
-    if (currentT) {
-      effectiveTournamentId = currentT._id;
+    tournamentDoc = await getCurrentTournament();
+    if (tournamentDoc) {
+      effectiveTournamentId = tournamentDoc._id;
     }
+  } else if (effectiveTournamentId !== 'all' && mongoose.Types.ObjectId.isValid(effectiveTournamentId)) {
+    tournamentDoc = await PartnerTournament.findById(effectiveTournamentId).select('participants').lean();
   }
 
   const { allRankings } = await getLeaderboard({ limit: 1000, tournamentId: effectiveTournamentId });
@@ -829,34 +890,42 @@ async function getPartnerProgramStats(partnerId, { tournamentId = null } = {}) {
   const partnerIdStr = String(partnerId);
   const partnerRankInfo = allRankings.find(p => String(p.partnerId) === partnerIdStr);
 
+  // Check if partner has actually joined / entered this tournament
+  const isEnrolled = Array.isArray(tournamentDoc?.participants) &&
+    tournamentDoc.participants.some(p => String(p.partner?._id || p.partner || p) === partnerIdStr);
+
+  const hasJoined = Boolean(isEnrolled);
+
   const filter = { partner: partnerId };
   if (effectiveTournamentId && effectiveTournamentId !== 'all' && mongoose.Types.ObjectId.isValid(effectiveTournamentId)) {
     filter.tournament = effectiveTournamentId;
   }
 
-  // Fetch recent point events for this tournament
-  const recentEvents = await PartnerPointEvent.find(filter)
+  // Fetch recent point events for this tournament only if partner has joined
+  const recentEvents = hasJoined ? await PartnerPointEvent.find(filter)
     .sort({ awardedAt: -1 })
     .limit(20)
-    .lean();
+    .lean() : [];
 
   const partnerDoc = await StaffingPartner.findById(partnerId).lean();
 
-  const rank = partnerRankInfo ? partnerRankInfo.rank : (allRankings.length + 1);
-  const totalPoints = partnerRankInfo ? partnerRankInfo.totalPoints : 0;
-  const breakdown = partnerRankInfo ? partnerRankInfo.breakdown : {
+  const rank = hasJoined && partnerRankInfo ? partnerRankInfo.rank : null;
+  const totalPoints = hasJoined && partnerRankInfo ? partnerRankInfo.totalPoints : 0;
+  const breakdown = hasJoined && partnerRankInfo ? partnerRankInfo.breakdown : {
     screened: { count: 0, points: 0 },
     submitted: { count: 0, points: 0 },
     interviewed: { count: 0, points: 0 },
     selected: { count: 0, points: 0 },
-    joined: { count: 0, points: 0 }
+    joined: { count: 0, points: 0 },
+    manual: { count: 0, points: 0 }
   };
-  const badges = partnerRankInfo ? partnerRankInfo.badges : [];
+  const badges = hasJoined && partnerRankInfo ? partnerRankInfo.badges : [];
 
   return {
     partnerId,
     firmName: partnerDoc?.firmName || 'Your Firm',
     partnerName: partnerDoc ? `${partnerDoc.firstName || ''} ${partnerDoc.lastName || ''}`.trim() : 'You',
+    hasJoined,
     rank,
     totalPoints,
     breakdown,
@@ -880,41 +949,8 @@ async function getAdminPartnerRankings({ search = '', page = 1, limit = 50, tour
 
   const { allRankings } = await getLeaderboard({ limit: 5000, tournamentId: effectiveTournamentId });
 
-  // Include all registered staffing partners (even those with 0 points) so admin sees every participant
-  let completeRankings = allRankings;
-  try {
-    const allPartners = await StaffingPartner.find({}).lean();
-    const rankedPartnerIdSet = new Set(allRankings.map(p => String(p.partnerId)));
-
-    const unrankedPartners = [];
-    for (const partner of allPartners) {
-      if (!rankedPartnerIdSet.has(String(partner._id))) {
-        unrankedPartners.push({
-          rank: allRankings.length + unrankedPartners.length + 1,
-          partnerId: partner._id,
-          partnerName: `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Partner',
-          firmName: partner.firmName || 'Partner Firm',
-          city: partner.city || '',
-          state: partner.state || '',
-          totalPoints: 0,
-          isManualProgramPartner: Boolean(partner.isManualProgramPartner),
-          breakdown: {
-            screened: { count: 0, points: 0 },
-            submitted: { count: 0, points: 0 },
-            interviewed: { count: 0, points: 0 },
-            selected: { count: 0, points: 0 },
-            joined: { count: 0, points: 0 },
-            manual: { count: 0, points: 0 }
-          },
-          badges: [],
-          lastAwardedAt: null
-        });
-      }
-    }
-    completeRankings = [...allRankings, ...unrankedPartners];
-  } catch (err) {
-    console.error('[PARTNER_PROGRAM] Error fetching unranked partners for admin:', err.message);
-  }
+  // Admin rankings only include partners who are enrolled in this tournament (plus any manual program partners)
+  const completeRankings = allRankings;
 
   // Filter by search query if provided
   let filtered = completeRankings;
@@ -944,7 +980,7 @@ async function getAdminPartnerRankings({ search = '', page = 1, limit = 50, tour
     kpis: {
       totalPointsAwarded,
       totalPartnersParticipating: completeRankings.length,
-      activePartnersScored: allRankings.length,
+      activePartnersScored: completeRankings.filter(p => p.totalPoints > 0).length,
       totalScreenedProfiles,
       totalCompanySubmissions,
       totalInterviews,
@@ -1036,25 +1072,36 @@ async function backfillExistingPoints(targetTournamentId = null) {
 
   console.log(`[PARTNER_PROGRAM] Calibrating points strictly within tournament "${tournament.title}" timeline (${start.toISOString()} to ${end.toISOString()})...`);
 
+  // Find all enrolled real partners
+  const enrolledPartnerIds = (tournament.participants || []).map(p => String(p.partner?._id || p.partner || p));
+  const enrolledPartnerIdSet = new Set(enrolledPartnerIds);
+
   // Find all manual/fake partners so we preserve their simulated events
   const manualPartners = await StaffingPartner.find({ isManualProgramPartner: true }).select('_id').lean();
   const manualPartnerIds = manualPartners.map(p => p._id);
+  const manualPartnerIdSet = new Set(manualPartnerIds.map(String));
 
-  // Clear existing candidate milestone points recorded for REAL partners in this tournament so recalculation is 100% clean and scoped
-  // Preserve fake/manual partners' simulated events and any MANUAL_ADJUSTMENT points
+  // Clear existing candidate milestone points recorded for real partners who are NOT enrolled
   await PartnerPointEvent.deleteMany({
     tournament: tournamentId,
-    partner: { $nin: manualPartnerIds },
+    partner: { $nin: [...manualPartnerIds, ...enrolledPartnerIds] }
+  });
+
+  // For enrolled real partners, delete milestone events so we can re-calculate cleanly
+  await PartnerPointEvent.deleteMany({
+    tournament: tournamentId,
+    partner: { $in: enrolledPartnerIds, $nin: manualPartnerIds },
     stage: { $ne: STAGES.MANUAL_ADJUSTMENT }
   });
 
-  // Find all candidates submitted by staffing partners
-  const candidates = await Candidate.find({
-    submittedBy: { $ne: null }
+  // Find all candidates submitted by staffing partners who are enrolled or manual
+  const eligibleSubmitterIds = [...Array.from(enrolledPartnerIdSet), ...Array.from(manualPartnerIdSet)];
+  const candidates = eligibleSubmitterIds.length > 0 ? await Candidate.find({
+    submittedBy: { $in: eligibleSubmitterIds }
   })
     .populate('job', 'title company')
     .populate('company', 'companyName')
-    .lean();
+    .lean() : [];
 
   let processedCount = 0;
   let awardedCount = 0;
@@ -1746,6 +1793,15 @@ async function createProgramPartners({ tournamentId, partners = [], adminUserId 
         item.targetRank ? `Initial rank #${item.targetRank}` : `Initial points: ${targetPoints}`,
         item.customBreakdown || null
       );
+
+      // Ensure manual partner is also recorded in tournament participants
+      const inParticipants = Array.isArray(tDoc.participants) &&
+        tDoc.participants.some(p => String(p.partner?._id || p.partner || p) === String(partner._id));
+      if (!inParticipants) {
+        if (!tDoc.participants) tDoc.participants = [];
+        tDoc.participants.push({ partner: partner._id, joinedAt: new Date() });
+        await tDoc.save();
+      }
     }
 
     createdPartners.push({
@@ -1793,6 +1849,9 @@ async function deleteProgramPartner({ tournamentId, partnerId }) {
   if (tournamentId && tournamentId !== 'all' && mongoose.Types.ObjectId.isValid(tournamentId)) {
     // Delete only for this tournament
     await PartnerPointEvent.deleteMany({ partner: partnerId, tournament: tournamentId });
+    await PartnerTournament.findByIdAndUpdate(tournamentId, {
+      $pull: { participants: { partner: partnerId } }
+    });
     // Check if partner has events in other tournaments
     const remainingEvents = await PartnerPointEvent.countDocuments({ partner: partnerId });
     if (remainingEvents === 0) {
@@ -1804,6 +1863,9 @@ async function deleteProgramPartner({ tournamentId, partnerId }) {
   } else {
     // Delete point events for this partner across all tournaments
     await PartnerPointEvent.deleteMany({ partner: partnerId });
+    await PartnerTournament.updateMany({}, {
+      $pull: { participants: { partner: partnerId } }
+    });
     if (partner.user) {
       await User.findByIdAndDelete(partner.user);
     }

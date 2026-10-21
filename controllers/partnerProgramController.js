@@ -76,7 +76,14 @@ exports.enterTournament = async (req, res) => {
  */
 exports.getTournamentById = async (req, res) => {
   try {
-    const tournament = await partnerProgramService.getTournamentById(req.params.id);
+    let partnerId = null;
+    if (req.user) {
+      const partner = await StaffingPartner.findOne({ user: req.user._id });
+      if (partner) {
+        partnerId = partner._id;
+      }
+    }
+    const tournament = await partnerProgramService.getTournamentById(req.params.id, partnerId);
     return res.status(200).json({
       success: true,
       data: tournament
@@ -98,7 +105,14 @@ exports.getTournamentById = async (req, res) => {
  */
 exports.getCurrentTournament = async (req, res) => {
   try {
-    const tournament = await partnerProgramService.getCurrentTournament();
+    let partnerId = null;
+    if (req.user) {
+      const partner = await StaffingPartner.findOne({ user: req.user._id });
+      if (partner) {
+        partnerId = partner._id;
+      }
+    }
+    const tournament = await partnerProgramService.getCurrentTournament(partnerId);
     return res.status(200).json({
       success: true,
       data: tournament
@@ -204,11 +218,20 @@ exports.saveTournament = async (req, res) => {
 exports.getLeaderboard = async (req, res) => {
   try {
     const tournamentId = req.query.tournamentId || null;
+    let partnerId = null;
+    let currentPartnerStats = null;
+    if (req.user) {
+      const partner = await StaffingPartner.findOne({ user: req.user._id });
+      if (partner) {
+        partnerId = partner._id;
+      }
+    }
+
     let tournament;
     if (tournamentId && tournamentId !== 'all') {
-      tournament = await partnerProgramService.getTournamentById(tournamentId);
+      tournament = await partnerProgramService.getTournamentById(tournamentId, partnerId);
     } else {
-      tournament = await partnerProgramService.getCurrentTournament();
+      tournament = await partnerProgramService.getCurrentTournament(partnerId);
     }
 
     const leaderboardData = await partnerProgramService.getLeaderboard({
@@ -216,14 +239,10 @@ exports.getLeaderboard = async (req, res) => {
       tournamentId: tournament?._id || tournamentId
     });
 
-    let currentPartnerStats = null;
-    if (req.user) {
-      const partner = await StaffingPartner.findOne({ user: req.user._id });
-      if (partner) {
-        currentPartnerStats = await partnerProgramService.getPartnerProgramStats(partner._id, {
-          tournamentId: tournament?._id || tournamentId
-        });
-      }
+    if (partnerId) {
+      currentPartnerStats = await partnerProgramService.getPartnerProgramStats(partnerId, {
+        tournamentId: tournament?._id || tournamentId
+      });
     }
 
     return res.status(200).json({
@@ -261,9 +280,9 @@ exports.getPartnerStats = async (req, res) => {
     const tournamentId = req.query.tournamentId || null;
     let tournament;
     if (tournamentId && tournamentId !== 'all') {
-      tournament = await partnerProgramService.getTournamentById(tournamentId);
+      tournament = await partnerProgramService.getTournamentById(tournamentId, partner._id);
     } else {
-      tournament = await partnerProgramService.getCurrentTournament();
+      tournament = await partnerProgramService.getCurrentTournament(partner._id);
     }
 
     const stats = await partnerProgramService.getPartnerProgramStats(partner._id, {

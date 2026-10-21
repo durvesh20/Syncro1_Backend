@@ -13,6 +13,25 @@ const partnerTournamentSchema = new mongoose.Schema({
     trim: true,
     default: 'Quality + Speed + Consistency = Higher Score & Recognition 🏆'
   },
+  bgImage: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  recognitionBadges: [{
+    icon: {
+      type: String,
+      default: '🥇'
+    },
+    title: {
+      type: String,
+      default: ''
+    },
+    desc: {
+      type: String,
+      default: ''
+    }
+  }],
   startDate: {
     type: Date,
     required: true,
