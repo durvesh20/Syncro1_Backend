@@ -939,7 +939,7 @@ exports.getDashboard = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(5);
 
-    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
+    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED'];
 
     const recentCandidates = await Candidate.find({
       company: company._id,
@@ -1103,6 +1103,16 @@ exports.createJob = async (req, res) => {
       eligiblePlans,
     };
 
+    // ✅ Sanitize optional pipelineTemplate if provided
+    if (Array.isArray(req.body.pipelineTemplate)) {
+      jobData.pipelineTemplate = req.body.pipelineTemplate
+        .filter(r => r && r.roundType && typeof r.roundType === 'string' && r.roundType.trim().length > 0)
+        .map((r, i) => ({
+          roundType: r.roundType.trim(),
+          order: r.order ?? i + 1,
+        }));
+    }
+
     if (req.body.reportTracker && Array.isArray(req.body.reportTracker.selectedFields) && req.body.reportTracker.selectedFields.length > 0) {
       const actorName = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || req.user.email;
       const now = new Date();
@@ -1242,7 +1252,7 @@ exports.getJobs = async (req, res) => {
       const activeCandidatesCount = await Candidate.countDocuments({
         job: job._id,
         status: {
-          $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED']
+          $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED']
         }
       });
 
@@ -1377,7 +1387,7 @@ exports.getJob = async (req, res) => {
     const activeCandidatesCount = await Candidate.countDocuments({
       job: job._id,
       status: {
-        $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED']
+        $nin: ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED', 'REJECTED', 'WITHDRAWN', 'JOINED']
       }
     });
 
@@ -1439,6 +1449,17 @@ exports.updateJob = async (req, res) => {
 
     // Apply fields from body
     Object.assign(job, req.body);
+
+    // ✅ Sanitize optional pipelineTemplate if provided in update payload
+    if (Array.isArray(req.body.pipelineTemplate)) {
+      job.pipelineTemplate = req.body.pipelineTemplate
+        .filter(r => r && r.roundType && typeof r.roundType === 'string' && r.roundType.trim().length > 0)
+        .map((r, i) => ({
+          roundType: r.roundType.trim(),
+          order: r.order ?? i + 1,
+        }));
+      job.markModified('pipelineTemplate');
+    }
 
     // This will trigger the pre-save status sync hooks
     await job.save();
@@ -1654,7 +1675,7 @@ exports.getJobCandidates = async (req, res) => {
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
     const { status, search } = req.query;
 
-    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
+    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED'];
 
     const query = {
       job: req.params.jobId,
@@ -1739,7 +1760,7 @@ exports.getAllCandidates = async (req, res) => {
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
     const { status, search, job, jobId } = req.query;
 
-    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'ADMIN_REVIEW', 'ADMIN_REJECTED'];
+    const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED'];
 
     const query = {
       company: company._id,
@@ -1869,11 +1890,12 @@ exports.getCandidate = async (req, res) => {
   }
 };
 
-// @desc    Shortlist Candidate
+// @desc    Shortlist Candidate / Client Screen Select
 // @route   PUT /api/companies/candidates/:id/shortlist
 exports.shortlistCandidate = async (req, res) => {
   try {
-    const { notes } = req.body;
+    const { notes, status: requestedStatus } = req.body;
+    const targetStatus = requestedStatus || "CLIENT_SCREEN_SELECT";
 
     const { candidate } = await verifyCompanyOwnership(
       req.params.id,
@@ -1883,15 +1905,15 @@ exports.shortlistCandidate = async (req, res) => {
     // Use Lifecycle Service for consistent updates
     const updatedCandidate = await candidateLifecycleService.updateStatus(
       candidate._id,
-      "SHORTLISTED",
+      targetStatus,
       req.user._id,
       "company",
-      notes || "Candidate shortlisted"
+      notes || (targetStatus === "CLIENT_SCREEN_SELECT" ? "Candidate selected in client screening" : "Candidate shortlisted")
     );
 
     res.json({
       success: true,
-      message: "Candidate shortlisted successfully",
+      message: targetStatus === "CLIENT_SCREEN_SELECT" ? "Candidate selected in client screening" : "Candidate shortlisted successfully",
       data: {
         candidateId: updatedCandidate._id,
         name: updatedCandidate.name,
@@ -1915,11 +1937,11 @@ exports.shortlistCandidate = async (req, res) => {
   }
 };
 
-// @desc    Reject Candidate
+// @desc    Reject Candidate / Client Screen Reject
 // @route   PUT /api/companies/candidates/:id/reject
 exports.rejectCandidate = async (req, res) => {
   try {
-    const { reason, notes } = req.body;
+    const { reason, notes, status: requestedStatus } = req.body;
 
     if (!reason) {
       return res.status(400).json({
@@ -1933,10 +1955,12 @@ exports.rejectCandidate = async (req, res) => {
       req.user._id
     );
 
+    const targetStatus = requestedStatus || "CLIENT_SCREEN_REJECT";
+
     // Use Lifecycle Service for consistent updates
     const updatedCandidate = await candidateLifecycleService.updateStatus(
       candidate._id,
-      "REJECTED",
+      targetStatus,
       req.user._id,
       "company",
       notes || reason
@@ -1944,7 +1968,7 @@ exports.rejectCandidate = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Candidate rejected successfully",
+      message: targetStatus === "CLIENT_SCREEN_REJECT" ? "Candidate rejected in client screening" : "Candidate rejected successfully",
       data: {
         candidateId: updatedCandidate._id,
         status: updatedCandidate.status,
@@ -2169,25 +2193,42 @@ exports.createInterviewSlots = async (req, res) => {
           });
         }
 
-        // 1. Consent validation
+        // 1. Consent validation & rejection checks
+        const REJECTED_STATUSES = [
+          'CLIENT_SCREEN_REJECT',
+          'REJECTED',
+          'ROUND_REJECTED',
+          'HR_REJECTED',
+          'S1_SCREEN_REJECT',
+          'S1_REJECTED',
+          'ASSESSMENT_FAILED',
+          'CANDIDATE_DROP',
+          'WITHDRAWN',
+          'OFFER_REJECTED',
+          'CONSENT_DENIED'
+        ];
+        if (REJECTED_STATUSES.includes(taggedCand.status)) {
+          return res.status(400).json({
+            success: false,
+            message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is rejected/dropped and cannot be tagged for an interview slot.`
+          });
+        }
+
         if (
-          taggedCand.status === 'CONSENT_PENDING' ||
-          taggedCand.status === 'CONSENT_SENT' ||
           taggedCand.status === 'CONSENT_DENIED' ||
-          taggedCand.status === 'DRAFT' ||
-          taggedCand.whatsappConsent?.status === 'PENDING' ||
           taggedCand.whatsappConsent?.status === 'DENIED' ||
-          taggedCand.consent?.consentStatus === 'PENDING_CONFIRMATION' ||
-          taggedCand.consent?.consentStatus === 'DENIED'
+          taggedCand.consent?.consentStatus === 'DENIED' ||
+          ((taggedCand.status === 'CONSENT_PENDING' || taggedCand.status === 'CONSENT_SENT' || taggedCand.status === 'DRAFT') && taggedCand.status !== 'CLIENT_SCREEN_SELECT')
         ) {
           return res.status(400).json({
             success: false,
-            message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is pending consent and cannot be tagged for an interview slot.`
+            message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is pending consent or consent denied and cannot be tagged for an interview slot.`
           });
         }
 
         // 2. Shortlisted pipeline status validation
         const allowedCandidateStatuses = [
+          'CLIENT_SCREEN_SELECT',
           'SHORTLISTED',
           'SLOTS_NOT_PUBLISHED',
           'SLOTS_PUBLISHED',
@@ -2291,39 +2332,45 @@ exports.createInterviewSlots = async (req, res) => {
           }
 
           if (targetRoundIdx === -1) {
-            return res.status(400).json({
-              success: false,
-              message: `Round "${roundType}" is not part of candidate ${taggedCand.firstName} ${taggedCand.lastName}'s interview pipeline.`
-            });
+            if (taggedCand.status === 'CLIENT_SCREEN_SELECT') {
+              // Eligible: candidate is in client screening selection and can be scheduled for this pipeline round
+            } else {
+              return res.status(400).json({
+                success: false,
+                message: `Round "${roundType}" is not part of candidate ${taggedCand.firstName} ${taggedCand.lastName}'s interview pipeline.`
+              });
+            }
           }
 
-          if (targetRoundIdx < currentActiveIdx) {
+          if (targetRoundIdx !== -1 && targetRoundIdx < currentActiveIdx && taggedCand.status !== 'CLIENT_SCREEN_SELECT') {
             return res.status(400).json({
               success: false,
               message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} has already cleared round "${roundType}".`
             });
           }
 
-          if (targetRoundIdx > currentActiveIdx) {
+          if (targetRoundIdx !== -1 && targetRoundIdx > currentActiveIdx && taggedCand.status !== 'CLIENT_SCREEN_SELECT') {
             return res.status(400).json({
               success: false,
               message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} has not reached round "${roundType}" yet.`
             });
           }
 
-          const targetRound = taggedCand.rounds[targetRoundIdx];
-          if (['PASSED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED', 'CANDIDATE_DROP'].includes(targetRound.status)) {
-            return res.status(400).json({
-              success: false,
-              message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is not eligible for round "${roundType}" (round status: ${targetRound.status}).`
-            });
-          }
+          if (targetRoundIdx !== -1) {
+            const targetRound = taggedCand.rounds[targetRoundIdx];
+            if (['PASSED', 'REJECTED', 'ROUND_REJECTED', 'ASSESSMENT_FAILED', 'CANDIDATE_DROP'].includes(targetRound.status)) {
+              return res.status(400).json({
+                success: false,
+                message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} is not eligible for round "${roundType}" (round status: ${targetRound.status}).`
+              });
+            }
 
-          if (['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONFIRMED'].includes(targetRound.status)) {
-            return res.status(400).json({
-              success: false,
-              message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} already has an active slot assigned for round "${roundType}".`
-            });
+            if (['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_CONFIRMED'].includes(targetRound.status)) {
+              return res.status(400).json({
+                success: false,
+                message: `Candidate ${taggedCand.firstName} ${taggedCand.lastName} already has an active slot assigned for round "${roundType}".`
+              });
+            }
           }
         }
       }
@@ -2383,9 +2430,11 @@ exports.createInterviewSlots = async (req, res) => {
           cand.status = 'SLOT_ASSIGNED';
 
           // Update active round
+          let roundUpdated = false;
           for (let i = 0; i < (cand.rounds || []).length; i++) {
             const r = cand.rounds[i];
-            if (['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SHORTLISTED', 'RESCHEDULE_REQUESTED'].includes(r.status)) {
+            const isMatch = createdSlot.roundType ? ((r.roundType || '').trim().toLowerCase() === createdSlot.roundType.trim().toLowerCase()) : false;
+            if (isMatch || ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'RESCHEDULE_REQUESTED'].includes(r.status)) {
               r.status = 'SLOT_ASSIGNED';
               r.slots = [{
                 date: createdSlot.date,
@@ -2410,8 +2459,41 @@ exports.createInterviewSlots = async (req, res) => {
                   }
                 }
               }];
+              roundUpdated = true;
               break;
             }
+          }
+
+          if (!roundUpdated && createdSlot.roundType) {
+            if (!cand.rounds) cand.rounds = [];
+            cand.rounds.push({
+              roundType: createdSlot.roundType,
+              order: cand.rounds.length + 1,
+              status: 'SLOT_ASSIGNED',
+              slots: [{
+                date: createdSlot.date,
+                startTime: createdSlot.startTime,
+                endTime: createdSlot.endTime,
+                timezone: createdSlot.timezone || 'Asia/Kolkata',
+                mode: createdSlot.interviewMode === 'Face-to-Face' ? 'FACE_TO_FACE' : 'VIRTUAL',
+                interviewerName: createdSlot.interviewerName || '',
+                capacity: 1,
+                bookedBy: cand.submittedBy,
+                bookedAt: new Date(),
+                isTagged: true,
+                candidateId: cand._id,
+                roundType: createdSlot.roundType,
+                details: {
+                  meetingLink: createdSlot.interviewMode === 'Virtual' ? (createdSlot.interviewDetails || '') : '',
+                  address: createdSlot.interviewMode === 'Face-to-Face' ? (createdSlot.interviewDetails || '') : '',
+                  pointOfContact: {
+                    name: createdSlot.interviewerName || '',
+                    phone: '',
+                    email: ''
+                  }
+                }
+              }]
+            });
           }
 
           cand.statusHistory.push({

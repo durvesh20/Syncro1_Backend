@@ -16,7 +16,7 @@ class CandidateQueueService {
      * Called automatically after candidate confirms WhatsApp consent.
      * Steps:
      * 1. Run rule-based pre-screen (always, instant, no AI)
-     * 2. Move to ADMIN_REVIEW
+     * 2. Move to S1_REVIEW
      * 3. Optionally run AI analysis (only if AUTO_AI_AFTER_CONSENT=true)
      * 4. Notify admin/subadmin
      */
@@ -51,8 +51,8 @@ class CandidateQueueService {
             candidate.prescreen = { status: 'skipped', computed_at: new Date() };
         }
 
-        // ── STEP 2: Move to ADMIN_REVIEW ─────────────────────────────────────
-        candidate.status = 'ADMIN_REVIEW';
+        // ── STEP 2: Move to S1_REVIEW ─────────────────────────────────────
+        candidate.status = 'S1_REVIEW';
         candidate.adminQueue = {
             assignedAt: new Date(),
             action: 'PENDING'
@@ -61,9 +61,9 @@ class CandidateQueueService {
             ? `Pre-screen: ${prescreenResult.prescreen_score}/100 (${prescreenResult.status}). AI match pending manual trigger.`
             : 'Pre-screen skipped. AI match pending manual trigger.';
         candidate.statusHistory.push({
-            status: 'ADMIN_REVIEW',
+            status: 'S1_REVIEW',
             changedAt: new Date(),
-            notes: `Consent confirmed. Moving to Admin Review. ${prescreenNote}`
+            notes: `Consent confirmed. Moving to S1 Review. ${prescreenNote}`
         });
         await candidate.save();
 
@@ -406,14 +406,14 @@ class CandidateQueueService {
             }
         }
 
-        candidate.status = 'ADMIN_REVIEW';
+        candidate.status = 'S1_REVIEW';
         candidate.adminQueue = {
             assignedAt: new Date(),
             action: 'PENDING'
         };
 
         candidate.statusHistory.push({
-            status: 'ADMIN_REVIEW',
+            status: 'S1_REVIEW',
             changedAt: new Date(),
             notes: aiParsed
                 ? `AI analyzed. Score: ${profileScore}/100 (${matchLevel}). Decision: ${recommendation}. Risk Penalty: ${scoreBreakdown?.summary?.riskPenalty || 0}.`
@@ -435,16 +435,16 @@ class CandidateQueueService {
             scoreBreakdown,
             flags,
             advice,
-            status: 'ADMIN_REVIEW'
+            status: 'S1_REVIEW'
         };
     }
 
 
 
     /**
-     * Admin APPROVES candidate → forward to company
+     * Admin performs S1 SCREEN SELECT on candidate → moves to S1_SCREEN_SELECT (Internal pre-screen cleared)
      */
-    async approveCandidate(candidateId, adminUserId, notes = '') {
+    async s1ScreenSelectCandidate(candidateId, adminUserId, notes = '') {
         const candidate = await Candidate.findById(candidateId)
             .populate('job', 'title')
             .populate('company', 'companyName user')
@@ -452,40 +452,64 @@ class CandidateQueueService {
 
         if (!candidate) throw new Error('Candidate not found');
 
-        const userObj = await User.findById(adminUserId);
-        /*
-        if (userObj && userObj.role === 'sub_admin') {
-            const hasViewAll = userObj.permissions?.includes('VIEW_ALL_CANDIDATES');
-            if (!hasViewAll) {
-                const jobObj = await Job.findById(candidate.job?._id || candidate.job);
-                if (!jobObj || !jobObj.assignedTo || jobObj.assignedTo.toString() !== adminUserId.toString()) {
-                    throw new Error('You are not assigned to this job post. Only the assigned sub-admin or main admin can approve this candidate.');
-                }
-            }
-        }
-        */
-
-        if (candidate.status !== 'ADMIN_REVIEW') {
-            throw new Error(`Cannot approve candidate with status: ${candidate.status}`);
+        const allowedS1ReviewStatuses = ['S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING', 'CONSENT_CONFIRMED', 'PRESCREEN_PENDING'];
+        if (!allowedS1ReviewStatuses.includes(candidate.status)) {
+            throw new Error(`Cannot perform S1 Screen Select on candidate with status: ${candidate.status}`);
         }
 
-        // ✅ Move to SUBMITTED — now visible to company
-        candidate.status = 'SUBMITTED';
+        candidate.status = 'S1_SCREEN_SELECT';
         candidate.adminQueue.reviewedBy = adminUserId;
         candidate.adminQueue.reviewedAt = new Date();
-        candidate.adminQueue.action = 'APPROVED';
+        candidate.adminQueue.action = 'S1_SCREEN_SELECT';
         candidate.adminQueue.reviewNotes = notes;
 
         candidate.statusHistory.push({
-            status: 'SUBMITTED',
+            status: 'S1_SCREEN_SELECT',
             changedBy: adminUserId,
             changedAt: new Date(),
-            notes: `Admin approved. ${notes || ''} Profile sent to company.`
+            notes: `S1 Screen Select: Pre-screening cleared. ${notes || ''}`.trim()
         });
 
         await candidate.save();
+        await candidate.populate([
+            { path: 'adminQueue.reviewedBy', select: 'email role firstName lastName' }
+        ]);
+        return candidate;
+    }
 
-        // ✅ Notify candidate — profile sent to company
+    /**
+     * Admin SENDS CANDIDATE TO CLIENT → moves to SENT_TO_CLIENT (Visible to employer)
+     */
+    async sendToClientCandidate(candidateId, adminUserId, notes = '') {
+        const candidate = await Candidate.findById(candidateId)
+            .populate('job', 'title')
+            .populate('company', 'companyName user')
+            .populate('submittedBy', 'firmName user firstName lastName');
+
+        if (!candidate) throw new Error('Candidate not found');
+
+        const allowedSendStatuses = ['S1_SCREEN_SELECT', 'S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING'];
+        if (!allowedSendStatuses.includes(candidate.status)) {
+            throw new Error(`Cannot send candidate to client from status: ${candidate.status}`);
+        }
+
+        candidate.status = 'SENT_TO_CLIENT';
+        candidate.adminQueue.dispatchedBy = adminUserId;
+        candidate.adminQueue.dispatchedAt = new Date();
+        candidate.adminQueue.action = 'SENT_TO_CLIENT';
+        if (notes) candidate.adminQueue.dispatchNotes = notes;
+
+        candidate.statusHistory.push({
+            status: 'SENT_TO_CLIENT',
+            changedBy: adminUserId,
+            changedAt: new Date(),
+            notes: `Sent to Client. ${notes || ''} Profile forwarded to client for review.`.trim()
+        });
+
+        await candidate.save();
+        await candidate.populate([
+            { path: 'adminQueue.dispatchedBy', select: 'email role firstName lastName' }
+        ]);
         await this._notifyCandidate(candidate, 'APPROVED');
 
         // ✅ Notify partner
@@ -502,17 +526,33 @@ class CandidateQueueService {
                 external_candidate_id: candidate.external_candidate_id || null,
                 job_id: candidate.job?.uniqueId || String(candidate.job?._id || candidate.job),
                 name: `${candidate.firstName} ${candidate.lastName}`,
-                status: 'SUBMITTED'
+                status: 'SENT_TO_CLIENT'
             }, { entity_type: 'CANDIDATE', entity_id: candidate._id });
         } catch (whErr) {
-            console.error('[Candidate Approval Webhook Error]:', whErr.message);
+            console.error('[Candidate SendToClient Webhook Error]:', whErr.message);
         }
 
         return candidate;
     }
 
     /**
-     * Admin REJECTS candidate → not forwarded to company
+     * Backward-compatible approveCandidate: S1 Screen Select if in S1_REVIEW, or Send to Company if in S1_SCREEN_SELECT
+     */
+    async approveCandidate(candidateId, adminUserId, notes = '') {
+        const candidate = await Candidate.findById(candidateId);
+        if (!candidate) throw new Error('Candidate not found');
+
+        if (candidate.status === 'S1_REVIEW') {
+            return this.s1ScreenSelectCandidate(candidateId, adminUserId, notes);
+        } else if (candidate.status === 'S1_SCREEN_SELECT') {
+            return this.sendToClientCandidate(candidateId, adminUserId, notes);
+        } else {
+            throw new Error(`Cannot approve candidate with status: ${candidate.status}`);
+        }
+    }
+
+    /**
+     * Admin REJECTS candidate → S1_SCREEN_REJECT
      */
     async rejectCandidate(candidateId, adminUserId, reason) {
         if (!reason || reason.trim().length < 5) {
@@ -525,37 +565,28 @@ class CandidateQueueService {
 
         if (!candidate) throw new Error('Candidate not found');
 
-        const userObj = await User.findById(adminUserId);
-        /*
-        if (userObj && userObj.role === 'sub_admin') {
-            const hasViewAll = userObj.permissions?.includes('VIEW_ALL_CANDIDATES');
-            if (!hasViewAll) {
-                const jobObj = await Job.findById(candidate.job?._id || candidate.job);
-                if (!jobObj || !jobObj.assignedTo || jobObj.assignedTo.toString() !== adminUserId.toString()) {
-                    throw new Error('You are not assigned to this job post. Only the assigned sub-admin or main admin can reject this candidate.');
-                }
-            }
-        }
-        */
-
-        if (candidate.status !== 'ADMIN_REVIEW') {
+        const allowedRejectStatuses = ['S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING', 'S1_SCREEN_SELECT'];
+        if (!allowedRejectStatuses.includes(candidate.status)) {
             throw new Error(`Cannot reject candidate with status: ${candidate.status}`);
         }
 
-        candidate.status = 'ADMIN_REJECTED';
+        candidate.status = 'S1_SCREEN_REJECT';
         candidate.adminQueue.reviewedBy = adminUserId;
         candidate.adminQueue.reviewedAt = new Date();
-        candidate.adminQueue.action = 'REJECTED';
+        candidate.adminQueue.action = 'S1_SCREEN_REJECT';
         candidate.adminQueue.rejectionReason = reason.trim();
 
         candidate.statusHistory.push({
-            status: 'ADMIN_REJECTED',
+            status: 'S1_SCREEN_REJECT',
             changedBy: adminUserId,
             changedAt: new Date(),
-            notes: `Admin rejected: ${reason}`
+            notes: `S1 Screen Rejected: ${reason}`
         });
 
         await candidate.save();
+        await candidate.populate([
+            { path: 'adminQueue.reviewedBy', select: 'email role firstName lastName' }
+        ]);
 
         // ✅ Notify partner about rejection
         await this._notifyPartner(candidate, 'REJECTED', reason);
@@ -747,7 +778,7 @@ class CandidateQueueService {
      * Get pending candidates in admin queue
      */
     async getAdminQueue(filters = {}) {
-        const query = { status: 'ADMIN_REVIEW' };
+        const query = filters.status ? { status: filters.status } : { status: { $in: ['S1_REVIEW', 'S1_SCREEN_SELECT'] } };
 
         if (filters.jobId) query.job = filters.jobId;
         if (filters.assignedJobIds) query.job = { $in: filters.assignedJobIds };

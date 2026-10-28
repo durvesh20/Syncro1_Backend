@@ -82,7 +82,7 @@ const safeUpload = (multerFn) => (req, res, next) => {
 // ==================== AUTH MIDDLEWARE ====================
 // Applied to ALL routes below
 router.use(protect);
-router.use(authorize('staffing_partner'));
+router.use(authorize('talent_partner'));
 
 // ==================== DASHBOARD ====================
 router.get('/dashboard', getDashboard);
@@ -200,7 +200,7 @@ router.get('/jobs/:id/download-jd', downloadJobPositionPdf);
 // ==================== PRE-SUBMISSION CHECKS ====================
 
 // @desc    Check for duplicate candidate before submitting
-// @route   POST /api/staffing-partners/jobs/:jobId/check-duplicate
+// @route   POST /api/talent-partners/jobs/:jobId/check-duplicate
 // @body    { email, mobile }
 router.post('/jobs/:jobId/check-duplicate', async (req, res) => {
   try {
@@ -245,7 +245,7 @@ router.post('/jobs/:jobId/check-duplicate', async (req, res) => {
 });
 
 // @desc    Check candidate-job fit before submitting
-// @route   POST /api/staffing-partners/jobs/:jobId/check-fit
+// @route   POST /api/talent-partners/jobs/:jobId/check-fit
 // @body    { profile }
 router.post('/jobs/:jobId/check-fit', async (req, res) => {
   try {
@@ -290,7 +290,7 @@ router.post('/jobs/:jobId/check-fit', async (req, res) => {
 // ==================== CANDIDATE SUBMISSION ====================
 
 // @desc    Submit candidate WITH resume — single multipart/form-data request
-// @route   POST /api/staffing-partners/jobs/:jobId/candidates
+// @route   POST /api/talent-partners/jobs/:jobId/candidates
 router.post(
   '/jobs/:jobId/candidates',
   jobOnHoldGuard,
@@ -299,7 +299,7 @@ router.post(
   submitCandidate
 );
 
-// ✅ Apply from pool: POST /api/staffing-partners/jobs/:jobId/candidates/from-pool
+// ✅ Apply from pool: POST /api/talent-partners/jobs/:jobId/candidates/from-pool
 // Must come BEFORE the generic interview-slots route to avoid :id collision
 router.post(
   '/jobs/:jobId/candidates/from-pool',
@@ -321,20 +321,20 @@ router.post('/submissions/:id/pipeline/reschedule', jobOnHoldGuard, partnerReque
 router.get('/worked-jobs', getWorkedJobs);
 
 // @desc    Withdraw a submitted candidate
-// @route   PUT /api/staffing-partners/submissions/:id/withdraw
+// @route   PUT /api/talent-partners/submissions/:id/withdraw
 router.put('/submissions/:id/withdraw', withdrawCandidate);
 
 // @desc    Update a submission's candidate details
-// @route   PUT /api/staffing-partners/submissions/:id
+// @route   PUT /api/talent-partners/submissions/:id
 router.put('/submissions/:id', safeUpload(uploadResumeMiddleware), handleUploadError, updateSubmission);
 
 // @desc    Resend WhatsApp consent to candidate (Initial Consent)
-// @route   POST /api/staffing-partners/submissions/:id/resend-consent
+// @route   POST /api/talent-partners/submissions/:id/resend-consent
 // @access  Only when candidate status is CONSENT_PENDING
 router.post('/submissions/:id/resend-consent', resendConsent);
 
 // @desc    Resend interview consent (WhatsApp + Email) to candidate
-// @route   POST /api/staffing-partners/submissions/:id/pipeline/resend-interview-consent
+// @route   POST /api/talent-partners/submissions/:id/pipeline/resend-interview-consent
 // @access  Only when active round status is SLOT_DETAILS_SHARED
 const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
 router.post('/submissions/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
@@ -348,7 +348,7 @@ router.get('/invoices/:id', getInvoice);
 // ==================== CANDIDATE RESUME UPDATE ====================
 
 // @desc    Update resume for an EXISTING candidate (after submission)
-// @route   POST /api/staffing-partners/candidates/:id/resume
+// @route   POST /api/talent-partners/candidates/:id/resume
 // @body    multipart/form-data — field name: "resume"
 // @note    Only the partner who submitted the candidate can update resume
 router.post(
@@ -360,10 +360,10 @@ router.post(
 
 // ==================== CANDIDATE POOL ROUTES ====================
 
-// GET    /api/staffing-partners/my-candidates         — list all (paginated)
+// GET    /api/talent-partners/my-candidates         — list all (paginated)
 router.get('/my-candidates', listPoolCandidates);
 
-// POST   /api/staffing-partners/my-candidates         — create (with optional resume)
+// POST   /api/talent-partners/my-candidates         — create (with optional resume)
 router.post(
   '/my-candidates',
   safeUpload(uploadResumeMiddleware),
@@ -371,10 +371,10 @@ router.post(
   createPoolCandidate
 );
 
-// GET    /api/staffing-partners/my-candidates/:id     — get one
+// GET    /api/talent-partners/my-candidates/:id     — get one
 router.get('/my-candidates/:id', getPoolCandidate);
 
-// PUT    /api/staffing-partners/my-candidates/:id     — update (with optional resume)
+// PUT    /api/talent-partners/my-candidates/:id     — update (with optional resume)
 router.put(
   '/my-candidates/:id',
   uploadResumeMiddleware,
@@ -382,12 +382,12 @@ router.put(
   updatePoolCandidate
 );
 
-// DELETE /api/staffing-partners/my-candidates/:id     — delete
+// DELETE /api/talent-partners/my-candidates/:id     — delete
 router.delete('/my-candidates/:id', deletePoolCandidate);
 
 // ==================== SCREENING QUESTION ROUTES ====================
 // @desc  Get screening questions for a job (before submitting a candidate)
-// @route GET /api/staffing-partners/jobs/:jobId/screening-questions
+// @route GET /api/talent-partners/jobs/:jobId/screening-questions
 router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForPartner);
 
 module.exports = router;

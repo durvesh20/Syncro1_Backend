@@ -279,6 +279,15 @@ function computeValue(doc, fieldDef) {
       const d = new Date(lwd);
       return isNaN(d.getTime()) ? '' : d;
     }
+    case 'cand_submittedAt': {
+      const dt =
+        getPath(doc, 'adminQueue.dispatchedAt') ||
+        getPath(doc, 'adminQueue.reviewedAt') ||
+        getPath(doc, 'createdAt');
+      if (!dt) return '';
+      const d = new Date(dt);
+      return isNaN(d.getTime()) ? '' : d;
+    }
     case 'rej_rejectedBy': {
       // reviewedByUser is the $lookup result from users collection
       const user = doc.reviewedByUser;
@@ -387,6 +396,22 @@ async function buildCursor({ reportType, user, selectedFields, filters }) {
 
   const filterMatch = await buildFilterMatch(def, filters);
   const match = { ...scope, ...filterMatch };
+
+  // If specific candidates are selected, filter by their IDs
+  const candidateIds = filters?.candidateIds || filters?.candidates;
+  if (candidateIds && Array.isArray(candidateIds) && candidateIds.length > 0 && def.base === 'candidates') {
+    const validIds = candidateIds.map(toObjectId).filter(Boolean);
+    if (validIds.length > 0) {
+      match._id = { $in: validIds };
+    }
+  }
+
+  if (user.role === 'company' && !def.scope && def.base === 'candidates') {
+    const doc = await Company.findOne({ user: user._id }).select('_id').lean();
+    if (doc) {
+      match.company = doc._id;
+    }
+  }
 
   console.log(`[reports] buildCursor: base=${def.base}, scope=`, scope, 'match=', match);
 

@@ -19,8 +19,8 @@ const { transition, ACTIONS, PIPELINE_STATES } = require('../services/pipelineSt
 // PROFILE ROUTES
 // ============================================================
 
-// @desc    Get Staffing Partner Profile
-// @route   GET /api/staffing-partners/profile
+// @desc    Get Talent Partner Profile
+// @route   GET /api/talent-partners/profile
 exports.getProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({
@@ -48,7 +48,7 @@ exports.getProfile = async (req, res) => {
 };
 
 // @desc    Update Basic Info
-// @route   PUT /api/staffing-partners/profile/basic-info
+// @route   PUT /api/talent-partners/profile/basic-info
 exports.updateBasicInfo = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -92,7 +92,7 @@ exports.updateBasicInfo = async (req, res) => {
           });
         }
 
-        // Custom domain check: only one staffing partner allowed per custom domain
+        // Custom domain check: only one talent partner allowed per custom domain
         const domain = normalizedEmail.split('@')[1];
         const genericEmailDomains = new Set([
           'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
@@ -101,7 +101,7 @@ exports.updateBasicInfo = async (req, res) => {
         ]);
         if (!genericEmailDomains.has(domain)) {
           const domainExists = await User.findOne({
-            role: 'staffing_partner',
+            role: 'talent_partner',
             email: new RegExp(`@${domain}$`, 'i'),
             _id: { $ne: req.user._id }
           });
@@ -160,7 +160,7 @@ exports.updateBasicInfo = async (req, res) => {
 };
 
 // @desc    Update Firm Details
-// @route   PUT /api/staffing-partners/profile/firm-details
+// @route   PUT /api/talent-partners/profile/firm-details
 exports.updateFirmDetails = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -229,7 +229,7 @@ exports.updateFirmDetails = async (req, res) => {
 };
 
 // @desc    Update Syncro1 Competency
-// @route   PUT /api/staffing-partners/profile/Syncro1-competency
+// @route   PUT /api/talent-partners/profile/Syncro1-competency
 exports.updateSyncro1Competency = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -260,7 +260,7 @@ exports.updateSyncro1Competency = async (req, res) => {
 };
 
 // @desc    Update Geographic Reach
-// @route   PUT /api/staffing-partners/profile/geographic-reach
+// @route   PUT /api/talent-partners/profile/geographic-reach
 exports.updateGeographicReach = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -291,7 +291,7 @@ exports.updateGeographicReach = async (req, res) => {
 };
 
 // @desc    Update Compliance & Ethical Declarations
-// @route   PUT /api/staffing-partners/profile/compliance
+// @route   PUT /api/talent-partners/profile/compliance
 exports.updateCompliance = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -376,7 +376,7 @@ exports.updateCompliance = async (req, res) => {
 };
 
 // @desc    Update Commercial & Payout Details
-// @route   PUT /api/staffing-partners/profile/commercial-details
+// @route   PUT /api/talent-partners/profile/commercial-details
 exports.updateCommercialDetails = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -427,7 +427,7 @@ exports.updateCommercialDetails = async (req, res) => {
 };
 
 // @desc    Update Team Access
-// @route   PUT /api/staffing-partners/profile/team-access
+// @route   PUT /api/talent-partners/profile/team-access
 exports.updateTeamAccess = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -466,7 +466,7 @@ exports.updateTeamAccess = async (req, res) => {
 };
 
 // @desc    Add Team Member
-// @route   POST /api/staffing-partners/profile/team-access/member
+// @route   POST /api/talent-partners/profile/team-access/member
 exports.addTeamMember = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -538,7 +538,7 @@ exports.addTeamMember = async (req, res) => {
 };
 
 // @desc    Update Team Member
-// @route   PUT /api/staffing-partners/profile/team-access/member/:memberId
+// @route   PUT /api/talent-partners/profile/team-access/member/:memberId
 exports.updateTeamMember = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -610,7 +610,7 @@ exports.updateTeamMember = async (req, res) => {
 };
 
 // @desc    Remove Team Member
-// @route   DELETE /api/staffing-partners/profile/team-access/member/:memberId
+// @route   DELETE /api/talent-partners/profile/team-access/member/:memberId
 exports.removeTeamMember = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -667,7 +667,7 @@ exports.removeTeamMember = async (req, res) => {
 };
 
 // @desc    Get Team Members
-// @route   GET /api/staffing-partners/profile/team-access/members
+// @route   GET /api/talent-partners/profile/team-access/members
 exports.getTeamMembers = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -698,7 +698,7 @@ exports.getTeamMembers = async (req, res) => {
 };
 
 // @desc    Get Profile Completion Status
-// @route   GET /api/staffing-partners/profile/completion
+// @route   GET /api/talent-partners/profile/completion
 exports.getProfileCompletion = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id }).populate(
@@ -750,7 +750,7 @@ exports.getProfileCompletion = async (req, res) => {
 };
 
 // @desc    Submit Profile for Verification
-// @route   POST /api/staffing-partners/profile/submit
+// @route   POST /api/talent-partners/profile/submit
 exports.submitProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -833,7 +833,7 @@ exports.submitProfile = async (req, res) => {
     if (!partner.agreement?.agreed) {
       return res.status(400).json({
         success: false,
-        message: 'Please read and accept the Master Staffing Partner Agreement before submitting'
+        message: 'Please read and accept the Master Talent Partner Agreement before submitting'
       });
     }
 
@@ -868,11 +868,11 @@ exports.submitProfile = async (req, res) => {
               <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                           color: white; padding: 30px; border-radius: 10px 10px 0 0;">
                 <h1 style="margin: 0; font-size: 22px;">Syncro1</h1>
-                <p style="margin: 5px 0 0 0; opacity: 0.9;">Master Staffing Partner Agreement</p>
+                <p style="margin: 5px 0 0 0; opacity: 0.9;">Master Talent Partner Agreement</p>
               </div>
               <div style="padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb;">
                 <p>Dear ${partner.firstName} ${partner.lastName},</p>
-                <p>Thank you for accepting the Master Staffing Partner Agreement
+                <p>Thank you for accepting the Master Talent Partner Agreement
                    and submitting your profile for verification.</p>
                 <div style="text-align: center; margin: 30px 0;">
                   <a href="${partner.agreement.pdfUrl}"
@@ -931,7 +931,7 @@ exports.submitProfile = async (req, res) => {
 // ============================================================
 
 // @desc    Get Available Jobs
-// @route   GET /api/staffing-partners/jobs
+// @route   GET /api/talent-partners/jobs
 exports.getAvailableJobs = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -1010,7 +1010,7 @@ exports.getAvailableJobs = async (req, res) => {
 };
 
 // @desc    Get Job Details
-// @route   GET /api/staffing-partners/jobs/:id
+// @route   GET /api/talent-partners/jobs/:id
 exports.getJobDetails = async (req, res) => {
   try {
     const job = await Job.findById(req.params.id)
@@ -1114,7 +1114,7 @@ exports.getJobDetails = async (req, res) => {
 };
 
 // @desc    Download Job Position / JD as PDF
-// @route   GET /api/staffing-partners/jobs/:id/download-jd
+// @route   GET /api/talent-partners/jobs/:id/download-jd
 exports.downloadJobPositionPdf = async (req, res) => {
   try {
     const Job = require('../models/Job');
@@ -1152,7 +1152,7 @@ exports.downloadJobPositionPdf = async (req, res) => {
 // ============================================================
 
 // @desc    Submit candidate WITH resume — single multipart/form-data request
-// @route   POST /api/staffing-partners/jobs/:jobId/candidates
+// @route   POST /api/talent-partners/jobs/:jobId/candidates
 //
 // Request:  multipart/form-data
 // Required fields:
@@ -1265,6 +1265,7 @@ exports.submitCandidate = async (req, res) => {
       lastWorkingDay,
       willingToRelocate,
       currentCompany,
+      currentDesignation,
       education
     } = req.body;
 
@@ -1573,7 +1574,7 @@ exports.submitCandidate = async (req, res) => {
         expectedSalary: parsedExpectedSalary, // ✅ parsed int (no comma issue)
         writeup: writeup?.trim() || '',
         currentCompany: currentCompany?.trim() || parsedProfile?.currentCompany || '',
-        currentDesignation: parsedProfile?.currentDesignation || '',
+        currentDesignation: currentDesignation?.trim() || parsedProfile?.currentDesignation || '',
         skills: parsedProfile?.skills || [],
         education: normalizedEducation,
         experience: parsedProfile?.experience || [],
@@ -1801,7 +1802,7 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
     const partnerCandidates = await Candidate.find({
       job: req.params.jobId,
       submittedBy: partner._id,
-      status: { $in: ['SHORTLISTED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED', 'RESCHEDULE_REQUESTED'] },
+      status: { $in: ['SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED', 'RESCHEDULE_REQUESTED'] },
     })
       .populate('assignedSlot')
       .select('firstName lastName email mobile status assignedSlot profile.currentDesignation rounds');
@@ -1974,11 +1975,11 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    // Candidate must be SHORTLISTED (legacy), SLOTS_PUBLISHED (pipeline), or SLOTS_NOT_PUBLISHED
-    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    // Candidate must be SHORTLISTED (legacy), CLIENT_SCREEN_SELECT, SLOTS_PUBLISHED (pipeline), or SLOTS_NOT_PUBLISHED
+    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'CLIENT_SCREEN_SELECT' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED') {
       return res.status(400).json({
         success: false,
-        message: `Only SHORTLISTED, SLOTS_PUBLISHED, or SLOTS_NOT_PUBLISHED candidates can be assigned to slots. Current status: ${candidate.status}`,
+        message: `Only SHORTLISTED, CLIENT_SCREEN_SELECT, SLOTS_PUBLISHED, or SLOTS_NOT_PUBLISHED candidates can be assigned to slots. Current status: ${candidate.status}`,
       });
     }
 
@@ -2171,7 +2172,7 @@ exports.assignCandidateToSlot = async (req, res) => {
       const fsmResult = transition({
         currentState: oldStatus,
         action: ACTIONS.BOOK_SLOT,
-        role: 'staffing_partner',
+        role: 'talent_partner',
       });
       if (!fsmResult.ok) {
         return res.status(400).json({ success: false, message: fsmResult.error });
@@ -2181,7 +2182,7 @@ exports.assignCandidateToSlot = async (req, res) => {
       const fsmResult = transition({
         currentState: oldStatus,
         action: ACTIONS.CONFIRM_RESCHEDULE,
-        role: 'staffing_partner',
+        role: 'talent_partner',
       });
       if (!fsmResult.ok) {
         return res.status(400).json({ success: false, message: fsmResult.error });
@@ -2266,7 +2267,7 @@ exports.assignCandidateToSlot = async (req, res) => {
       candidate.auditTrail = candidate.auditTrail || [];
       candidate.auditTrail.push({
         actorId: req.user._id,
-        actorRole: 'staffing_partner',
+        actorRole: 'talent_partner',
         action: ACTIONS.BOOK_SLOT,
         fromState: oldStatus,
         toState: candidate.status,
@@ -2454,7 +2455,7 @@ exports.removeCandidateFromSlot = async (req, res) => {
       candidate.auditTrail = candidate.auditTrail || [];
       candidate.auditTrail.push({
         actorId: req.user._id,
-        actorRole: 'staffing_partner',
+        actorRole: 'talent_partner',
         action: ACTIONS.REQUEST_RESCHEDULE,
         fromState: oldStatus,
         toState: nextStatus,
@@ -2486,7 +2487,7 @@ exports.removeCandidateFromSlot = async (req, res) => {
 };
 
 // PARTNER: Confirm pre-allotted tagged slot & send consent to candidate
-// POST /api/staffing-partners/jobs/:jobId/tagged-slot/confirm
+// POST /api/talent-partners/jobs/:jobId/tagged-slot/confirm
 exports.confirmTaggedSlot = async (req, res) => {
   try {
     const { candidateId, slotId } = req.body;
@@ -2606,7 +2607,7 @@ exports.confirmTaggedSlot = async (req, res) => {
       candidate.auditTrail = candidate.auditTrail || [];
       candidate.auditTrail.push({
         actorId: req.user._id,
-        actorRole: 'staffing_partner',
+        actorRole: 'talent_partner',
         action: 'CONFIRM_TAGGED_SLOT',
         fromState: oldStatus,
         toState: 'SLOT_DETAILS_SHARED',
@@ -2662,7 +2663,7 @@ exports.confirmTaggedSlot = async (req, res) => {
 };
 
 // PARTNER: Candidate Reject - candidate does not want to proceed with application
-// POST /api/staffing-partners/jobs/:jobId/tagged-slot/reject
+// POST /api/talent-partners/jobs/:jobId/tagged-slot/reject
 exports.rejectTaggedSlotByCandidate = async (req, res) => {
   try {
     const { candidateId, slotId, reason } = req.body;
@@ -2707,7 +2708,7 @@ exports.rejectTaggedSlotByCandidate = async (req, res) => {
         slot.activityLogs.push({
           action: 'SLOT_OPENED_ON_REJECT',
           performedBy: req.user._id,
-          performedByRole: 'staffing_partner',
+          performedByRole: 'talent_partner',
           performedByName: `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Partner',
           details: `Candidate ${candidate.firstName} ${candidate.lastName} dropped application. Slot opened to candidate pool. Reason: ${reason || ''}`.trim(),
           timestamp: new Date()
@@ -2758,7 +2759,7 @@ exports.rejectTaggedSlotByCandidate = async (req, res) => {
 // ============================================================
 
 // @desc    Update resume for an existing candidate
-// @route   POST /api/staffing-partners/candidates/:id/resume
+// @route   POST /api/talent-partners/candidates/:id/resume
 // @body    multipart/form-data — field name: "resume"
 // @note    Only the partner who submitted the candidate can update
 exports.uploadResume = async (req, res) => {
@@ -2838,7 +2839,7 @@ exports.uploadResume = async (req, res) => {
 // ============================================================
 
 // @desc    Get My Submissions
-// @route   GET /api/staffing-partners/submissions
+// @route   GET /api/talent-partners/submissions
 exports.getMySubmissions = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -2850,7 +2851,7 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all', jobId, job: jobParam } = req.query;
+    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all', jobId, job: jobParam, company: companyParam, client: clientParam } = req.query;
     const parsedPage = parseInt(page, 10) || 1;
     const parsedLimit = parseInt(limit, 10) || 10;
     const skip = (parsedPage - 1) * parsedLimit;
@@ -2858,20 +2859,54 @@ exports.getMySubmissions = async (req, res) => {
     const query = { submittedBy: partner._id };
 
     const targetJobId = jobId || jobParam;
-    if (targetJobId) {
+    if (targetJobId && targetJobId !== 'all' && targetJobId !== 'ALL') {
       query.job = targetJobId;
     }
 
-    if (tab === 'consent_pending' || status === 'CONSENT_PENDING') {
-      query.status = 'CONSENT_PENDING';
-    } else if (tab === 'interview' || isInterview === 'true' || status === 'ACTIVE_INTERVIEWS') {
+    const targetCompanyId = companyParam || clientParam;
+    if (targetCompanyId && targetCompanyId !== 'all' && targetCompanyId !== 'ALL') {
+      query.company = targetCompanyId;
+    }
+
+    if (status && status !== 'all' && status !== 'ALL') {
+      const s = String(status).trim().toUpperCase();
+      if (s === 'S1_REVIEW' || s === 'ADMIN_REVIEW') {
+        query.status = { $in: ['S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING', 'CONSENT_CONFIRMED'] };
+      } else if (s === 'S1_SCREEN_SELECT') {
+        query.status = 'S1_SCREEN_SELECT';
+      } else if (s === 'S1_SCREEN_REJECT' || s === 'S1_REJECTED' || s === 'ADMIN_REJECTED') {
+        query.status = { $in: ['S1_SCREEN_REJECT', 'S1_REJECTED', 'ADMIN_REJECTED'] };
+      } else if (s === 'CONSENT_PENDING') {
+        query.status = { $in: ['CONSENT_PENDING', 'CONSENT_SENT'] };
+      } else if (s === 'SENT_TO_CLIENT' || s === 'COMPANY_REVIEW' || s === 'CLIENT_REVIEW' || s === 'UNDER_REVIEW' || s === 'REVIEWING') {
+        query.status = { $in: ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'UNDER_REVIEW', 'REVIEWING'] };
+      } else if (s === 'CLIENT_SCREEN_SELECT') {
+        query.status = { $in: ['CLIENT_SCREEN_SELECT', 'SHORTLISTED'] };
+      } else if (s === 'ACTIVE_INTERVIEWS') {
+        query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] };
+      } else if (s === 'SLOTS_NOT_PUBLISHED' || s === 'SLOTS_PENDING') {
+        query.status = { $in: ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'RESCHEDULE_REQUESTED'] };
+      } else if (s === 'OFFERED' || s === 'OFFER_SENT') {
+        query.status = { $in: ['OFFERED', 'OFFER_SENT'] };
+      } else if (s === 'OFFER_ACCEPTED') {
+        query.status = 'OFFER_ACCEPTED';
+      } else if (s === 'OFFER_REJECTED' || s === 'OFFER_DECLINED') {
+        query.status = { $in: ['OFFER_REJECTED', 'OFFER_DECLINED'] };
+      } else if (s === 'JOINED' || s === 'HIRED') {
+        query.status = { $in: ['JOINED', 'HIRED', 'ONBOARDING'] };
+      } else if (s === 'REJECTED') {
+        query.status = { $in: ['REJECTED', 'CLIENT_REJECTED', 'COMPANY_REJECTED', 'S1_REJECTED', 'S1_SCREEN_REJECT', 'ROUND_REJECTED', 'HR_REJECTED', 'OFFER_REJECTED'] };
+      } else {
+        query.status = status;
+      }
+    } else if (tab === 'consent_pending') {
+      query.status = { $in: ['CONSENT_PENDING', 'CONSENT_SENT'] };
+    } else if (tab === 'interview' || isInterview === 'true') {
       query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED'] };
-    } else if (tab === 'offer' || status === 'OFFERED') {
-      query.status = { $in: ['OFFERED', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'OFFER_REJECTED'] };
-    } else if (tab === 'joined' || status === 'JOINED') {
-      query.status = { $in: ['JOINED', 'HIRED'] };
-    } else if (status) {
-      query.status = status;
+    } else if (tab === 'offer') {
+      query.status = { $in: ['OFFERED', 'OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'OFFER_REJECTED'] };
+    } else if (tab === 'joined') {
+      query.status = { $in: ['JOINED', 'HIRED', 'ONBOARDING'] };
     }
 
     const andConditions = [];
@@ -2985,7 +3020,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
 }
 
 // @desc    Get Single Submission
-// @route   GET /api/staffing-partners/submissions/:id
+// @route   GET /api/talent-partners/submissions/:id
 exports.getSubmission = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -3026,7 +3061,7 @@ exports.getSubmission = async (req, res) => {
 };
 
 // @desc    Update Candidate Submission Details (Before Consent Confirmation)
-// @route   PUT /api/staffing-partners/submissions/:id
+// @route   PUT /api/talent-partners/submissions/:id
 exports.updateSubmission = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -3044,7 +3079,7 @@ exports.updateSubmission = async (req, res) => {
     }
 
     // Check status lock
-    const CONSENT_LOCKED_STATUSES = ['CONSENT_CONFIRMED', 'ADMIN_REVIEW', 'SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'];
+    const CONSENT_LOCKED_STATUSES = ['CONSENT_CONFIRMED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED', 'SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'];
     if (CONSENT_LOCKED_STATUSES.includes(submission.status)) {
       return res.status(403).json({
         success: false,
@@ -3069,6 +3104,7 @@ exports.updateSubmission = async (req, res) => {
       writeup,
       lastWorkingDay,
       currentCompany,
+      currentDesignation,
       education
     } = req.body;
 
@@ -3105,6 +3141,7 @@ exports.updateSubmission = async (req, res) => {
     if (expectedSalary !== undefined && expectedSalary !== '') submission.profile.expectedSalary = Number(expectedSalary);
     if (writeup !== undefined) submission.profile.writeup = writeup.trim();
     if (currentCompany !== undefined) submission.profile.currentCompany = currentCompany.trim();
+    if (currentDesignation !== undefined) submission.profile.currentDesignation = currentDesignation.trim();
     if (education !== undefined) {
       if (typeof education === 'string') {
         submission.profile.education = education.trim() ? [{ degree: education.trim() }] : [];
@@ -3149,6 +3186,7 @@ exports.updateSubmission = async (req, res) => {
         if (expectedSalary !== undefined && expectedSalary !== '') poolCandidate.expectedSalary = Number(expectedSalary);
         if (writeup !== undefined) poolCandidate.writeup = writeup.trim();
         if (currentCompany !== undefined) poolCandidate.currentCompany = currentCompany.trim();
+        if (currentDesignation !== undefined) poolCandidate.currentDesignation = currentDesignation.trim();
         if (education !== undefined) {
           poolCandidate.education = typeof education === 'string' ? education.trim() : (education?.[0]?.degree || '');
         }
@@ -3196,8 +3234,8 @@ exports.updateSubmission = async (req, res) => {
 // ============================================================
 
 // @desc    Resend WhatsApp consent to candidate
-// @route   POST /api/staffing-partners/submissions/:id/resend-consent
-// @access  Staffing Partner — only when candidate status is CONSENT_PENDING
+// @route   POST /api/talent-partners/submissions/:id/resend-consent
+// @access  Talent Partner — only when candidate status is CONSENT_PENDING
 exports.resendConsent = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -3297,7 +3335,7 @@ exports.resendConsent = async (req, res) => {
 // ============================================================
 
 // @desc    Withdraw Candidate
-// @route   PUT /api/staffing-partners/submissions/:id/withdraw
+// @route   PUT /api/talent-partners/submissions/:id/withdraw
 exports.withdrawCandidate = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -3328,8 +3366,10 @@ exports.withdrawCandidate = async (req, res) => {
       'DRAFT',
       'CONSENT_PENDING',
       'CONSENT_CONFIRMED',
-      'ADMIN_REVIEW',
-      'ADMIN_REJECTED',
+      'S1_REVIEW',
+      'S1_SCREEN_SELECT',
+      'S1_SCREEN_REJECT',
+      'S1_REJECTED',
       'CONSENT_DENIED'
     ];
 
@@ -3341,7 +3381,7 @@ exports.withdrawCandidate = async (req, res) => {
         status: 'WITHDRAWN',
         changedBy: req.user._id,
         changedAt: new Date(),
-        notes: reason || 'Withdrawn by staffing partner'
+        notes: reason || 'Withdrawn by Talent Partner'
       });
       await candidate.save();
 
@@ -3364,8 +3404,8 @@ exports.withdrawCandidate = async (req, res) => {
         candidate._id,
         'WITHDRAWN',
         req.user._id,
-        'staffing_partner',
-        reason || 'Withdrawn by staffing partner'
+        'talent_partner',
+        reason || 'Withdrawn by Talent Partner'
       );
 
       res.json({
@@ -3403,7 +3443,7 @@ exports.withdrawCandidate = async (req, res) => {
 // ============================================================
 
 // @desc    Get Dashboard Stats
-// @route   GET /api/staffing-partners/dashboard
+// @route   GET /api/talent-partners/dashboard
 exports.getDashboard = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id }).populate(
@@ -3635,7 +3675,7 @@ exports.getDashboard = async (req, res) => {
 // ============================================================
 
 // @desc    Get Earnings / Payouts list
-// @route   GET /api/staffing-partners/earnings
+// @route   GET /api/talent-partners/earnings
 exports.getEarnings = async (req, res) => {
   try {
     const Payout = require('../models/Payout');
@@ -3746,7 +3786,7 @@ exports.getEarnings = async (req, res) => {
 };
 
 // @desc    Get single payout details
-// @route   GET /api/staffing-partners/earnings/:id
+// @route   GET /api/talent-partners/earnings/:id
 exports.getPayoutDetails = async (req, res) => {
   try {
     const Payout = require('../models/Payout');
@@ -3799,7 +3839,7 @@ exports.getPayoutDetails = async (req, res) => {
 // ============================================================
 
 // @desc    Get partner invoices list
-// @route   GET /api/staffing-partners/invoices
+// @route   GET /api/talent-partners/invoices
 exports.getInvoices = async (req, res) => {
   try {
     const Invoice = require('../models/Invoice');
@@ -3855,7 +3895,7 @@ exports.getInvoices = async (req, res) => {
 };
 
 // @desc    Get single invoice
-// @route   GET /api/staffing-partners/invoices/:id
+// @route   GET /api/talent-partners/invoices/:id
 exports.getInvoice = async (req, res) => {
   try {
     const Invoice = require('../models/Invoice');
@@ -3898,7 +3938,7 @@ exports.getInvoice = async (req, res) => {
 };
 
 // @desc    Get Worked Jobs (Jobs the partner has submitted candidates to)
-// @route   GET /api/staffing-partners/worked-jobs
+// @route   GET /api/talent-partners/worked-jobs
 exports.getWorkedJobs = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -4095,7 +4135,7 @@ exports.getWorkedJobs = async (req, res) => {
 
 /**
  * @desc   Get screening questions for a job (partner fetches before submitting)
- * @route  GET /api/staffing-partners/jobs/:jobId/screening-questions
+ * @route  GET /api/talent-partners/jobs/:jobId/screening-questions
  * @access StaffingPartner
  */
 exports.getJobScreeningQuestionsForPartner = async (req, res) => {

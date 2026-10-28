@@ -333,4 +333,8 @@ staffingPartnerSchema.pre('save', function (next) {
   next();
 });
 
-module.exports = mongoose.model('StaffingPartner', staffingPartnerSchema);
+const StaffingPartner = mongoose.models.StaffingPartner || mongoose.model('StaffingPartner', staffingPartnerSchema);
+const TalentPartner = mongoose.models.TalentPartner || mongoose.model('TalentPartner', staffingPartnerSchema, 'staffingpartners');
+
+module.exports = StaffingPartner;
+module.exports.TalentPartner = TalentPartner;

@@ -65,7 +65,7 @@ const getPostLoginNextStep = async (user) => {
 
   let profile = null;
 
-  if (user.role === 'staffing_partner') {
+  if (user.role === 'talent_partner') {
     profile = await StaffingPartner.findOne({ user: user._id });
   } else if (user.role === 'company') {
     profile = await Company.findOne({ user: user._id });
@@ -112,9 +112,9 @@ const getPostLoginNextStep = async (user) => {
   };
 };
 
-// @desc Register Staffing Partner - Step 1 (Basic Info + Send Verification)
-// @route POST /api/auth/register/staffing-partner/init
-exports.initStaffingPartnerRegistration = async (req, res) => {
+// @desc Register Talent Partner - Step 1 (Basic Info + Send Verification)
+// @route POST /api/auth/register/talent-partner/init
+exports.initTalentPartnerRegistration = async (req, res) => {
   try {
     const {
       firstName,
@@ -171,7 +171,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       });
     }
 
-    // Custom domain check: only one staffing partner allowed per custom domain
+    // Custom domain check: only one talent partner allowed per custom domain
     const domain = normalizedEmail.split('@')[1];
     const genericEmailDomains = new Set([
       'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
@@ -180,7 +180,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
     ]);
     if (!genericEmailDomains.has(domain)) {
       const domainExists = await User.findOne({
-        role: 'staffing_partner',
+        role: 'talent_partner',
         email: new RegExp(`@${domain}$`, 'i')
       });
       if (domainExists) {
@@ -208,7 +208,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       email: normalizedEmail,
       mobile: normalizedMobile,
       password,
-      role: 'staffing_partner',
+      role: 'talent_partner',
       status: 'PENDING_EMAIL_VERIFICATION',
       emailVerified: false,
       emailVerificationToken: emailToken,
@@ -239,7 +239,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       designation,
       city,
       state,
-      type: 'STAFFING_PARTNER',
+      type: 'TALENT_PARTNER',
       channel: 'PLATFORM_REGISTRATION',
       crmStatus: 'NEW',
       crmSubStatus: 'JUST_REGISTERED',
@@ -305,7 +305,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Staffing partner registration error:', error);
+    console.error('Talent Partner registration error:', error);
     res.status(500).json({
       success: false,
       message: 'Registration failed',
@@ -313,6 +313,8 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
     });
   }
 };
+
+exports.initStaffingPartnerRegistration = exports.initTalentPartnerRegistration;
 
 // @desc Register Company - Step 1
 // @route POST /api/auth/register/company/init
@@ -537,7 +539,7 @@ exports.verifyEmailByToken = async (req, res) => {
     await user.save();
 
     // ── CRM: Email Verified ───────────────────────────────────
-    if (user.role === 'staffing_partner') {
+    if (user.role === 'talent_partner') {
       notifyCRM.partnerEmailVerified(user)
     } else if (user.role === 'company') {
       notifyCRM.companyEmailVerified(user)
@@ -606,7 +608,7 @@ exports.verifyEmail = async (req, res) => {
     await user.save();
 
     // ── CRM: Email Verified ───────────────────────────────────
-    if (user.role === 'staffing_partner') {
+    if (user.role === 'talent_partner') {
       notifyCRM.partnerEmailVerified(user)
     } else if (user.role === 'company') {
       notifyCRM.companyEmailVerified(user)
@@ -714,7 +716,7 @@ exports.verifyMobileOTP = async (req, res) => {
 
       // ── CRM: Mobile Verified ──────────────────────────────────
       if (user.mobileVerified && user.emailVerified) {
-        if (user.role === 'staffing_partner') {
+        if (user.role === 'talent_partner') {
           notifyCRM.partnerMobileVerified(user)
         } else if (user.role === 'company') {
           notifyCRM.companyMobileVerified(user)
@@ -782,7 +784,7 @@ exports.verifyMobileOTP = async (req, res) => {
 
     // ── CRM: Mobile Verified ──────────────────────────────────
     if (user.mobileVerified && user.emailVerified) {
-      if (user.role === 'staffing_partner') {
+      if (user.role === 'talent_partner') {
         notifyCRM.partnerMobileVerified(user)
       } else if (user.role === 'company') {
         notifyCRM.companyMobileVerified(user)
@@ -880,6 +882,9 @@ exports.login = async (req, res) => {
 
 
 
+    if (user.role === 'staffing' || user.role === 'staffing_partner') {
+      user.role = 'talent_partner';
+    }
     user.lastLogin = new Date();
     await user.save();
 
@@ -1221,8 +1226,13 @@ exports.getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
 
+    if (user && (user.role === 'staffing' || user.role === 'staffing_partner')) {
+      user.role = 'talent_partner';
+      await user.save();
+    }
+
     let profile = null;
-    if (user.role === 'staffing_partner') {
+    if (user.role === 'talent_partner') {
       profile = await StaffingPartner.findOne({ user: user._id });
     } else if (user.role === 'company') {
       profile = await Company.findOne({ user: user._id });

@@ -16,7 +16,7 @@ const normalizeMobile = (mobile) =>
 
 // ──────────────────────────────────────────────────────────────────────────────
 // @desc   List all pool candidates for the logged-in partner
-// @route  GET /api/staffing-partners/my-candidates
+// @route  GET /api/talent-partners/my-candidates
 // ──────────────────────────────────────────────────────────────────────────────
 exports.listPoolCandidates = async (req, res) => {
   try {
@@ -35,6 +35,7 @@ exports.listPoolCandidates = async (req, res) => {
         { mobile: rx },
         { location: rx },
         { currentCompany: rx },
+        { currentDesignation: rx },
         { education: rx },
         { tags: rx },
         { uniqueId: rx }
@@ -83,7 +84,7 @@ exports.listPoolCandidates = async (req, res) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // @desc   Create a new pool candidate
-// @route  POST /api/staffing-partners/my-candidates
+// @route  POST /api/talent-partners/my-candidates
 // ──────────────────────────────────────────────────────────────────────────────
 exports.createPoolCandidate = async (req, res) => {
   try {
@@ -96,7 +97,7 @@ exports.createPoolCandidate = async (req, res) => {
       location, willingToRelocate, totalExperience, relevantExperience,
       noticePeriod, currentSalary, expectedSalary,
       writeup, tags, lastWorkingDay,
-      currentCompany, education
+      currentCompany, currentDesignation, education
     } = req.body;
 
     // ── Required fields ──
@@ -170,6 +171,7 @@ exports.createPoolCandidate = async (req, res) => {
       expectedSalary: expectedSalary !== '' && expectedSalary !== undefined ? Number(String(expectedSalary).replace(/,/g, '')) : undefined,
       writeup: writeup?.trim(),
       currentCompany: currentCompany?.trim() || '',
+      currentDesignation: currentDesignation?.trim() || '',
       education: education?.trim() || '',
       tags: Array.isArray(tags) ? tags : (tags ? [tags] : []),
       ...(resume && { resume })
@@ -194,7 +196,7 @@ exports.createPoolCandidate = async (req, res) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // @desc   Get single pool candidate
-// @route  GET /api/staffing-partners/my-candidates/:id
+// @route  GET /api/talent-partners/my-candidates/:id
 // ──────────────────────────────────────────────────────────────────────────────
 exports.getPoolCandidate = async (req, res) => {
   try {
@@ -245,7 +247,7 @@ exports.getPoolCandidate = async (req, res) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // @desc   Update pool candidate
-// @route  PUT /api/staffing-partners/my-candidates/:id
+// @route  PUT /api/talent-partners/my-candidates/:id
 // NOTE:   Updates ONLY the PartnerCandidate record. Existing Candidate
 //         (job submission) records are NEVER touched — they hold snapshots.
 // ──────────────────────────────────────────────────────────────────────────────
@@ -267,7 +269,7 @@ exports.updatePoolCandidate = async (req, res) => {
       location, willingToRelocate, totalExperience, relevantExperience,
       noticePeriod, currentSalary, expectedSalary,
       writeup, tags, lastWorkingDay,
-      currentCompany, education
+      currentCompany, currentDesignation, education
     } = req.body;
 
     // ── Check uniqueness if email/mobile is being changed ──
@@ -327,6 +329,7 @@ exports.updatePoolCandidate = async (req, res) => {
       candidate.expectedSalary = Number(String(expectedSalary).replace(/,/g, ''));
     if (writeup !== undefined) candidate.writeup = writeup.trim();
     if (currentCompany !== undefined) candidate.currentCompany = currentCompany.trim();
+    if (currentDesignation !== undefined) candidate.currentDesignation = currentDesignation.trim();
     if (education !== undefined) candidate.education = education.trim();
     if (tags) candidate.tags = Array.isArray(tags) ? tags : [tags];
 
@@ -359,7 +362,7 @@ exports.updatePoolCandidate = async (req, res) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // @desc   Delete pool candidate
-// @route  DELETE /api/staffing-partners/my-candidates/:id
+// @route  DELETE /api/talent-partners/my-candidates/:id
 // ──────────────────────────────────────────────────────────────────────────────
 exports.deletePoolCandidate = async (req, res) => {
   try {
@@ -401,7 +404,7 @@ exports.deletePoolCandidate = async (req, res) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // @desc   Apply pool candidate to a job (snapshot at submission time)
-// @route  POST /api/staffing-partners/jobs/:jobId/candidates/from-pool
+// @route  POST /api/talent-partners/jobs/:jobId/candidates/from-pool
 // ──────────────────────────────────────────────────────────────────────────────
 exports.applyFromPool = async (req, res) => {
   try {
@@ -618,6 +621,7 @@ exports.applyFromPool = async (req, res) => {
         expectedSalary: poolCandidate.expectedSalary,
         lastWorkingDay: poolCandidate.lastWorkingDay,
         currentCompany: poolCandidate.currentCompany || '',
+        currentDesignation: poolCandidate.currentDesignation || '',
         education: poolCandidate.education ? [{ degree: poolCandidate.education }] : [],
         // Partner may override writeup for this specific job
         writeup: submissionWriteup || poolCandidate.writeup

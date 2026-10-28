@@ -31,49 +31,49 @@ const { PERMISSIONS } = require('../utils/permissions');
 router.post(
     '/:jobId/interest',
     protect,
-    authorize('staffing_partner'),
+    authorize('talent_partner'),
     showInterest
 );
 
 router.delete(
     '/:jobId/interest',
     protect,
-    authorize('staffing_partner'),
+    authorize('talent_partner'),
     withdrawInterest
 );
 
 router.get(
     '/my-jobs',
     protect,
-    authorize('staffing_partner'),
+    authorize('talent_partner'),
     getMyInterestedJobs
 );
 
 router.get(
     '/:jobId/status',
     protect,
-    authorize('staffing_partner'),
+    authorize('talent_partner'),
     getInterestStatus
 );
 
 router.post(
     '/:jobId/request-extension',
     protect,
-    authorize('staffing_partner'),
+    authorize('talent_partner'),
     requestLimitExtension
 );
 
 router.get(
     '/extension-requests',
     protect,
-    authorize('staffing_partner'),
+    authorize('talent_partner'),
     getMyExtensionRequests
 );
 
 router.get(
     '/my-performance',
     protect,
-    authorize('staffing_partner'),
+    authorize('talent_partner'),
     getMyPerformance
 );
 

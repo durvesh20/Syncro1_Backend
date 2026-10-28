@@ -68,8 +68,8 @@ describe('§1.1 Shortlist / Reject / Re-shortlist', () => {
     expect(r3.nextState).toBe(S.SHORTLISTED);
   });
 
-  test('staffing_partner cannot reject', () => {
-    const r = ok(S.SHORTLISTED, A.REJECT, R.STAFFING_PARTNER, { reason: 'Not a good fit for role' });
+  test('talent_partner cannot reject', () => {
+    const r = ok(S.SHORTLISTED, A.REJECT, R.TALENT_PARTNER, { reason: 'Not a good fit for role' });
     expect(r.ok).toBe(false);
     expect(r.code).toBe('FORBIDDEN');
   });
@@ -120,12 +120,12 @@ describe('§1.4 Slot lifecycle', () => {
     expect(r.nextState).toBe(S.SLOTS_PUBLISHED);
   });
 
-  test('vendor (staffing_partner) or admin can book a slot', () => {
+  test('talent_partner or admin can book a slot', () => {
     const rCompany = ok(S.SLOTS_PUBLISHED, A.BOOK_SLOT, R.COMPANY);
     expect(rCompany.ok).toBe(false);
     expect(rCompany.code).toBe('FORBIDDEN');
 
-    const rVendor = ok(S.SLOTS_PUBLISHED, A.BOOK_SLOT, R.STAFFING_PARTNER);
+    const rVendor = ok(S.SLOTS_PUBLISHED, A.BOOK_SLOT, R.TALENT_PARTNER);
     expect(rVendor.ok).toBe(true);
     expect(rVendor.nextState).toBe(S.SLOT_DETAILS_SHARED);
 
@@ -309,8 +309,8 @@ describe('§1.6 Offer', () => {
     expect(r.code).toBe('TERMINAL_STATE');
   });
 
-  test('vendor cannot accept offer (only candidate or company can)', () => {
-    const r = ok(S.OFFER_SENT, A.ACCEPT_OFFER, R.STAFFING_PARTNER, { joiningDate: '2026-09-01' });
+  test('talent partner cannot accept offer (only candidate or company can)', () => {
+    const r = ok(S.OFFER_SENT, A.ACCEPT_OFFER, R.TALENT_PARTNER, { joiningDate: '2026-09-01' });
     expect(r.ok).toBe(false);
     expect(r.code).toBe('FORBIDDEN');
   });

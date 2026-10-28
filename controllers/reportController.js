@@ -198,7 +198,7 @@ exports.getAdminReportDownloadLogs = async (req, res) => {
     
     for (let log of logs) {
       if (log.userId && !log.userId.firstName && !log.userId.lastName) {
-        if (log.userId.role === 'staffing_partner') {
+        if (log.userId.role === 'talent_partner') {
           const profile = await StaffingPartner.findOne({ user: log.userId._id }).select('firstName lastName').lean();
           if (profile) {
             log.userId.firstName = profile.firstName;

@@ -22,6 +22,8 @@ initializeAI();
 
 
 // ✅ Register ALL models BEFORE routes (prevents MissingSchemaError)
+require('./models/StaffingPartner');
+require('./models/TalentPartner');
 require('./models/Notification');
 require('./models/AgreementQuery');
 require('./models/AdminActionLog');
@@ -189,7 +191,8 @@ app.use(sanitizeErrors);
 ========================================================= */
 
 app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/staffing-partners', require('./routes/staffingPartnerRoutes'));
+app.use('/api/talent-partners', require('./routes/talentPartnerRoutes'));
+app.use('/api/staffing-partners', require('./routes/talentPartnerRoutes'));
 app.use('/api/companies', require('./routes/companyRoutes'));
 app.use('/api/jobs', require('./routes/jobRoutes'));
 app.use('/api/candidates', require('./routes/candidateRoutes'));

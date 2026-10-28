@@ -1194,8 +1194,8 @@ const HIDDEN_CANDIDATE_STATUSES = [
   'CONSENT_PENDING',
   'CONSENT_CONFIRMED',
   'CONSENT_DENIED',
-  'ADMIN_REVIEW',
-  'ADMIN_REJECTED'
+  'S1_REVIEW',
+  'S1_REJECTED'
 ];
 
 /**
@@ -1698,7 +1698,7 @@ const _performDeveloperCandidateOverride = async ({
     userAgent: req.headers['user-agent']
   }).catch(err => console.error('[AUDIT] Failed to log developer override audit:', err.message));
 
-  // Notify staffing partner via email (non-blocking)
+  // Notify talent partner via email (non-blocking)
   try {
     const populated = await Candidate.findById(candidate._id)
       .populate('job')
@@ -1875,7 +1875,7 @@ exports.updateCandidateStatus = async (req, res) => {
     // 1. Valid status transition check
     // 2. Cloning pipelineTemplate into rounds when SHORTLISTED
     // 3. Incrementing job metrics atomically
-    // 4. Dispatching notifications to Staffing Partner
+    // 4. Dispatching notifications to Talent Partner
     // 5. Handling 5% commission & 90-day replacement guarantee if JOINED
     const updatedCandidate = await candidateLifecycleService.updateStatus(
       candidate._id,

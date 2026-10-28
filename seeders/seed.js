@@ -120,7 +120,7 @@ const seedDatabase = async () => {
     }
 
     // ══════════════════════════════════════════
-    // 4. STAFFING PARTNER — FULLY VERIFIED
+    // 4. TALENT PARTNER — FULLY VERIFIED
     // ══════════════════════════════════════════
 
     let partnerUser = await User.findOne({ email: "partner@test.com" });
@@ -131,7 +131,7 @@ const seedDatabase = async () => {
         email: "partner@test.com",
         mobile: "9876543210",
         password: "Partner@123",
-        role: "staffing_partner",
+        role: "talent_partner",
         status: "ACTIVE",
         emailVerified: true,
         mobileVerified: true,
@@ -354,12 +354,12 @@ const seedDatabase = async () => {
         },
       });
 
-      log("✅", "Staffing partner created → partner@test.com / Partner@123");
+      log("✅", "Talent partner created → partner@test.com / Partner@123");
     } else {
       partnerProfile = await StaffingPartner.findOne({
         user: partnerUser._id,
       });
-      skip("Staffing partner (partner@test.com)");
+      skip("Talent partner (partner@test.com)");
     }
 
     // ══════════════════════════════════════════
@@ -868,7 +868,7 @@ const seedDatabase = async () => {
         email: "partner2@test.com",
         mobile: "9876543212",
         password: "Partner@123",
-        role: "staffing_partner",
+        role: "talent_partner",
         status: "UNDER_VERIFICATION",
         emailVerified: true,
         mobileVerified: true,

@@ -23,7 +23,7 @@ function roleFromReq(req) {
   // Map Syncro1 DB role strings to FSM role constants
   const map = {
     company: ROLES.COMPANY,
-    staffing_partner: ROLES.STAFFING_PARTNER,
+    talent_partner: ROLES.TALENT_PARTNER,
     candidate: ROLES.CANDIDATE,
     admin: ROLES.ADMIN,
     sub_admin: ROLES.ADMIN,  // sub_admin is also read-only in pipeline
@@ -110,7 +110,7 @@ exports.pipelineShortlist = async (req, res) => {
     // We only need to handle the case where it arrives already at SHORTLISTED
     // (or re-shortlisting from REJECTED — see pipelineReShortlist below).
     // For forward compatibility, accept from SUBMITTED too.
-    const allowedFrom = ['SUBMITTED', 'UNDER_REVIEW'];
+    const allowedFrom = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'CLIENT_SCREEN_SELECT'];
     if (!allowedFrom.includes(fromState)) {
       return res.status(400).json({
         success: false,
@@ -306,7 +306,7 @@ exports.pipelineReject = async (req, res) => {
     const fromState = candidate.status;
 
     let toState;
-    const allowedFrom = ['SUBMITTED', 'UNDER_REVIEW'];
+    const allowedFrom = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'CLIENT_SCREEN_SELECT'];
     if (allowedFrom.includes(fromState)) {
       toState = PIPELINE_STATES.REJECTED;
     } else {
@@ -688,7 +688,7 @@ exports.defineJobPipelineTemplate = async (req, res) => {
 
     // Auto-initialize currently shortlisted / active candidates who haven't progressed past round outcomes
     const nonTerminalStates = [
-      'SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED',
+      'SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'SHORTLISTED',
       'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED',
       'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'
     ];
@@ -1028,7 +1028,7 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
       });
     } else {
       // Initialize from beginning
-      const isPrePipelineReview = ['SUBMITTED', 'UNDER_REVIEW', 'COMPANY_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'ADMIN_REVIEW'].includes(candidate.status);
+      const isPrePipelineReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT'].includes(candidate.status);
       candidate.rounds = normalizedJobTemplate.map((r, idx) => ({
         roundType: r.roundType,
         order: r.order,
@@ -1073,14 +1073,14 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
 
   // Case 3: Auto-sync template changes if candidate is in initial state
   const hasOutcome = candidate.rounds.some(r => r.outcome && r.outcome.decision);
-  const isInitialState = ['SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'].includes(candidate.status);
+  const isInitialState = ['SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'].includes(candidate.status);
 
   if (!hasOutcome && isInitialState) {
     const jobTemplateStr = JSON.stringify(normalizedJobTemplate.map(r => r.roundType));
     const candTemplateStr = JSON.stringify((candidate.pipelineTemplate || []).map(r => r.roundType));
 
     if (jobTemplateStr !== candTemplateStr) {
-      const isPrePipelineReview = ['SUBMITTED', 'UNDER_REVIEW', 'COMPANY_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'ADMIN_REVIEW'].includes(candidate.status);
+      const isPrePipelineReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT'].includes(candidate.status);
       candidate.pipelineTemplate = normalizedJobTemplate;
       candidate.rounds = normalizedJobTemplate.map((r, i) => ({
         roundType: r.roundType,
@@ -1252,13 +1252,13 @@ exports.adminRepairCandidatePipeline = async (req, res) => {
   }
 };
 
-// ─── GET /api/staffing-partners/submissions/:id/pipeline  (Partner read-only) ────────────────
+// ─── GET /api/talent-partners/submissions/:id/pipeline  (Partner read-only) ────────────────
 exports.partnerGetPipeline = async (req, res) => {
   try {
     const StaffingPartner = require('../models/StaffingPartner');
     const partner = await StaffingPartner.findOne({ user: req.user._id });
     if (!partner) {
-      return res.status(403).json({ success: false, message: 'Staffing partner profile not found' });
+      return res.status(403).json({ success: false, message: 'Talent Partner profile not found' });
     }
 
     const candidate = await Candidate.findOne({
@@ -2015,7 +2015,7 @@ exports.partnerRequestReschedule = async (req, res) => {
     const StaffingPartner = require('../models/StaffingPartner');
     const partner = await StaffingPartner.findOne({ user: req.user._id });
     if (!partner) {
-      return res.status(403).json({ success: false, message: 'Staffing partner profile not found' });
+      return res.status(403).json({ success: false, message: 'Talent Partner profile not found' });
     }
 
     const candidateObj = await Candidate.findOne({
@@ -2037,7 +2037,7 @@ exports.partnerRequestReschedule = async (req, res) => {
     const fsm = transition({
       currentState: fromState,
       action: ACTIONS.REQUEST_RESCHEDULE,
-      role: ROLES.STAFFING_PARTNER,
+      role: ROLES.TALENT_PARTNER,
       payload: { reason },
       context: { partnerRescheduleCount }
     });
@@ -2063,7 +2063,7 @@ exports.partnerRequestReschedule = async (req, res) => {
           slot.activityLogs.push({
             action: 'RESCHEDULED_AND_OPENED',
             performedBy: req.user._id,
-            performedByRole: 'staffing_partner',
+            performedByRole: req.user.role || 'talent_partner',
             performedByName: `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Partner',
             details: `Candidate ${candidateObj.firstName} ${candidateObj.lastName} requested reschedule. Slot opened to candidate pool. Reason: ${reason}`,
             timestamp: new Date()
@@ -2077,7 +2077,7 @@ exports.partnerRequestReschedule = async (req, res) => {
           slot.activityLogs.push({
             action: 'RESCHEDULED_AND_OPENED',
             performedBy: req.user._id,
-            performedByRole: 'staffing_partner',
+            performedByRole: req.user.role || 'talent_partner',
             performedByName: `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Partner',
             details: `Candidate ${candidateObj.firstName} ${candidateObj.lastName} requested reschedule. Spot released. Reason: ${reason}`,
             timestamp: new Date()
@@ -2118,7 +2118,7 @@ exports.partnerRequestReschedule = async (req, res) => {
 
     writeAudit(candidateObj, {
       actorId: req.user._id,
-      actorRole: ROLES.STAFFING_PARTNER,
+      actorRole: ROLES.TALENT_PARTNER,
       action: ACTIONS.REQUEST_RESCHEDULE,
       fromState,
       toState: fsm.nextState,
@@ -3270,7 +3270,7 @@ exports.pipelineSendOffer = async (req, res) => {
     };
     sendWhatsAppOffer();
 
-    // Notify staffing partner (fire-and-forget)
+    // Notify talent partner (fire-and-forget)
     const notifyPartner = async () => {
       try {
         const notificationEngine = require('../services/notificationEngine');
@@ -3360,7 +3360,7 @@ exports.pipelineMarkOfferSent = async (req, res) => {
     };
     sendWhatsAppOffer();
 
-    // Notify staffing partner (fire-and-forget)
+    // Notify talent partner (fire-and-forget)
     const notifyPartner = async () => {
       try {
         const notificationEngine = require('../services/notificationEngine');

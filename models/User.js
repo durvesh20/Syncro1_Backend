@@ -40,7 +40,7 @@ const userSchema = new mongoose.Schema({
 
   role: {
     type: String,
-    enum: ['staffing_partner', 'company', 'admin', 'sub_admin', 'candidate'],
+    enum: ['talent_partner', 'talent', 'company', 'admin', 'sub_admin', 'candidate'],
     required: true
   },
 

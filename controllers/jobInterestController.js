@@ -12,7 +12,7 @@ const jobAccessService = require('../services/jobAccessService');
 
 // @desc    Partner shows interest in a job
 // @route   POST /api/job-interests/:jobId/interest
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.showInterest = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -141,7 +141,7 @@ exports.showInterest = async (req, res) => {
 
 // @desc    Partner withdraws interest from a job
 // @route   DELETE /api/job-interests/:jobId/interest
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.withdrawInterest = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -188,7 +188,7 @@ exports.withdrawInterest = async (req, res) => {
 
 // @desc    Get partner's interested jobs
 // @route   GET /api/job-interests/my-jobs
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.getMyInterestedJobs = async (req, res) => {
     try {
         const mongoose = require('mongoose');
@@ -371,7 +371,7 @@ exports.getMyInterestedJobs = async (req, res) => {
 
 // @desc    Get interest status for a specific job
 // @route   GET /api/job-interests/:jobId/status
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.getInterestStatus = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -450,7 +450,7 @@ exports.getInterestStatus = async (req, res) => {
 
 // @desc    Partner requests limit extension
 // @route   POST /api/job-interests/:jobId/request-extension
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.requestLimitExtension = async (req, res) => {
     try {
         const { reason } = req.body;
@@ -571,7 +571,7 @@ exports.requestLimitExtension = async (req, res) => {
 
 // @desc    Get partner's extension requests
 // @route   GET /api/job-interests/extension-requests
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.getMyExtensionRequests = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -973,7 +973,7 @@ exports.getInterestedPartners = async (req, res) => {
 
 // @desc    Get partner performance analytics
 // @route   GET /api/job-interests/my-performance
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.getMyPerformance = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });

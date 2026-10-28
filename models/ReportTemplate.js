@@ -19,7 +19,7 @@ const reportTemplateSchema = new mongoose.Schema({
     default: 'Saved Structure'
   },
 
-  // Backend role value at save time (admin | sub_admin | company | staffing_partner)
+  // Backend role value at save time (admin | sub_admin | company | talent_partner)
   role: {
     type: String,
     required: true

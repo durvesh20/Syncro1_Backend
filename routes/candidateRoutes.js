@@ -87,12 +87,16 @@ router.get(['/consent/review/:token', '/consent/status/:token'], async (req, res
       success: true,
       data: {
         candidate: {
+          _id: candidate._id,
+          uniqueId: candidate.uniqueId,
           firstName: candidate.firstName,
+          middleName: candidate.middleName,
           lastName: candidate.lastName,
           email: candidate.email,
           mobile: candidate.mobile,
           profile: candidate.profile,
-          resume: candidate.resume
+          resume: candidate.resume,
+          screeningAnswers: candidate.screeningAnswers
         },
         job: candidate.job,
         partner: {
@@ -147,10 +151,10 @@ router.get('/consent/agree/:token', async (req, res) => {
     // Already actioned check
     const alreadyActionedStatuses = [
       'CONSENT_CONFIRMED',
-      'ADMIN_REVIEW',
-      'ADMIN_REJECTED',
+      'S1_REVIEW',
+      'S1_REJECTED',
       'SUBMITTED',
-      'UNDER_REVIEW',
+      'COMPANY_REVIEW',
       'SHORTLISTED',
       'REJECTED',
       'CONSENT_DENIED',
@@ -303,10 +307,10 @@ router.get('/consent/disagree/:token', async (req, res) => {
     // Already actioned check
     const alreadyActionedStatuses = [
       'CONSENT_CONFIRMED',
-      'ADMIN_REVIEW',
-      'ADMIN_REJECTED',
+      'S1_REVIEW',
+      'S1_REJECTED',
       'SUBMITTED',
-      'UNDER_REVIEW',
+      'COMPANY_REVIEW',
       'SHORTLISTED',
       'REJECTED',
       'CONSENT_DENIED',
@@ -727,7 +731,7 @@ function isAllowedUrl(rawUrl) {
 router.get(
   '/resume-proxy',
   protect,
-  authorize('admin', 'sub_admin', 'staffing_partner', 'company'),
+  authorize('admin', 'sub_admin', 'talent_partner', 'company'),
   async (req, res) => {
     try {
       let { url, filename = 'Candidate_Resume.pdf', mode = 'inline' } = req.query;

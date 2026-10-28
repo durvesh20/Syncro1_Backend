@@ -282,7 +282,7 @@ router.put(
         return res.status(404).json({ success: false, message: 'Candidate not found' });
       }
 
-      const rejectedStatuses = ['REJECTED', 'ROUND_REJECTED', 'HR_REJECTED', 'OFFER_REJECTED', 'ASSESSMENT_FAILED'];
+      const rejectedStatuses = ['REJECTED', 'CLIENT_SCREEN_REJECT', 'ROUND_REJECTED', 'HR_REJECTED', 'OFFER_REJECTED', 'ASSESSMENT_FAILED'];
       if (!rejectedStatuses.includes(candidate.status)) {
         return res.status(400).json({
           success: false,
@@ -307,12 +307,12 @@ router.put(
         }
       }
 
-      candidate.status = 'SUBMITTED';
+      candidate.status = 'SENT_TO_CLIENT';
       candidate.statusHistory.push({
-        status: 'SUBMITTED',
+        status: 'SENT_TO_CLIENT',
         changedBy: req.user._id,
         changedAt: new Date(),
-        notes: notes?.trim() || `Rejection (previous status: ${prevStatus}) revoked and resubmitted to company by Admin`
+        notes: notes?.trim() || `Rejection (previous status: ${prevStatus}) revoked and sent to client by Admin`
       });
 
       await candidate.save();
@@ -332,7 +332,7 @@ router.put(
   }
 );
 
-// Candidate Withdraw: Revoke admin shortlist (sent to company) and reset candidate status to ADMIN_REVIEW
+// Candidate Withdraw: Revoke admin shortlist (sent to client) and reset candidate status to S1_REVIEW
 router.put(
   '/candidates/:id/candidate-withdraw',
   async (req, res) => {
@@ -344,7 +344,7 @@ router.put(
         return res.status(404).json({ success: false, message: 'Candidate not found' });
       }
 
-      if (candidate.status !== 'SUBMITTED' && candidate.status !== 'ADMIN_REJECTED') {
+      if (!['SENT_TO_CLIENT', 'SUBMITTED', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED'].includes(candidate.status)) {
         return res.status(400).json({
           success: false,
           message: `Cannot withdraw action: candidate is currently in status "${candidate.status}".`
@@ -354,20 +354,21 @@ router.put(
       const { notes } = req.body;
       const prevStatus = candidate.status;
 
-      candidate.status = 'ADMIN_REVIEW';
+      // If withdrawing from SENT_TO_CLIENT, reset to S1_SCREEN_SELECT; otherwise S1_REVIEW
+      candidate.status = (prevStatus === 'SENT_TO_CLIENT' || prevStatus === 'SUBMITTED') ? 'S1_SCREEN_SELECT' : 'S1_REVIEW';
       
       // If it was a rejection, clean up rejection flags
-      if (prevStatus === 'ADMIN_REJECTED') {
+      if (prevStatus === 'S1_SCREEN_REJECT' || prevStatus === 'S1_REJECTED') {
         candidate.rejectionReason = undefined;
         candidate.rejectedBy = undefined;
         candidate.rejectedAt = undefined;
       }
 
       candidate.statusHistory.push({
-        status: 'ADMIN_REVIEW',
+        status: 'S1_REVIEW',
         changedBy: req.user?._id,
         changedAt: new Date(),
-        notes: notes?.trim() || `Candidate withdrawn (from ${prevStatus}). Reset to Admin Review.`
+        notes: notes?.trim() || `Candidate withdrawn (from ${prevStatus}). Reset to S1 Review.`
       });
 
       await candidate.save();
@@ -397,32 +398,32 @@ router.put(
         return res.status(404).json({ success: false, message: 'Candidate not found' });
       }
 
-      if (candidate.status !== 'ADMIN_REJECTED') {
+      if (candidate.status !== 'S1_SCREEN_REJECT' && candidate.status !== 'S1_REJECTED') {
         return res.status(400).json({
           success: false,
-          message: `Cannot revoke admin rejection: candidate is currently in status "${candidate.status}", not ADMIN_REJECTED.`
+          message: `Cannot revoke admin rejection: candidate is currently in status "${candidate.status}".`
         });
       }
 
       const { notes } = req.body;
 
-      candidate.status = 'ADMIN_REVIEW';
+      candidate.status = 'S1_REVIEW';
       candidate.rejectionReason = undefined;
       candidate.rejectedBy = undefined;
       candidate.rejectedAt = undefined;
 
       candidate.statusHistory.push({
-        status: 'ADMIN_REVIEW',
+        status: 'S1_REVIEW',
         changedBy: req.user?._id,
         changedAt: new Date(),
-        notes: notes?.trim() || 'Admin pre-screening rejection revoked. Candidate reset to Screening Review.'
+        notes: notes?.trim() || 'S1 pre-screening rejection revoked. Candidate reset to S1 Review.'
       });
 
       await candidate.save();
 
       res.json({
         success: true,
-        message: 'Admin rejection revoked successfully. Candidate reset to Pre-Screening Review.',
+        message: 'S1 rejection revoked successfully. Candidate reset to S1 Review.',
         data: candidate
       });
     } catch (error) {
@@ -517,7 +518,17 @@ router.get(
 );
 
 router.get(
+  '/talent-partners',
+  getAllPartners
+);
+
+router.get(
   '/partners/:id',
+  getPartnerDetail
+);
+
+router.get(
+  '/talent-partners/:id',
   getPartnerDetail
 );
 
@@ -1147,7 +1158,129 @@ router.post(
   }
 );
 
-// @desc    Admin approves candidate → send to company
+// @desc    Admin marks candidate as S1 Screen Select (Internal pre-screen cleared)
+// @route   PUT /api/admin/candidates/queue/:id/screen-select
+router.put(
+  '/candidates/queue/:id/screen-select',
+  async (req, res) => {
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+      const { notes } = req.body;
+
+      const candidate = await candidateQueueService.s1ScreenSelectCandidate(
+        req.params.id,
+        req.user._id,
+        notes
+      );
+
+      res.json({
+        success: true,
+        message: 'Candidate marked as S1 Screen Select. Ready to send to company.',
+        data: {
+          candidateId: candidate._id,
+          candidateName: `${candidate.firstName} ${candidate.lastName}`,
+          status: candidate.status,
+          reviewedAt: candidate.adminQueue.reviewedAt
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to select candidate',
+        error: error.message
+      });
+    }
+  }
+);
+
+// @desc    Admin bulk dispatches candidates to client (SENT_TO_CLIENT)
+// @route   PUT /api/admin/candidates/queue/bulk-send-to-client
+router.put(
+  '/candidates/queue/bulk-send-to-client',
+  async (req, res) => {
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+      const { candidateIds, notes } = req.body;
+
+      if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'candidateIds array is required'
+        });
+      }
+
+      const results = { successful: [], failed: [] };
+      for (const id of candidateIds) {
+        try {
+          const candidate = await candidateQueueService.sendToClientCandidate(
+            id,
+            req.user._id,
+            notes
+          );
+          results.successful.push({
+            candidateId: candidate._id,
+            candidateName: `${candidate.firstName} ${candidate.lastName}`,
+            status: candidate.status
+          });
+        } catch (err) {
+          results.failed.push({
+            candidateId: id,
+            error: err.message
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Sent ${results.successful.length} candidate(s) to client successfully.`,
+        data: results
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to bulk send candidates to client',
+        error: error.message
+      });
+    }
+  }
+);
+
+// @desc    Admin dispatches candidate to client (SENT_TO_CLIENT)
+// @route   PUT /api/admin/candidates/queue/:id/send-to-client
+router.put(
+  '/candidates/queue/:id/send-to-client',
+  async (req, res) => {
+    try {
+      const candidateQueueService = require('../services/candidateQueueService');
+      const { notes } = req.body;
+
+      const candidate = await candidateQueueService.sendToClientCandidate(
+        req.params.id,
+        req.user._id,
+        notes
+      );
+
+      res.json({
+        success: true,
+        message: 'Candidate sent to client successfully. Client notified.',
+        data: {
+          candidateId: candidate._id,
+          candidateName: `${candidate.firstName} ${candidate.lastName}`,
+          status: candidate.status,
+          dispatchedAt: candidate.adminQueue.dispatchedAt
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to send candidate to company',
+        error: error.message
+      });
+    }
+  }
+);
+
+// @desc    Admin approves candidate → send to company (backward-compatible)
 // @route   PUT /api/admin/candidates/queue/:id/approve
 router.put(
   '/candidates/queue/:id/approve',
@@ -1164,7 +1297,7 @@ router.put(
 
       res.json({
         success: true,
-        message: 'Candidate approved and sent to company. Candidate notified.',
+        message: 'Candidate approved and sent to client. Candidate notified.',
         data: {
           candidateId: candidate._id,
           candidateName: `${candidate.firstName} ${candidate.lastName}`,
@@ -1182,7 +1315,7 @@ router.put(
   }
 );
 
-// @desc    Admin rejects candidate → not sent to company
+// @desc    Admin rejects candidate → not sent to client
 // @route   PUT /api/admin/candidates/queue/:id/reject
 router.put(
   '/candidates/queue/:id/reject',

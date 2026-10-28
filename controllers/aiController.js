@@ -3,7 +3,7 @@ const aiService = require('../services/aiService');
 
 // @desc    Parse resume using AI (OpenAI)
 // @route   POST /api/ai/parse-resume
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.parseResume = async (req, res) => {
     try {
         const { resumeUrl, fileName,candidateFormData, jobDescription } = req.body;
@@ -46,7 +46,7 @@ exports.parseResume = async (req, res) => {
 
 // @desc    Parse resume from file upload
 // @route   POST /api/ai/parse-resume/upload
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.parseResumeFromUpload = async (req, res) => {
     try {
         if (!req.file) {
@@ -88,7 +88,7 @@ exports.parseResumeFromUpload = async (req, res) => {
 
 // @desc    Batch parse up to 5 resumes against JD
 // @route   POST /api/ai/parse-multiple-resumes
-// @access  Staffing Partner, Admin, Sub-Admin
+// @access  Talent Partner, Admin, Sub-Admin
 exports.parseMultipleResumes = async (req, res) => {
     try {
         const { candidates, jobDescription } = req.body;

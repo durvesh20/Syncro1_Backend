@@ -32,7 +32,7 @@ const buildPartnerData = (partner, user, ip, timestamp) => {
 
 // @desc    Get agreement status + queries
 // @route   GET /api/agreements/status
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.getAgreementStatus = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -84,7 +84,7 @@ exports.getAgreementStatus = async (req, res) => {
 
 // @desc    Partner submits a query about a clause
 // @route   POST /api/agreements/query
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.submitQuery = async (req, res) => {
     try {
         const { clauseReference, query } = req.body;
@@ -172,7 +172,7 @@ exports.submitQuery = async (req, res) => {
 
 // @desc    Partner gets their own queries
 // @route   GET /api/agreements/queries
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.getMyQueries = async (req, res) => {
     try {
         const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -208,7 +208,7 @@ exports.getMyQueries = async (req, res) => {
 
 // @desc    Accept agreement — generates PDF
 // @route   POST /api/agreements/accept
-// @access  Staffing Partner
+// @access  Talent Partner
 exports.acceptAgreement = async (req, res) => {
     try {
         const { agreed } = req.body;

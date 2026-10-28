@@ -11,7 +11,7 @@ class CandidateLifecycleService {
    * 1. Transition validation
    * 2. Role-based permission check
    * 3. Metric updates (atomic)
-   * 4. Notification to staffing partner
+   * 4. Notification to talent partner
    * 
    * Called by: Company (status changes) or Partner (withdrawal only)
    */
@@ -79,7 +79,7 @@ class CandidateLifecycleService {
 
     // ✅ Step 2: Update candidate status and clone pipeline template if applicable
     let finalStatus = newStatus;
-    if (newStatus === 'SHORTLISTED' && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
+    if ((newStatus === 'SHORTLISTED' || newStatus === 'CLIENT_SCREEN_SELECT') && candidate.job && candidate.job.pipelineTemplate && candidate.job.pipelineTemplate.length > 0) {
       const { getInitialRoundState } = require('./pipelineStateMachine');
       const normalized = candidate.job.pipelineTemplate.map((r, i) => ({
         roundType: r.roundType,
@@ -93,7 +93,7 @@ class CandidateLifecycleService {
         slots: [],
         rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
       }));
-      if (candidate.rounds.length > 0) {
+      if (candidate.rounds.length > 0 && newStatus === 'SHORTLISTED') {
         finalStatus = candidate.rounds[0].status;
       }
 
@@ -102,10 +102,10 @@ class CandidateLifecycleService {
       candidate.auditTrail.push({
         actorId: updatedByUserId,
         actorRole: userRole,
-        action: 'SHORTLIST',
+        action: newStatus === 'CLIENT_SCREEN_SELECT' ? 'CLIENT_SCREEN_SELECT' : 'SHORTLIST',
         fromState: previousStatus,
         toState: finalStatus,
-        reason: notes || 'Shortlisted for interview rounds',
+        reason: notes || (newStatus === 'CLIENT_SCREEN_SELECT' ? 'Selected in client screening' : 'Shortlisted for interview rounds'),
         timestamp: new Date()
       });
     }
@@ -129,7 +129,7 @@ class CandidateLifecycleService {
       // Company changed status → notify partner (non-blocking)
       this._notifyPartner(candidate, previousStatus, newStatus, notes)
         .catch(err => console.error('[NOTIFY] Partner notification failed:', err.message));
-    } else if (userRole === 'staffing_partner') {
+    } else if (userRole === 'talent_partner') {
       // Partner withdrew → notify company (non-blocking)
       this._notifyCompany(candidate, previousStatus, newStatus, notes)
         .catch(err => console.error('[NOTIFY] Company notification failed:', err.message));
@@ -151,6 +151,7 @@ class CandidateLifecycleService {
    */
   async _updateJobMetrics(jobId, previousStatus, newStatus) {
     const metricsMap = {
+      'CLIENT_SCREEN_SELECT': 'metrics.shortlisted',
       'SHORTLISTED': 'metrics.shortlisted',
       'INTERVIEWED': 'metrics.interviewed',
       'OFFERED': 'metrics.offered',
@@ -170,7 +171,7 @@ class CandidateLifecycleService {
   }
 
   /**
-   * Notify staffing partner when company changes candidate status
+   * Notify talent partner when company changes candidate status
    * This is the PRIMARY feedback loop of the platform
    */
   async _notifyPartner(candidate, previousStatus, newStatus, notes) {
@@ -215,12 +216,26 @@ class CandidateLifecycleService {
         : 'the company';
 
       const notifications = {
-        'UNDER_REVIEW': {
+        'COMPANY_REVIEW': {
           type: 'CANDIDATE_UNDER_REVIEW',
           title: '📋 Resume under review',
           message: `${companyName} is reviewing ${candidateName}'s profile for "${jobTitle}".`,
           priority: 'low',
           sendEmail: false
+        },
+        'CLIENT_SCREEN_SELECT': {
+          type: 'CANDIDATE_SHORTLISTED',
+          title: '🎯 Candidate selected in Client Screen!',
+          message: `Great news! ${candidateName} has been selected in client screening for "${jobTitle}" at ${companyName}.`,
+          priority: 'high',
+          sendEmail: true
+        },
+        'CLIENT_SCREEN_REJECT': {
+          type: 'CANDIDATE_REJECTED',
+          title: '❌ Candidate rejected in Client Screen',
+          message: `${companyName} did not select ${candidateName} during screening for "${jobTitle}".${notes ? ` Reason: ${notes}` : ''}`,
+          priority: 'medium',
+          sendEmail: true
         },
         'SHORTLISTED': {
           type: 'CANDIDATE_SHORTLISTED',
@@ -369,7 +384,7 @@ class CandidateLifecycleService {
       }
 
       if (newStatus === 'WITHDRAWN') {
-        const partnerName = candidate.submittedBy?.firmName || 'A staffing partner';
+        const partnerName = candidate.submittedBy?.firmName || 'A Talent Partner';
         const candidateName = `${candidate.firstName} ${candidate.lastName}`;
         const jobTitle = typeof candidate.job === 'object' ? candidate.job.title : 'a position';
 

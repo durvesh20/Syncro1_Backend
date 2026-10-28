@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
 const candidateSchema = new mongoose.Schema({
-  // Submitted by Staffing Partner
+  // Submitted by Talent Partner
   submittedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'StaffingPartner',
@@ -155,16 +155,36 @@ const candidateSchema = new mongoose.Schema({
   // Application Status
   status: {
     type: String,
+    set: function (val) {
+      const adapt = {
+        'ADMIN_REVIEW': 'S1_REVIEW',
+        'ADMIN_REJECTED': 'S1_REJECTED',
+        'UNDER_REVIEW': 'SENT_TO_CLIENT',
+        'REVIEWING': 'SENT_TO_CLIENT',
+        'COMPANY_REVIEW': 'SENT_TO_CLIENT',
+        'CLIENT_REVIEW': 'SENT_TO_CLIENT',
+        'SUBMITTED': 'SENT_TO_CLIENT',
+        'SENT_TO_COMPANY': 'SENT_TO_CLIENT',
+        'PENDING_ADMIN_APPROVAL': 'S1_REVIEW'
+      };
+      return adapt[val] || val;
+    },
     enum: [
       // ── Pre-pipeline states (existing flow) ─────────────────────────────
       'DRAFT',                    // Partner filled details, awaiting consent
       'CONSENT_PENDING',          // WhatsApp consent sent to candidate
       'CONSENT_CONFIRMED',        // Candidate confirmed on WhatsApp
       'CONSENT_DENIED',           // Candidate denied — auto withdrawn
-      'ADMIN_REVIEW',             // In admin/subadmin queue for review
-      'ADMIN_REJECTED',           // Admin rejected before sending to company
-      'SUBMITTED',                // Admin approved → visible to company
-      'UNDER_REVIEW',
+      'S1_REVIEW',                // In S1 review queue
+      'S1_SCREEN_SELECT',         // Passed S1 screening, pending dispatch to company
+      'S1_SCREEN_REJECT',         // Rejected during S1 review
+      'S1_REJECTED',              // Rejected during S1 review (alias)
+      'SENT_TO_CLIENT',           // Dispatched to client
+      'SUBMITTED',                // Admin approved → visible to company (alias)
+      'COMPANY_REVIEW',           // Under company review (legacy alias)
+      'CLIENT_REVIEW',            // Under client review
+      'CLIENT_SCREEN_SELECT',     // Client passed screening
+      'CLIENT_SCREEN_REJECT',     // Client rejected during screening
       'SHORTLISTED',
       'INTERVIEW_SCHEDULED',
       'INTERVIEWED',
@@ -394,6 +414,10 @@ const candidateSchema = new mongoose.Schema({
       score: Number,
       feedback: String
     },
+    byTalentPartner: {
+      score: Number,
+      feedback: String
+    },
     byStaffingPartner: {
       score: Number,
       feedback: String
@@ -562,9 +586,15 @@ const candidateSchema = new mongoose.Schema({
     },
     reviewedAt: Date,
     reviewNotes: String,
+    dispatchedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    dispatchedAt: Date,
+    dispatchNotes: String,
     action: {
       type: String,
-      enum: ['APPROVED', 'REJECTED', 'PENDING'],
+      enum: ['APPROVED', 'REJECTED', 'PENDING', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'SENT_TO_CLIENT'],
       default: 'PENDING'
     },
     rejectionReason: String
@@ -936,6 +966,21 @@ candidateSchema.methods.getCommissionSummary = function () {
     isEligible: this.isPayoutEligible()
   };
 };
+
+candidateSchema.pre('validate', function (next) {
+  const adapt = {
+    'ADMIN_REVIEW': 'S1_REVIEW',
+    'ADMIN_REJECTED': 'S1_REJECTED',
+    'UNDER_REVIEW': 'CLIENT_REVIEW',
+    'REVIEWING': 'CLIENT_REVIEW',
+    'COMPANY_REVIEW': 'CLIENT_REVIEW',
+    'PENDING_ADMIN_APPROVAL': 'S1_REVIEW'
+  };
+  if (this.status && adapt[this.status]) {
+    this.status = adapt[this.status];
+  }
+  next();
+});
 
 candidateSchema.pre('save', function (next) {
   if (!this.uniqueId) {

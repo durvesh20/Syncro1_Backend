@@ -17,7 +17,7 @@ const TIMEOUT_MS = 3000
  * Always fire-and-forget — never await this.
  * 
  * @param {object} payload
- * @param {string} payload.type           - 'STAFFING_PARTNER' | 'COMPANY'
+ * @param {string} payload.type           - 'TALENT_PARTNER' | 'COMPANY'
  * @param {string} payload.email          - user email
  * @param {string} payload.phone          - user mobile
  * @param {string} payload.name           - full name
@@ -116,7 +116,7 @@ notifyCRM.partnerRegistered = (user, partner) => {
         designation: partner.designation || null,
         city: partner.city || null,
         state: partner.state || null,
-        type: 'STAFFING_PARTNER',
+        type: 'TALENT_PARTNER',
         channel: 'PLATFORM_REGISTRATION',
         crmStatus: 'NEW',
         crmSubStatus: 'JUST_REGISTERED',
@@ -140,7 +140,7 @@ notifyCRM.partnerEmailVerified = (user) => {
     notifyCRM({
         email: user.email,
         phone: user.mobile,
-        type: 'STAFFING_PARTNER',
+        type: 'TALENT_PARTNER',
         channel: 'PLATFORM_REGISTRATION',
         crmStatus: 'NEW',
         crmSubStatus: 'EMAIL_VERIFIED',
@@ -160,7 +160,7 @@ notifyCRM.partnerMobileVerified = (user) => {
     notifyCRM({
         email: user.email,
         phone: user.mobile,
-        type: 'STAFFING_PARTNER',
+        type: 'TALENT_PARTNER',
         channel: 'PLATFORM_REGISTRATION',
         crmStatus: 'NEW',
         crmSubStatus: 'FULLY_VERIFIED',
@@ -207,7 +207,7 @@ notifyCRM.partnerProfileStep = (user, partner) => {
         email: user.email,
         phone: user.mobile,
         company: partner.firmName,
-        type: 'STAFFING_PARTNER',
+        type: 'TALENT_PARTNER',
         channel: 'PLATFORM_REGISTRATION',
         crmStatus: 'IN_PROGRESS',
         crmSubStatus,
@@ -246,7 +246,7 @@ notifyCRM.partnerProfileSubmitted = (user, partner) => {
         email: user.email,
         phone: user.mobile,
         company: partner.firmName,
-        type: 'STAFFING_PARTNER',
+        type: 'TALENT_PARTNER',
         channel: 'PLATFORM_REGISTRATION',
         crmStatus: 'SUBMITTED',
         crmSubStatus: 'UNDER_REVIEW',
@@ -272,7 +272,7 @@ notifyCRM.partnerApproved = (user, partner) => {
         email: user.email,
         phone: user.mobile,
         company: partner.firmName,
-        type: 'STAFFING_PARTNER',
+        type: 'TALENT_PARTNER',
         channel: 'PLATFORM_REGISTRATION',
         crmStatus: 'CONVERTED',
         crmSubStatus: 'ACTIVE_PARTNER',
@@ -302,7 +302,7 @@ notifyCRM.partnerRejected = (user, partner, reason) => {
         email: user.email,
         phone: user.mobile,
         company: partner.firmName,
-        type: 'STAFFING_PARTNER',
+        type: 'TALENT_PARTNER',
         channel: 'PLATFORM_REGISTRATION',
         crmStatus: 'LOST',
         crmSubStatus: 'REJECTED',
