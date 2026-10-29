@@ -1,4 +1,5 @@
 // backend/controllers/staffingPartnerController.js
+const mongoose = require('mongoose');
 const StaffingPartner = require('../models/StaffingPartner');
 const User = require('../models/User');
 const Job = require('../models/Job');
@@ -2838,6 +2839,292 @@ exports.uploadResume = async (req, res) => {
 // SUBMISSIONS
 // ============================================================
 
+// A single definition of each talent-partner submission group. These groups
+// power the tabs, their badges, dashboard cards, and deep links.
+const TALENT_SUBMISSION_STATUS_GROUPS = Object.freeze({
+  consent_pending: [
+    'CONSENT_PENDING',
+    'CONSENT_SENT',
+    'CONSENT_INITIATED',
+    'DRAFT'
+  ],
+  interview: [
+    'INTERVIEW_SCHEDULED',
+    'INTERVIEW_CONFIRMED',
+    'ACTIVE_INTERVIEWS',
+    'SLOT_ASSIGNED',
+    'SLOT_DETAILS_SHARED',
+    'INTERVIEWED',
+    'INTERVIEW_CONDUCTED',
+    'ROUND_ON_HOLD',
+    'ROUND_SELECTED_NEXT',
+    'ROUND_SELECTED_DIRECT_HR',
+    'HR_ROUND_PENDING',
+    'HR_SELECTED',
+    'HR_ON_HOLD'
+  ],
+  offer: [
+    'OFFERED',
+    'OFFER_SENT',
+    'OFFER_ACCEPTED',
+    'OFFER_DECLINED',
+    'OFFER_REJECTED',
+    'OFFER_EXTENDED'
+  ],
+  joined: [
+    'JOINED',
+    'HIRED',
+    'PLACED',
+    'ONBOARDING'
+  ],
+  slots_pending: [
+    'SLOTS_NOT_PUBLISHED',
+    'SLOTS_PUBLISHED',
+    'SLOTS_PENDING',
+    'RESCHEDULE_REQUESTED'
+  ]
+});
+
+// Comprehensive talent partner status group resolution
+const resolveTalentStatusQuery = (rawStatus, rawTab) => {
+  const s = String(rawStatus || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  const t = String(rawTab || '').trim().toLowerCase();
+
+  // 1. If explicit status filter is applied, it completely overrides any active tab
+  if (s && s !== 'ALL') {
+    // S1 Review (Pre-screening review queue)
+    if (
+      s === 'S1_REVIEW' ||
+      s === 'ADMIN_REVIEW' ||
+      s === 'PENDING_REVIEW' ||
+      s === 'PENDING_ADMIN_APPROVAL' ||
+      s === 'ADMIN_PENDING' ||
+      s === 'PRESCREEN_PENDING' ||
+      s === 'REVIEW' ||
+      s.includes('S1_REVIEW') ||
+      s.includes('ADMIN_REVIEW')
+    ) {
+      return ['S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING', 'CONSENT_CONFIRMED', 'PRESCREEN_PENDING'];
+    }
+
+    // S1 Screen Select (Passed internal S1 screening)
+    if (
+      s === 'S1_SCREEN_SELECT' ||
+      s === 'S1_SELECT' ||
+      s === 'SCREEN_SELECT' ||
+      s === 'S1_SCREEN_SELECTED' ||
+      s === 'ADMIN_APPROVED' ||
+      (s.includes('S1') && s.includes('SELECT'))
+    ) {
+      return ['S1_SCREEN_SELECT', 'S1_SELECTED', 'ADMIN_APPROVED', 'SCREEN_SELECTED', 'SCREEN_SELECT', 'S1_SCREEN_SELECTED'];
+    }
+
+    // S1 Screen Reject (Rejected during S1 review)
+    if (
+      s === 'S1_SCREEN_REJECT' ||
+      s === 'S1_SCREEN_REJECTED' ||
+      s === 'S1_REJECT' ||
+      s === 'S1_REJECTED' ||
+      s === 'ADMIN_REJECTED' ||
+      s === 'ADMIN_SCREEN_REJECT' ||
+      (s.includes('S1') && s.includes('REJECT'))
+    ) {
+      return ['S1_SCREEN_REJECT', 'S1_SCREEN_REJECTED', 'S1_REJECTED', 'ADMIN_REJECTED', 'ADMIN_SCREEN_REJECT'];
+    }
+
+    // Consent Pending / Consent
+    if (s === 'CONSENT_PENDING' || s === 'CONSENT_SENT' || s === 'CONSENT_INITIATED' || s.includes('CONSENT_PENDING')) {
+      return ['CONSENT_PENDING', 'CONSENT_SENT', 'CONSENT_INITIATED', 'DRAFT'];
+    }
+
+    if (s === 'CONSENT_CONFIRMED') {
+      return ['CONSENT_CONFIRMED', 'S1_REVIEW'];
+    }
+
+    if (s === 'CONSENT_DENIED') {
+      return ['CONSENT_DENIED'];
+    }
+
+    if (s === 'DRAFT') {
+      return ['DRAFT'];
+    }
+
+    // Sent to Client / Client Review
+    if (
+      s === 'SENT_TO_CLIENT' ||
+      s === 'SENT_TO_COMPANY' ||
+      s === 'SUBMITTED' ||
+      s === 'SUBMITTED_TO_COMPANY' ||
+      s === 'SUBMITTED_TO_CLIENT' ||
+      s === 'COMPANY_REVIEW' ||
+      s === 'CLIENT_REVIEW' ||
+      s === 'UNDER_REVIEW' ||
+      s === 'REVIEWING' ||
+      s.includes('SENT_TO') ||
+      s.includes('CLIENT_REVIEW') ||
+      s.includes('COMPANY_REVIEW')
+    ) {
+      return ['SENT_TO_CLIENT', 'SENT_TO_COMPANY', 'SUBMITTED', 'SUBMITTED_TO_COMPANY', 'SUBMITTED_TO_CLIENT', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'UNDER_REVIEW', 'REVIEWING'];
+    }
+
+    // Client Screen Select / Shortlisted
+    if (s === 'CLIENT_SCREEN_SELECT' || s === 'COMPANY_SCREEN_SELECT') {
+      return ['CLIENT_SCREEN_SELECT', 'COMPANY_SCREEN_SELECT', 'SHORTLISTED', 'COMPANY_SHORTLISTED', 'CLIENT_SHORTLISTED'];
+    }
+
+    // Client Screen Reject
+    if (s === 'CLIENT_SCREEN_REJECT' || s === 'COMPANY_SCREEN_REJECT') {
+      return ['CLIENT_SCREEN_REJECT', 'COMPANY_SCREEN_REJECT', 'CLIENT_REJECTED', 'COMPANY_REJECTED'];
+    }
+
+    // Shortlisted
+    if (s === 'SHORTLISTED') {
+      return ['SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'ROUND_ON_HOLD'];
+    }
+
+    // Assessment Pending & Assessment Failed (Must check BEFORE generic reject)
+    if (s === 'ASSESSMENT_FAILED') {
+      return ['ASSESSMENT_FAILED'];
+    }
+    if (s === 'ASSESSMENT_PENDING' || s === 'ASSESSMENT' || s.includes('ASSESSMENT')) {
+      return ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE', 'ASSESSMENT_PASSED'];
+    }
+
+    // Offer Rejected / Declined (Must check BEFORE generic offer and generic reject)
+    if (s === 'OFFER_REJECTED' || s === 'OFFER_DECLINED' || (s.includes('OFFER') && (s.includes('REJECT') || s.includes('DECLIN')))) {
+      return ['OFFER_REJECTED', 'OFFER_DECLINED'];
+    }
+
+    // Specific Interview Outcomes / Rounds (Check BEFORE broad interview or reject)
+    if (s === 'ROUND_REJECTED') {
+      return ['ROUND_REJECTED'];
+    }
+    if (s === 'HR_REJECTED') {
+      return ['HR_REJECTED'];
+    }
+    if (s === 'ROUND_SELECTED_NEXT' || s === 'PASSED_TO_NEXT_ROUND') {
+      return ['ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR'];
+    }
+    if (s === 'ROUND_SELECTED_DIRECT_HR' || s === 'SKIPPED_TO_HR') {
+      return ['ROUND_SELECTED_DIRECT_HR', 'ROUND_SELECTED_NEXT'];
+    }
+    if (s === 'ROUND_ON_HOLD') {
+      return ['ROUND_ON_HOLD', 'INTERVIEW_CONDUCTED', 'INTERVIEWED'];
+    }
+    if (s === 'HR_ROUND_PENDING') {
+      return ['HR_ROUND_PENDING', 'HR_ON_HOLD'];
+    }
+    if (s === 'HR_SELECTED') {
+      return ['HR_SELECTED'];
+    }
+    if (s === 'HR_ON_HOLD') {
+      return ['HR_ON_HOLD', 'HR_ROUND_PENDING'];
+    }
+    if (s === 'INTERVIEW_CONDUCTED' || s === 'INTERVIEWED') {
+      return ['INTERVIEW_CONDUCTED', 'INTERVIEWED', 'ROUND_ON_HOLD'];
+    }
+    if (s === 'RESCHEDULE_REQUESTED') {
+      return ['RESCHEDULE_REQUESTED', 'SLOTS_PENDING', 'SLOTS_NOT_PUBLISHED'];
+    }
+    if (s === 'INTERVIEW_SCHEDULED' || s === 'INTERVIEW_CONFIRMED') {
+      return ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'];
+    }
+
+    // Slots Pending / Slots Published (Check BEFORE broad interview)
+    if (s === 'SLOTS_PENDING' || s === 'SLOTS_NOT_PUBLISHED' || s === 'PENDING_INTERVIEW_SLOTS' || (s.includes('SLOT') && !s.includes('ASSIGN') && !s.includes('SHARE'))) {
+      return TALENT_SUBMISSION_STATUS_GROUPS.slots_pending;
+    }
+    if (s === 'SLOT_ASSIGNED' || s === 'SLOT_DETAILS_SHARED' || s.includes('SLOT_BOOKED')) {
+      return ['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'];
+    }
+
+    // Active Interviews (Broad group)
+    if (s === 'ACTIVE_INTERVIEWS' || s === 'INTERVIEW' || s.includes('INTERVIEW')) {
+      return TALENT_SUBMISSION_STATUS_GROUPS.interview;
+    }
+
+    // Specific Offer statuses
+    if (s === 'OFFER_ACCEPTED') {
+      return ['OFFER_ACCEPTED'];
+    }
+    if (s === 'OFFER_SENT' || s === 'OFFERED' || s === 'OFFER_EXTENDED') {
+      return ['OFFERED', 'OFFER_SENT'];
+    }
+    if (s === 'OFFER' || s.includes('OFFER')) {
+      return ['OFFERED', 'OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_EXTENDED'];
+    }
+
+    // Joined / Placed
+    if (s === 'JOINED' || s === 'HIRED' || s === 'PLACED' || s === 'ONBOARDING' || s.includes('JOIN')) {
+      return TALENT_SUBMISSION_STATUS_GROUPS.joined;
+    }
+
+    // General Rejection (Matches all rejection variants)
+    if (s === 'REJECT' || s === 'REJECTED' || s.includes('REJECT')) {
+      return [
+        'REJECTED',
+        'CLIENT_REJECTED',
+        'COMPANY_REJECTED',
+        'S1_REJECTED',
+        'S1_SCREEN_REJECT',
+        'S1_SCREEN_REJECTED',
+        'ADMIN_REJECTED',
+        'ADMIN_SCREEN_REJECT',
+        'ROUND_REJECTED',
+        'HR_REJECTED',
+        'OFFER_REJECTED',
+        'OFFER_DECLINED',
+        'ASSESSMENT_FAILED',
+        'CLIENT_SCREEN_REJECT',
+        'COMPANY_SCREEN_REJECT'
+      ];
+    }
+
+    // Duplicates and withdrawals
+    if (s.includes('DUPLICATE')) {
+      return ['CLIENT_PORTAL_DUPLICATE', 'COMPANY_PORTAL_DUPLICATE'];
+    }
+    if (s.includes('DROP')) {
+      return ['CANDIDATE_DROP'];
+    }
+    if (s.includes('WITHDRAW')) {
+      return ['WITHDRAWN'];
+    }
+
+    // Fallback: match normalized and original status
+    return [s, rawStatus].filter(Boolean);
+  }
+
+  // 2. Tab-based grouping when no specific status filter is chosen
+  if (t === 'consent_pending') return TALENT_SUBMISSION_STATUS_GROUPS.consent_pending;
+  if (t === 'interview') return TALENT_SUBMISSION_STATUS_GROUPS.interview;
+  if (t === 'offer') return TALENT_SUBMISSION_STATUS_GROUPS.offer;
+  if (t === 'joined') return TALENT_SUBMISSION_STATUS_GROUPS.joined;
+
+  return null;
+};
+
+const getTalentSubmissionCounts = async (baseQuery, existingStatusBreakdown) => {
+  const statusBreakdown = existingStatusBreakdown || await Candidate.aggregate([
+    { $match: baseQuery },
+    { $group: { _id: '$status', count: { $sum: 1 } } }
+  ]);
+  const countByStatus = new Map(statusBreakdown.map(({ _id, count }) => [_id, count]));
+  const countGroup = (statuses) => statuses.reduce(
+    (total, candidateStatus) => total + (countByStatus.get(candidateStatus) || 0),
+    0
+  );
+
+  return {
+    all: statusBreakdown.reduce((total, item) => total + item.count, 0),
+    consent_pending: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.consent_pending),
+    interview: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.interview),
+    offer: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.offer),
+    joined: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.joined),
+    slots_pending: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.slots_pending)
+  };
+};
+
 // @desc    Get My Submissions
 // @route   GET /api/talent-partners/submissions
 exports.getMySubmissions = async (req, res) => {
@@ -2852,64 +3139,53 @@ exports.getMySubmissions = async (req, res) => {
     }
 
     const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all', jobId, job: jobParam, company: companyParam, client: clientParam } = req.query;
-    const parsedPage = parseInt(page, 10) || 1;
-    const parsedLimit = parseInt(limit, 10) || 10;
+    const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
+    const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
     const skip = (parsedPage - 1) * parsedLimit;
 
-    const query = { submittedBy: partner._id };
+    const partnerIds = [partner._id, req.user._id].filter(Boolean);
+    const baseQuery = {
+      $or: [
+        { submittedBy: { $in: partnerIds } },
+        { partner: { $in: partnerIds } }
+      ]
+    };
+    const andConditions = [];
 
     const targetJobId = jobId || jobParam;
     if (targetJobId && targetJobId !== 'all' && targetJobId !== 'ALL') {
-      query.job = targetJobId;
+      const jobObjId = mongoose.Types.ObjectId.isValid(targetJobId)
+        ? new mongoose.Types.ObjectId(targetJobId)
+        : targetJobId;
+      andConditions.push({ job: jobObjId });
     }
 
     const targetCompanyId = companyParam || clientParam;
     if (targetCompanyId && targetCompanyId !== 'all' && targetCompanyId !== 'ALL') {
-      query.company = targetCompanyId;
-    }
-
-    if (status && status !== 'all' && status !== 'ALL') {
-      const s = String(status).trim().toUpperCase();
-      if (s === 'S1_REVIEW' || s === 'ADMIN_REVIEW') {
-        query.status = { $in: ['S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING', 'CONSENT_CONFIRMED'] };
-      } else if (s === 'S1_SCREEN_SELECT') {
-        query.status = 'S1_SCREEN_SELECT';
-      } else if (s === 'S1_SCREEN_REJECT' || s === 'S1_REJECTED' || s === 'ADMIN_REJECTED') {
-        query.status = { $in: ['S1_SCREEN_REJECT', 'S1_REJECTED', 'ADMIN_REJECTED'] };
-      } else if (s === 'CONSENT_PENDING') {
-        query.status = { $in: ['CONSENT_PENDING', 'CONSENT_SENT'] };
-      } else if (s === 'SENT_TO_CLIENT' || s === 'COMPANY_REVIEW' || s === 'CLIENT_REVIEW' || s === 'UNDER_REVIEW' || s === 'REVIEWING') {
-        query.status = { $in: ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'UNDER_REVIEW', 'REVIEWING'] };
-      } else if (s === 'CLIENT_SCREEN_SELECT') {
-        query.status = { $in: ['CLIENT_SCREEN_SELECT', 'SHORTLISTED'] };
-      } else if (s === 'ACTIVE_INTERVIEWS') {
-        query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] };
-      } else if (s === 'SLOTS_NOT_PUBLISHED' || s === 'SLOTS_PENDING') {
-        query.status = { $in: ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'RESCHEDULE_REQUESTED'] };
-      } else if (s === 'OFFERED' || s === 'OFFER_SENT') {
-        query.status = { $in: ['OFFERED', 'OFFER_SENT'] };
-      } else if (s === 'OFFER_ACCEPTED') {
-        query.status = 'OFFER_ACCEPTED';
-      } else if (s === 'OFFER_REJECTED' || s === 'OFFER_DECLINED') {
-        query.status = { $in: ['OFFER_REJECTED', 'OFFER_DECLINED'] };
-      } else if (s === 'JOINED' || s === 'HIRED') {
-        query.status = { $in: ['JOINED', 'HIRED', 'ONBOARDING'] };
-      } else if (s === 'REJECTED') {
-        query.status = { $in: ['REJECTED', 'CLIENT_REJECTED', 'COMPANY_REJECTED', 'S1_REJECTED', 'S1_SCREEN_REJECT', 'ROUND_REJECTED', 'HR_REJECTED', 'OFFER_REJECTED'] };
+      if (mongoose.Types.ObjectId.isValid(targetCompanyId)) {
+        const compObjId = new mongoose.Types.ObjectId(targetCompanyId);
+        // Find jobs belonging to this company as fallback for older candidates where candidate.company was not set
+        const companyJobs = await Job.find({ company: compObjId }).select('_id').lean();
+        const companyJobIds = companyJobs.map(j => j._id);
+        
+        andConditions.push({
+          $or: [
+            { company: compObjId },
+            { job: { $in: companyJobIds } }
+          ]
+        });
       } else {
-        query.status = status;
+        andConditions.push({ company: targetCompanyId });
       }
-    } else if (tab === 'consent_pending') {
-      query.status = { $in: ['CONSENT_PENDING', 'CONSENT_SENT'] };
-    } else if (tab === 'interview' || isInterview === 'true') {
-      query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED'] };
-    } else if (tab === 'offer') {
-      query.status = { $in: ['OFFERED', 'OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'OFFER_REJECTED'] };
-    } else if (tab === 'joined') {
-      query.status = { $in: ['JOINED', 'HIRED', 'ONBOARDING'] };
     }
 
-    const andConditions = [];
+    const query = { ...baseQuery };
+
+    const resolvedStatuses = resolveTalentStatusQuery(status, isInterview === 'true' ? 'interview' : tab);
+
+    if (resolvedStatuses && resolvedStatuses.length > 0) {
+      query.status = { $in: resolvedStatuses };
+    }
 
     if (isManual === 'true') {
       andConditions.push({
@@ -2925,7 +3201,8 @@ exports.getMySubmissions = async (req, res) => {
     }
 
     if (search && search.trim()) {
-      const rx = new RegExp(search.trim(), 'i');
+      const escapedSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = new RegExp(escapedSearch, 'i');
 
       // Find matching jobs
       const matchingJobs = await Job.find({ title: rx }).select('_id');
@@ -2947,11 +3224,14 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
+    const baseCountsQuery = { ...baseQuery };
+
     if (andConditions.length > 0) {
+      baseCountsQuery.$and = andConditions;
       query.$and = andConditions;
     }
 
-    const [rawSubmissions, total, countAll, countConsentPending, countInterview, countOffer, countJoined] = await Promise.all([
+    const [rawSubmissions, total, counts] = await Promise.all([
       Candidate.find(query)
         .populate('job', 'title company commission salary uniqueId')
         .populate('company', 'companyName')
@@ -2969,11 +3249,7 @@ exports.getMySubmissions = async (req, res) => {
         .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName notes isTagged candidateId')
         .lean(),
       Candidate.countDocuments(query),
-      Candidate.countDocuments({ submittedBy: partner._id }),
-      Candidate.countDocuments({ submittedBy: partner._id, status: 'CONSENT_PENDING' }),
-      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED'] } }),
-      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['OFFERED', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'OFFER_REJECTED'] } }),
-      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['JOINED', 'HIRED'] } })
+      getTalentSubmissionCounts(baseCountsQuery)
     ]);
 
     const submissions = rawSubmissions.map(sub => {
@@ -2996,13 +3272,7 @@ exports.getMySubmissions = async (req, res) => {
           limit: parsedLimit,
           pages: Math.ceil(total / parsedLimit)
         },
-        counts: {
-          all: countAll,
-          consent_pending: countConsentPending,
-          interview: countInterview,
-          offer: countOffer,
-          joined: countJoined
-        }
+        counts
       }
     });
   } catch (error) {
@@ -3460,13 +3730,21 @@ exports.getDashboard = async (req, res) => {
 
     const PartnerCandidate = require('../models/PartnerCandidate');
 
+    const partnerIds = [partner._id, req.user._id].filter(Boolean);
+    const partnerBaseQuery = {
+      $or: [
+        { submittedBy: { $in: partnerIds } },
+        { partner: { $in: partnerIds } }
+      ]
+    };
+
     // 1. Worked Jobs Count (unique jobs partner has submitted candidate(s) to)
-    const workedJobs = await Candidate.distinct('job', { submittedBy: partner._id });
+    const workedJobs = await Candidate.distinct('job', partnerBaseQuery);
     const totalWorkedJobs = workedJobs.length;
 
     // 2. Shortlisted Jobs Count (unique jobs with shortlisted/interview/joined candidate)
     const shortlistedJobs = await Candidate.distinct('job', {
-      submittedBy: partner._id,
+      ...partnerBaseQuery,
       status: { $in: ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'] }
     });
     const totalShortlistedJobs = shortlistedJobs.length;
@@ -3476,17 +3754,21 @@ exports.getDashboard = async (req, res) => {
 
     // 4. Total Manual Candidates submitted to jobs (where poolCandidateRef is null/undefined)
     const totalManualSubmissions = await Candidate.countDocuments({
-      submittedBy: partner._id,
-      $or: [
-        { poolCandidateRef: null },
-        { poolCandidateRef: { $exists: false } }
+      ...partnerBaseQuery,
+      $and: [
+        {
+          $or: [
+            { poolCandidateRef: null },
+            { poolCandidateRef: { $exists: false } }
+          ]
+        }
       ]
     });
 
     // 5. Active Interviews count
     const activeInterviewsCount = await Candidate.countDocuments({
-      submittedBy: partner._id,
-      status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] }
+      ...partnerBaseQuery,
+      status: { $in: TALENT_SUBMISSION_STATUS_GROUPS.interview }
     });
 
     // 6. Calculate monthly placements for the last 6 months dynamically
@@ -3498,7 +3780,7 @@ exports.getDashboard = async (req, res) => {
     const monthlyPlacements = await Candidate.aggregate([
       {
         $match: {
-          submittedBy: partner._id,
+          ...partnerBaseQuery,
           status: { $in: ['JOINED', 'OFFER_ACCEPTED', 'HIRED', 'PLACED'] },
           createdAt: { $gte: sixMonthsAgo }
         }
@@ -3532,7 +3814,7 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
-    const rawRecentSubmissions = await Candidate.find({ submittedBy: partner._id })
+    const rawRecentSubmissions = await Candidate.find(partnerBaseQuery)
       .populate('job', 'title')
       .populate('company', 'companyName')
       .sort({ createdAt: -1 })
@@ -3549,9 +3831,10 @@ exports.getDashboard = async (req, res) => {
     });
 
     const statusBreakdown = await Candidate.aggregate([
-      { $match: { submittedBy: partner._id } },
+      { $match: partnerBaseQuery },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
+    const counts = await getTalentSubmissionCounts(partnerBaseQuery, statusBreakdown);
 
     const mappedStatusBreakdown = [];
     statusBreakdown.forEach(item => {
@@ -3590,7 +3873,7 @@ exports.getDashboard = async (req, res) => {
       pendingPayouts: partner.metrics.pendingPayouts || 0,
       eligiblePayouts: partner.metrics.eligiblePayouts || 0,
       paidOut: partner.metrics.paidOut || 0,
-      totalPlacements: partner.metrics.totalPlacements || 0
+      totalPlacements: counts.joined || partner.metrics.totalPlacements || 0
     };
 
     const upcomingDate = new Date();
@@ -3630,7 +3913,8 @@ exports.getDashboard = async (req, res) => {
           totalShortlistedJobs,
           totalPoolCandidates,
           totalManualSubmissions,
-          activeInterviewsCount
+          activeInterviewsCount: counts.interview || activeInterviewsCount,
+          totalPlacements: counts.joined || partner.metrics.totalPlacements || 0
         },
         subscription: partner.subscription,
         profileCompletion: {
@@ -3655,6 +3939,7 @@ exports.getDashboard = async (req, res) => {
           }))
         },
         recentSubmissions,
+        counts,
         statusBreakdown: mappedStatusBreakdown,
         availableJobsCount,
         placementData
@@ -4094,6 +4379,7 @@ exports.getWorkedJobs = async (req, res) => {
           uniqueId: item.jobDetails.uniqueId
         },
         company: {
+          _id: item.companyDetails?._id,
           companyName: item.companyDetails?.companyName || "N/A"
         },
         stats: {

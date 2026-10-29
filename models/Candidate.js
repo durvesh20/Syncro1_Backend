@@ -852,6 +852,9 @@ candidateSchema.index({ email: 1, job: 1 });
 candidateSchema.index({ status: 1 });
 candidateSchema.index({ company: 1, status: 1, createdAt: -1 });
 candidateSchema.index({ submittedBy: 1, createdAt: -1 });
+candidateSchema.index({ submittedBy: 1, status: 1, _id: -1 });
+candidateSchema.index({ submittedBy: 1, job: 1, _id: -1 });
+candidateSchema.index({ submittedBy: 1, company: 1, _id: -1 });
 candidateSchema.index({ 'payout.status': 1, 'payout.eligibleDate': 1 }); // For payout queries
 candidateSchema.index({ 'replacementGuarantee.endDate': 1 }); // For guarantee expiry
 candidateSchema.index({ 'resumeAnalysis.profileScore': -1 });
