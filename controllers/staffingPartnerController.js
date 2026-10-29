@@ -2907,16 +2907,39 @@ const resolveTalentStatusQuery = (rawStatus, rawTab) => {
       return ['S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING', 'CONSENT_CONFIRMED', 'PRESCREEN_PENDING'];
     }
 
+    // Client Screen Select (Check BEFORE general select to avoid conflict)
+    if (
+      s === 'CLIENT_SCREEN_SELECT' ||
+      s === 'COMPANY_SCREEN_SELECT' ||
+      ((s.includes('CLIENT') || s.includes('COMPANY')) && s.includes('SELECT'))
+    ) {
+      return ['CLIENT_SCREEN_SELECT', 'COMPANY_SCREEN_SELECT', 'SHORTLISTED', 'COMPANY_SHORTLISTED', 'CLIENT_SHORTLISTED'];
+    }
+
     // S1 Screen Select (Passed internal S1 screening)
     if (
       s === 'S1_SCREEN_SELECT' ||
       s === 'S1_SELECT' ||
       s === 'SCREEN_SELECT' ||
+      s === 'SELECT_SCREEN' ||
       s === 'S1_SCREEN_SELECTED' ||
       s === 'ADMIN_APPROVED' ||
-      (s.includes('S1') && s.includes('SELECT'))
+      s === 'S1_SELECT_SELECT' ||
+      (s.includes('S1') && s.includes('SELECT')) ||
+      (s.includes('SCREEN') && s.includes('SELECT'))
     ) {
       return ['S1_SCREEN_SELECT', 'S1_SELECTED', 'ADMIN_APPROVED', 'SCREEN_SELECTED', 'SCREEN_SELECT', 'S1_SCREEN_SELECTED'];
+    }
+
+    // Client Screen Reject (Check BEFORE general S1 or reject)
+    if (
+      s === 'CLIENT_SCREEN_REJECT' ||
+      s === 'COMPANY_SCREEN_REJECT' ||
+      s === 'CLIENT_REJECTED' ||
+      s === 'COMPANY_REJECTED' ||
+      ((s.includes('CLIENT') || s.includes('COMPANY')) && s.includes('REJECT'))
+    ) {
+      return ['CLIENT_SCREEN_REJECT', 'COMPANY_SCREEN_REJECT', 'CLIENT_REJECTED', 'COMPANY_REJECTED', 'REJECTED'];
     }
 
     // S1 Screen Reject (Rejected during S1 review)
@@ -2967,19 +2990,9 @@ const resolveTalentStatusQuery = (rawStatus, rawTab) => {
       return ['SENT_TO_CLIENT', 'SENT_TO_COMPANY', 'SUBMITTED', 'SUBMITTED_TO_COMPANY', 'SUBMITTED_TO_CLIENT', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'UNDER_REVIEW', 'REVIEWING'];
     }
 
-    // Client Screen Select / Shortlisted
-    if (s === 'CLIENT_SCREEN_SELECT' || s === 'COMPANY_SCREEN_SELECT') {
-      return ['CLIENT_SCREEN_SELECT', 'COMPANY_SCREEN_SELECT', 'SHORTLISTED', 'COMPANY_SHORTLISTED', 'CLIENT_SHORTLISTED'];
-    }
-
-    // Client Screen Reject
-    if (s === 'CLIENT_SCREEN_REJECT' || s === 'COMPANY_SCREEN_REJECT') {
-      return ['CLIENT_SCREEN_REJECT', 'COMPANY_SCREEN_REJECT', 'CLIENT_REJECTED', 'COMPANY_REJECTED'];
-    }
-
     // Shortlisted
     if (s === 'SHORTLISTED') {
-      return ['SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'ROUND_ON_HOLD'];
+      return ['SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'COMPANY_SCREEN_SELECT', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'ROUND_ON_HOLD'];
     }
 
     // Assessment Pending & Assessment Failed (Must check BEFORE generic reject)
@@ -3109,11 +3122,29 @@ const getTalentSubmissionCounts = async (baseQuery, existingStatusBreakdown) => 
     { $match: baseQuery },
     { $group: { _id: '$status', count: { $sum: 1 } } }
   ]);
-  const countByStatus = new Map(statusBreakdown.map(({ _id, count }) => [_id, count]));
+
+  const countByStatus = new Map();
+  statusBreakdown.forEach(({ _id, count }) => {
+    const rawKey = String(_id || '').trim();
+    const normalizedKey = rawKey.toUpperCase().replace(/[\s-]+/g, '_');
+    countByStatus.set(normalizedKey, (countByStatus.get(normalizedKey) || 0) + count);
+    if (!countByStatus.has(rawKey)) {
+      countByStatus.set(rawKey, count);
+    }
+  });
+
   const countGroup = (statuses) => statuses.reduce(
-    (total, candidateStatus) => total + (countByStatus.get(candidateStatus) || 0),
+    (total, candidateStatus) => {
+      const norm = String(candidateStatus).trim().toUpperCase().replace(/[\s-]+/g, '_');
+      return total + (countByStatus.get(norm) || countByStatus.get(candidateStatus) || 0);
+    },
     0
   );
+
+  const byStatus = {};
+  statusBreakdown.forEach(item => {
+    byStatus[item._id || 'UNKNOWN'] = item.count;
+  });
 
   return {
     all: statusBreakdown.reduce((total, item) => total + item.count, 0),
@@ -3121,7 +3152,8 @@ const getTalentSubmissionCounts = async (baseQuery, existingStatusBreakdown) => 
     interview: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.interview),
     offer: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.offer),
     joined: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.joined),
-    slots_pending: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.slots_pending)
+    slots_pending: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.slots_pending),
+    byStatus
   };
 };
 
@@ -3144,20 +3176,24 @@ exports.getMySubmissions = async (req, res) => {
     const skip = (parsedPage - 1) * parsedLimit;
 
     const partnerIds = [partner._id, req.user._id].filter(Boolean);
-    const baseQuery = {
+    const partnerMatch = {
       $or: [
         { submittedBy: { $in: partnerIds } },
         { partner: { $in: partnerIds } }
       ]
     };
-    const andConditions = [];
+
+    const andConditions = [partnerMatch];
+    const baseCountsConditions = [partnerMatch];
 
     const targetJobId = jobId || jobParam;
     if (targetJobId && targetJobId !== 'all' && targetJobId !== 'ALL') {
       const jobObjId = mongoose.Types.ObjectId.isValid(targetJobId)
         ? new mongoose.Types.ObjectId(targetJobId)
         : targetJobId;
-      andConditions.push({ job: jobObjId });
+      const jobCond = { job: jobObjId };
+      andConditions.push(jobCond);
+      baseCountsConditions.push(jobCond);
     }
 
     const targetCompanyId = companyParam || clientParam;
@@ -3168,36 +3204,53 @@ exports.getMySubmissions = async (req, res) => {
         const companyJobs = await Job.find({ company: compObjId }).select('_id').lean();
         const companyJobIds = companyJobs.map(j => j._id);
         
-        andConditions.push({
+        const compCond = {
           $or: [
             { company: compObjId },
             { job: { $in: companyJobIds } }
           ]
-        });
+        };
+        andConditions.push(compCond);
+        baseCountsConditions.push(compCond);
       } else {
-        andConditions.push({ company: targetCompanyId });
+        const compCond = { company: targetCompanyId };
+        andConditions.push(compCond);
+        baseCountsConditions.push(compCond);
       }
     }
-
-    const query = { ...baseQuery };
 
     const resolvedStatuses = resolveTalentStatusQuery(status, isInterview === 'true' ? 'interview' : tab);
 
     if (resolvedStatuses && resolvedStatuses.length > 0) {
-      query.status = { $in: resolvedStatuses };
+      const statusRegexes = resolvedStatuses.map(s => {
+        const escaped = String(s).replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const pattern = escaped.replace(/_/g, '[\\s_-]*');
+        return new RegExp(`^\\s*${pattern}\\s*$`, 'i');
+      });
+
+      andConditions.push({
+        $or: [
+          { status: { $in: resolvedStatuses } },
+          { status: { $in: statusRegexes } }
+        ]
+      });
     }
 
     if (isManual === 'true') {
-      andConditions.push({
+      const manualCond = {
         $or: [
           { poolCandidateRef: null },
           { poolCandidateRef: { $exists: false } }
         ]
-      });
+      };
+      andConditions.push(manualCond);
+      baseCountsConditions.push(manualCond);
     } else if (isManual === 'false') {
-      andConditions.push({
+      const notManualCond = {
         poolCandidateRef: { $ne: null, $exists: true }
-      });
+      };
+      andConditions.push(notManualCond);
+      baseCountsConditions.push(notManualCond);
     }
 
     if (search && search.trim()) {
@@ -3212,7 +3265,7 @@ exports.getMySubmissions = async (req, res) => {
       const matchingCompanies = await Company.find({ companyName: rx }).select('_id');
       const companyIds = matchingCompanies.map(c => c._id);
 
-      andConditions.push({
+      const searchCond = {
         $or: [
           { firstName: rx },
           { lastName: rx },
@@ -3221,15 +3274,13 @@ exports.getMySubmissions = async (req, res) => {
           { job: { $in: jobIds } },
           { company: { $in: companyIds } }
         ]
-      });
+      };
+      andConditions.push(searchCond);
+      baseCountsConditions.push(searchCond);
     }
 
-    const baseCountsQuery = { ...baseQuery };
-
-    if (andConditions.length > 0) {
-      baseCountsQuery.$and = andConditions;
-      query.$and = andConditions;
-    }
+    const query = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
+    const baseCountsQuery = baseCountsConditions.length === 1 ? baseCountsConditions[0] : { $and: baseCountsConditions };
 
     const [rawSubmissions, total, counts] = await Promise.all([
       Candidate.find(query)
