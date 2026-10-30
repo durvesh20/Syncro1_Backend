@@ -3880,6 +3880,333 @@ exports.setJobReportTrackerByAdmin = async (req, res) => {
   }
 };
 
+const resolveAdminStatusQuery = (rawStatus) => {
+  if (!rawStatus || rawStatus === 'all' || rawStatus === 'ALL') {
+    return null;
+  }
+  const s = String(rawStatus).trim().toUpperCase();
+
+  // 1. S1 Review (Awaiting internal S1 evaluation)
+  if (
+    s === 'S1_REVIEW' ||
+    s === 'ADMIN_REVIEW' ||
+    s === 'PENDING_REVIEW' ||
+    s === 'PENDING_ADMIN_APPROVAL' ||
+    s === 'ADMIN_PENDING' ||
+    s === 'CONSENT_CONFIRMED' ||
+    s === 'PRESCREEN_PENDING' ||
+    (s.includes('S1') && s.includes('REVIEW'))
+  ) {
+    return [
+      'S1_REVIEW',
+      'ADMIN_REVIEW',
+      'PENDING_REVIEW',
+      'PENDING_ADMIN_APPROVAL',
+      'ADMIN_PENDING',
+      'CONSENT_CONFIRMED',
+      'PRESCREEN_PENDING'
+    ];
+  }
+
+  // 2. S1 Screen Select (Passed internal S1 screening)
+  if (
+    s === 'S1_SCREEN_SELECT' ||
+    s === 'S1_SELECT' ||
+    s === 'SCREEN_SELECT' ||
+    s === 'SELECT_SCREEN' ||
+    s === 'S1_SCREEN_SELECTED' ||
+    s === 'ADMIN_APPROVED' ||
+    s === 'S1_SELECT_SELECT' ||
+    (s.includes('S1') && s.includes('SELECT')) ||
+    (s.includes('SCREEN') && s.includes('SELECT') && !s.includes('CLIENT') && !s.includes('COMPANY'))
+  ) {
+    return [
+      'S1_SCREEN_SELECT',
+      'S1_SELECTED',
+      'ADMIN_APPROVED',
+      'SCREEN_SELECTED',
+      'SCREEN_SELECT',
+      'SELECT_SCREEN',
+      'S1_SCREEN_SELECTED'
+    ];
+  }
+
+  // 3. S1 Screen Reject
+  if (
+    s === 'S1_SCREEN_REJECT' ||
+    s === 'S1_SCREEN_REJECTED' ||
+    s === 'S1_REJECTED' ||
+    s === 'ADMIN_REJECTED' ||
+    s === 'ADMIN_SCREEN_REJECT' ||
+    (s.includes('S1') && s.includes('REJECT'))
+  ) {
+    return [
+      'S1_SCREEN_REJECT',
+      'S1_SCREEN_REJECTED',
+      'S1_REJECTED',
+      'ADMIN_REJECTED',
+      'ADMIN_SCREEN_REJECT'
+    ];
+  }
+
+  // 4. Consent Pending
+  if (s === 'CONSENT_PENDING' || s === 'CONSENT_SENT' || s.includes('CONSENT_PENDING')) {
+    return ['CONSENT_PENDING', 'CONSENT_SENT'];
+  }
+
+  // 5. Consent Denied
+  if (s === 'CONSENT_DENIED' || s.includes('CONSENT_DENIED')) {
+    return ['CONSENT_DENIED'];
+  }
+
+  // 6. Sent to Client / Company Review
+  if (
+    s === 'SENT_TO_CLIENT' ||
+    s === 'SENT_TO_COMPANY' ||
+    s === 'SUBMITTED' ||
+    s === 'SUBMITTED_TO_COMPANY' ||
+    s === 'SUBMITTED_TO_CLIENT' ||
+    s === 'COMPANY_REVIEW' ||
+    s === 'CLIENT_REVIEW' ||
+    s === 'UNDER_REVIEW' ||
+    s === 'REVIEWING'
+  ) {
+    return [
+      'SENT_TO_CLIENT',
+      'SENT_TO_COMPANY',
+      'SUBMITTED',
+      'SUBMITTED_TO_COMPANY',
+      'SUBMITTED_TO_CLIENT',
+      'COMPANY_REVIEW',
+      'CLIENT_REVIEW',
+      'UNDER_REVIEW',
+      'REVIEWING'
+    ];
+  }
+
+  // 7. Client Screen Select / Shortlisted
+  if (
+    s === 'CLIENT_SCREEN_SELECT' ||
+    s === 'COMPANY_SCREEN_SELECT' ||
+    s === 'CLIENT_SHORTLISTED' ||
+    s === 'COMPANY_SHORTLISTED' ||
+    ((s.includes('CLIENT') || s.includes('COMPANY')) && s.includes('SELECT'))
+  ) {
+    return [
+      'CLIENT_SCREEN_SELECT',
+      'COMPANY_SCREEN_SELECT',
+      'SHORTLISTED',
+      'COMPANY_SHORTLISTED',
+      'CLIENT_SHORTLISTED'
+    ];
+  }
+
+  // 8. Client Screen Reject
+  if (
+    s === 'CLIENT_SCREEN_REJECT' ||
+    s === 'COMPANY_SCREEN_REJECT' ||
+    s === 'CLIENT_REJECTED' ||
+    s === 'COMPANY_REJECTED' ||
+    ((s.includes('CLIENT') || s.includes('COMPANY')) && s.includes('REJECT'))
+  ) {
+    return [
+      'CLIENT_SCREEN_REJECT',
+      'COMPANY_SCREEN_REJECT',
+      'CLIENT_REJECTED',
+      'COMPANY_REJECTED'
+    ];
+  }
+
+  // 9. Active Interviews Group
+  if (s === 'ACTIVE_INTERVIEWS' || s === 'INTERVIEW') {
+    return [
+      'INTERVIEW_SCHEDULED',
+      'INTERVIEW_CONFIRMED',
+      'ACTIVE_INTERVIEWS',
+      'SLOT_ASSIGNED',
+      'SLOT_DETAILS_SHARED',
+      'INTERVIEWED',
+      'INTERVIEW_CONDUCTED',
+      'ROUND_ON_HOLD',
+      'ROUND_SELECTED_NEXT',
+      'ROUND_SELECTED_DIRECT_HR',
+      'HR_ROUND_PENDING',
+      'HR_SELECTED',
+      'HR_ON_HOLD'
+    ];
+  }
+
+  // 10. Active Pipelines / Placed (All stages past screening up to placed)
+  if (s === 'ACTIVE_PIPELINE' || s === 'PIPELINE_ACTIVE') {
+    return [
+      'SHORTLISTED',
+      'CLIENT_SCREEN_SELECT',
+      'COMPANY_SCREEN_SELECT',
+      'ASSESSMENT_PENDING',
+      'ASSESSMENT_LINK_SENT',
+      'ASSESSMENT_LINK_COMPLETE',
+      'ASSESSMENT_PASSED',
+      'SLOTS_NOT_PUBLISHED',
+      'SLOTS_PUBLISHED',
+      'SLOT_ASSIGNED',
+      'SLOT_DETAILS_SHARED',
+      'INTERVIEW_SCHEDULED',
+      'INTERVIEW_CONFIRMED',
+      'ACTIVE_INTERVIEWS',
+      'INTERVIEWED',
+      'INTERVIEW_CONDUCTED',
+      'ROUND_SELECTED_NEXT',
+      'ROUND_SELECTED_DIRECT_HR',
+      'ROUND_ON_HOLD',
+      'HR_ROUND_PENDING',
+      'HR_SELECTED',
+      'HR_ON_HOLD',
+      'OFFERED',
+      'OFFER_SENT',
+      'OFFER_ACCEPTED',
+      'ONBOARDING',
+      'HIRED',
+      'JOINED'
+    ];
+  }
+
+  // 11. Shortlisted (broad)
+  if (s === 'SHORTLISTED') {
+    return [
+      'SHORTLISTED',
+      'CLIENT_SCREEN_SELECT',
+      'COMPANY_SCREEN_SELECT',
+      'SLOTS_NOT_PUBLISHED',
+      'SLOTS_PUBLISHED',
+      'ROUND_SELECTED_NEXT',
+      'ROUND_SELECTED_DIRECT_HR',
+      'ROUND_ON_HOLD'
+    ];
+  }
+
+  // 12. Assessment stages
+  if (s === 'ASSESSMENT_PENDING' || s === 'ASSESSMENT') {
+    return ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT'];
+  }
+  if (s === 'ASSESSMENT_FAILED') {
+    return ['ASSESSMENT_FAILED'];
+  }
+  if (s === 'ASSESSMENT_PASSED') {
+    return ['ASSESSMENT_PASSED', 'ASSESSMENT_LINK_COMPLETE'];
+  }
+
+  // 13. Slots stages
+  if (s === 'SLOTS_NOT_PUBLISHED' || s === 'SLOTS_PENDING') {
+    return ['SLOTS_NOT_PUBLISHED', 'SLOTS_PENDING', 'RESCHEDULE_REQUESTED'];
+  }
+  if (s === 'SLOTS_PUBLISHED') {
+    return ['SLOTS_PUBLISHED'];
+  }
+  if (s === 'SLOT_ASSIGNED' || s === 'SLOT_DETAILS_SHARED') {
+    return ['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'];
+  }
+
+  // 14. Interview specific statuses
+  if (s === 'INTERVIEW_SCHEDULED') {
+    return ['INTERVIEW_SCHEDULED'];
+  }
+  if (s === 'INTERVIEW_CONFIRMED') {
+    return ['INTERVIEW_CONFIRMED'];
+  }
+  if (s === 'INTERVIEW_CONDUCTED' || s === 'INTERVIEWED') {
+    return ['INTERVIEW_CONDUCTED', 'INTERVIEWED'];
+  }
+  if (s === 'RESCHEDULE_REQUESTED') {
+    return ['RESCHEDULE_REQUESTED'];
+  }
+  if (s === 'ROUND_ON_HOLD') {
+    return ['ROUND_ON_HOLD'];
+  }
+  if (s === 'ROUND_REJECTED') {
+    return ['ROUND_REJECTED'];
+  }
+  if (s === 'ROUND_SELECTED_NEXT') {
+    return ['ROUND_SELECTED_NEXT'];
+  }
+  if (s === 'ROUND_SELECTED_DIRECT_HR') {
+    return ['ROUND_SELECTED_DIRECT_HR'];
+  }
+
+  // 15. HR round statuses
+  if (s === 'HR_ROUND_PENDING') {
+    return ['HR_ROUND_PENDING'];
+  }
+  if (s === 'HR_SELECTED') {
+    return ['HR_SELECTED'];
+  }
+  if (s === 'HR_ON_HOLD') {
+    return ['HR_ON_HOLD'];
+  }
+  if (s === 'HR_REJECTED') {
+    return ['HR_REJECTED'];
+  }
+
+  // 16. Offer statuses
+  if (s === 'OFFER_SENT' || s === 'OFFERED') {
+    return ['OFFERED', 'OFFER_SENT'];
+  }
+  if (s === 'OFFER_ACCEPTED') {
+    return ['OFFER_ACCEPTED'];
+  }
+  if (s === 'OFFER_REJECTED' || s === 'OFFER_DECLINED') {
+    return ['OFFER_REJECTED', 'OFFER_DECLINED'];
+  }
+
+  // 17. Placed / Joined
+  if (s === 'JOINED' || s === 'HIRED' || s === 'PLACED' || s === 'ONBOARDING') {
+    return ['JOINED', 'HIRED', 'PLACED', 'ONBOARDING'];
+  }
+
+  // 18. Rejected (Broad)
+  if (s === 'REJECTED') {
+    return [
+      'REJECTED',
+      'CLIENT_REJECTED',
+      'COMPANY_REJECTED',
+      'S1_REJECTED',
+      'S1_SCREEN_REJECT',
+      'ADMIN_REJECTED',
+      'ROUND_REJECTED',
+      'HR_REJECTED',
+      'OFFER_REJECTED',
+      'OFFER_DECLINED'
+    ];
+  }
+
+  // 19. Other Inactive
+  if (s === 'CANDIDATE_DROP') {
+    return ['CANDIDATE_DROP'];
+  }
+  if (s === 'WITHDRAWN') {
+    return ['WITHDRAWN'];
+  }
+  if (s === 'NOT_JOINED') {
+    return ['NOT_JOINED'];
+  }
+  if (s === 'CLIENT_PORTAL_DUPLICATE' || s === 'COMPANY_PORTAL_DUPLICATE') {
+    return ['CLIENT_PORTAL_DUPLICATE', 'COMPANY_PORTAL_DUPLICATE'];
+  }
+  if (s === 'DRAFT') {
+    return ['DRAFT'];
+  }
+
+  return [s];
+};
+
+const buildStatusRegexArray = (statuses) => {
+  if (!Array.isArray(statuses) || statuses.length === 0) return [];
+  return statuses.map(st => {
+    const escaped = String(st).replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const pattern = escaped.replace(/_/g, '[\\s_-]*');
+    return new RegExp(`^\\s*${pattern}\\s*$`, 'i');
+  });
+};
+
 // @desc    Get all candidates (admin registry)
 // @route   GET /api/admin/candidates
 exports.getAllCandidates = async (req, res) => {
@@ -3903,58 +4230,31 @@ exports.getAllCandidates = async (req, res) => {
       sort: sortParam
     } = req.query;
 
-    const query = {};
+    const andConditions = [];
 
     // 1. Status Filter
-    if (status && status !== 'all' && status !== 'ALL') {
-      const s = String(status).trim().toUpperCase();
-      if (s === 'S1_REVIEW' || s === 'ADMIN_REVIEW') {
-        query.status = { $in: ['S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING', 'CONSENT_CONFIRMED', 'PRESCREEN_PENDING'] };
-      } else if (s === 'S1_SCREEN_SELECT') {
-        query.status = 'S1_SCREEN_SELECT';
-      } else if (s === 'S1_SCREEN_REJECT' || s === 'S1_REJECTED' || s === 'ADMIN_REJECTED') {
-        query.status = { $in: ['S1_SCREEN_REJECT', 'S1_REJECTED', 'ADMIN_REJECTED'] };
-      } else if (s === 'CONSENT_PENDING') {
-        query.status = { $in: ['CONSENT_PENDING', 'CONSENT_SENT'] };
-      } else if (s === 'SENT_TO_CLIENT' || s === 'COMPANY_REVIEW' || s === 'CLIENT_REVIEW' || s === 'UNDER_REVIEW' || s === 'REVIEWING') {
-        query.status = { $in: ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'UNDER_REVIEW', 'REVIEWING'] };
-      } else if (s === 'CLIENT_SCREEN_SELECT') {
-        query.status = { $in: ['CLIENT_SCREEN_SELECT', 'SHORTLISTED'] };
-      } else if (s === 'ACTIVE_INTERVIEWS') {
-        query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] };
-      } else if (s === 'SHORTLISTED') {
-        query.status = { $in: ['SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'ROUND_ON_HOLD'] };
-      } else if (s === 'ACTIVE_PIPELINE' || s === 'PIPELINE_ACTIVE') {
-        query.status = { $in: ['SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'INTERVIEW_CONDUCTED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'HR_ROUND_PENDING', 'HR_SELECTED', 'OFFERED', 'OFFER_SENT', 'OFFER_ACCEPTED', 'JOINED'] };
-      } else if (s === 'SLOTS_NOT_PUBLISHED' || s === 'SLOTS_PENDING') {
-        query.status = { $in: ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'RESCHEDULE_REQUESTED'] };
-      } else if (s === 'OFFERED' || s === 'OFFER_SENT') {
-        query.status = { $in: ['OFFERED', 'OFFER_SENT'] };
-      } else if (s === 'JOINED' || s === 'HIRED') {
-        query.status = { $in: ['JOINED', 'HIRED', 'ONBOARDING'] };
-      } else if (s === 'REJECTED') {
-        query.status = { $in: ['REJECTED', 'CLIENT_REJECTED', 'COMPANY_REJECTED', 'S1_REJECTED', 'S1_SCREEN_REJECT', 'ROUND_REJECTED', 'HR_REJECTED', 'OFFER_REJECTED'] };
-      } else {
-        query.status = status;
-      }
+    const resolvedStatuses = resolveAdminStatusQuery(status);
+    if (resolvedStatuses && resolvedStatuses.length > 0) {
+      const statusRegexes = buildStatusRegexArray(resolvedStatuses);
+      andConditions.push({ status: { $in: statusRegexes } });
     }
 
     // 2. Job Filter
     const effectiveJob = job || jobId;
     if (effectiveJob) {
       if (mongoose.Types.ObjectId.isValid(effectiveJob)) {
-        query.job = new mongoose.Types.ObjectId(effectiveJob);
+        andConditions.push({ job: new mongoose.Types.ObjectId(effectiveJob) });
       } else {
-        query.job = effectiveJob;
+        andConditions.push({ job: effectiveJob });
       }
     }
 
     // 3. Company Filter
     if (company) {
       if (mongoose.Types.ObjectId.isValid(company)) {
-        query.company = new mongoose.Types.ObjectId(company);
+        andConditions.push({ company: new mongoose.Types.ObjectId(company) });
       } else {
-        query.company = company;
+        andConditions.push({ company: company });
       }
     }
 
@@ -3962,32 +4262,89 @@ exports.getAllCandidates = async (req, res) => {
     const effectivePartner = partner || submittedBy;
     if (effectivePartner) {
       if (mongoose.Types.ObjectId.isValid(effectivePartner)) {
-        query.submittedBy = new mongoose.Types.ObjectId(effectivePartner);
+        andConditions.push({ submittedBy: new mongoose.Types.ObjectId(effectivePartner) });
       } else {
-        query.submittedBy = effectivePartner;
+        andConditions.push({ submittedBy: effectivePartner });
       }
     }
 
     // 5. Score Filter
-    const activeScore = score || scoreFilter;
+    const activeScore = String(score || scoreFilter || '').toLowerCase().trim();
     if (activeScore === 'strong') {
-      query['resumeAnalysis.profileScore'] = { $gte: 80 };
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gte: 80 } },
+          { 'resumeAnalysis.score': { $gte: 80 } },
+          { 'resumeAnalysis.overallScore': { $gte: 80 } },
+          { score: { $gte: 80 } },
+          { profileScore: { $gte: 80 } },
+          { matchScore: { $gte: 80 } },
+          { aiScore: { $gte: 80 } },
+          { 'resumeAnalysis.matchLevel': /strong/i },
+          { matchLevel: /strong/i }
+        ]
+      });
     } else if (activeScore === 'good') {
-      query['resumeAnalysis.profileScore'] = { $gte: 60, $lt: 80 };
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gte: 60, $lt: 80 } },
+          { 'resumeAnalysis.score': { $gte: 60, $lt: 80 } },
+          { 'resumeAnalysis.overallScore': { $gte: 60, $lt: 80 } },
+          { score: { $gte: 60, $lt: 80 } },
+          { profileScore: { $gte: 60, $lt: 80 } },
+          { matchScore: { $gte: 60, $lt: 80 } },
+          { aiScore: { $gte: 60, $lt: 80 } },
+          { 'resumeAnalysis.matchLevel': /good/i },
+          { matchLevel: /good/i }
+        ]
+      });
     } else if (activeScore === 'partial') {
-      query['resumeAnalysis.profileScore'] = { $gte: 40, $lt: 60 };
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gte: 40, $lt: 60 } },
+          { 'resumeAnalysis.score': { $gte: 40, $lt: 60 } },
+          { 'resumeAnalysis.overallScore': { $gte: 40, $lt: 60 } },
+          { score: { $gte: 40, $lt: 60 } },
+          { profileScore: { $gte: 40, $lt: 60 } },
+          { matchScore: { $gte: 40, $lt: 60 } },
+          { aiScore: { $gte: 40, $lt: 60 } },
+          { 'resumeAnalysis.matchLevel': /partial/i },
+          { matchLevel: /partial/i }
+        ]
+      });
     } else if (activeScore === 'weak') {
-      query['resumeAnalysis.profileScore'] = { $lt: 40 };
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gt: 0, $lt: 40 } },
+          { 'resumeAnalysis.score': { $gt: 0, $lt: 40 } },
+          { 'resumeAnalysis.overallScore': { $gt: 0, $lt: 40 } },
+          { score: { $gt: 0, $lt: 40 } },
+          { profileScore: { $gt: 0, $lt: 40 } },
+          { matchScore: { $gt: 0, $lt: 40 } },
+          { aiScore: { $gt: 0, $lt: 40 } },
+          { 'resumeAnalysis.matchLevel': /weak/i },
+          { matchLevel: /weak/i }
+        ]
+      });
     } else if (scoreMin !== undefined || scoreMax !== undefined) {
-      query['resumeAnalysis.profileScore'] = {};
-      if (scoreMin !== undefined) query['resumeAnalysis.profileScore'].$gte = Number(scoreMin);
-      if (scoreMax !== undefined) query['resumeAnalysis.profileScore'].$lte = Number(scoreMax);
+      const minVal = scoreMin !== undefined ? Number(scoreMin) : 0;
+      const maxVal = scoreMax !== undefined ? Number(scoreMax) : 100;
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gte: minVal, $lte: maxVal } },
+          { score: { $gte: minVal, $lte: maxVal } },
+          { profileScore: { $gte: minVal, $lte: maxVal } },
+          { matchScore: { $gte: minVal, $lte: maxVal } }
+        ]
+      });
     }
 
     // 6. Search across candidate details + Job title + Company name + Partner firm name
     if (search && search.trim()) {
       const sanitizedSearch = search.trim().replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&');
       const rx = new RegExp(sanitizedSearch, 'i');
+      const words = search.trim().split(/\s+/).filter(Boolean).map(w => w.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&'));
+
       const [matchedJobs, matchedCompanies, matchedPartners] = await Promise.all([
         Job.find({ $or: [{ title: rx }, { uniqueId: rx }] }).select('_id'),
         Company.find({ $or: [{ companyName: rx }, { uniqueId: rx }] }).select('_id'),
@@ -4002,12 +4359,25 @@ exports.getAllCandidates = async (req, res) => {
         { uniqueId: rx }
       ];
 
+      if (words.length > 1) {
+        searchOr.push({
+          $and: words.map(w => ({
+            $or: [
+              { firstName: new RegExp(w, 'i') },
+              { lastName: new RegExp(w, 'i') }
+            ]
+          }))
+        });
+      }
+
       if (matchedJobs.length > 0) searchOr.push({ job: { $in: matchedJobs.map(j => j._id) } });
       if (matchedCompanies.length > 0) searchOr.push({ company: { $in: matchedCompanies.map(c => c._id) } });
       if (matchedPartners.length > 0) searchOr.push({ submittedBy: { $in: matchedPartners.map(p => p._id) } });
 
-      query.$or = searchOr;
+      andConditions.push({ $or: searchOr });
     }
+
+    const finalQuery = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
@@ -4018,23 +4388,29 @@ exports.getAllCandidates = async (req, res) => {
     if (sortBy === 'candidateName' || sortParam === 'name_asc') {
       sortObj = { firstName: sortOrder === 'desc' ? -1 : 1, lastName: sortOrder === 'desc' ? -1 : 1 };
     } else if (sortBy === 'score' || sortParam === 'score_desc') {
-      sortObj = { 'resumeAnalysis.profileScore': -1 };
+      sortObj = { 'resumeAnalysis.profileScore': -1, score: -1, profileScore: -1 };
     } else if (sortParam === 'oldest' || (sortBy === 'createdAt' && sortOrder === 'asc')) {
       sortObj = { createdAt: 1 };
     } else if (sortParam === 'newest' || (sortBy === 'createdAt' && sortOrder === 'desc')) {
       sortObj = { createdAt: -1 };
     }
 
-    const [candidates, total] = await Promise.all([
-      Candidate.find(query)
+    // 8. Execute candidate query
+    const [candidates, totalFiltered, totalPlatformCandidates] = await Promise.all([
+      Candidate.find(finalQuery)
         .populate('submittedBy', 'firmName firstName lastName uniqueId')
-        .populate('job', 'title uniqueId')
+        .populate({
+          path: 'job',
+          select: 'title uniqueId company',
+          populate: { path: 'company', select: 'companyName uniqueId' }
+        })
         .populate('company', 'companyName uniqueId')
         .sort(sortObj)
         .skip(skip)
         .limit(sanitizedLimit)
         .select('-statusHistory -notes -qualityCheck'),
-      Candidate.countDocuments(query)
+      Candidate.countDocuments(finalQuery),
+      Candidate.countDocuments({})
     ]);
 
     if (sortBy === 'jobTitle' || sortParam === 'job_asc' || sortParam === 'job_desc') {
@@ -4047,40 +4423,156 @@ exports.getAllCandidates = async (req, res) => {
       });
     }
 
-    const summaryQuery = { ...query };
-    delete summaryQuery.status;
-    const statusSummary = await Candidate.aggregate([
-      { $match: summaryQuery },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
+    // 9. Scoped Registry Total (scoped by Job/Partner/Company if specified, but NOT by status/page/score/search)
+    const registryScopeConditions = [];
+    if (effectiveJob) {
+      if (mongoose.Types.ObjectId.isValid(effectiveJob)) {
+        registryScopeConditions.push({ job: new mongoose.Types.ObjectId(effectiveJob) });
+      } else {
+        registryScopeConditions.push({ job: effectiveJob });
+      }
+    }
+    if (effectivePartner) {
+      if (mongoose.Types.ObjectId.isValid(effectivePartner)) {
+        registryScopeConditions.push({ submittedBy: new mongoose.Types.ObjectId(effectivePartner) });
+      } else {
+        registryScopeConditions.push({ submittedBy: effectivePartner });
+      }
+    }
+    if (company) {
+      if (mongoose.Types.ObjectId.isValid(company)) {
+        registryScopeConditions.push({ company: new mongoose.Types.ObjectId(company) });
+      } else {
+        registryScopeConditions.push({ company: company });
+      }
+    }
+    const registryScopeQuery = registryScopeConditions.length > 0 ? { $and: registryScopeConditions } : {};
+
+    const [statusSummary, totalRegistryCandidates] = await Promise.all([
+      Candidate.aggregate([
+        { $match: registryScopeQuery },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      Candidate.countDocuments(registryScopeQuery)
     ]);
+
+    const sMap = {};
+    for (const item of statusSummary) {
+      if (!item._id) continue;
+      const norm = String(item._id).trim().toUpperCase().replace(/[\s-]+/g, '_');
+      sMap[norm] = (sMap[norm] || 0) + item.count;
+    }
+
+    // Canonical Group Computations
+    const pendingReviewCount = 
+      (sMap.S1_REVIEW || 0) + 
+      (sMap.ADMIN_REVIEW || 0) + 
+      (sMap.PENDING_REVIEW || 0) + 
+      (sMap.PENDING_ADMIN_APPROVAL || 0) + 
+      (sMap.ADMIN_PENDING || 0) + 
+      (sMap.CONSENT_CONFIRMED || 0) + 
+      (sMap.PRESCREEN_PENDING || 0);
+
+    const s1ScreenSelectCount =
+      (sMap.S1_SCREEN_SELECT || 0) +
+      (sMap.S1_SELECTED || 0) +
+      (sMap.ADMIN_APPROVED || 0) +
+      (sMap.SCREEN_SELECTED || 0) +
+      (sMap.SCREEN_SELECT || 0) +
+      (sMap.SELECT_SCREEN || 0) +
+      (sMap.S1_SCREEN_SELECTED || 0) +
+      (sMap.S1_SELECT_SELECT || 0);
+
+    const sentToClientCount =
+      (sMap.SENT_TO_CLIENT || 0) +
+      (sMap.SENT_TO_COMPANY || 0) +
+      (sMap.SUBMITTED || 0) +
+      (sMap.SUBMITTED_TO_COMPANY || 0) +
+      (sMap.SUBMITTED_TO_CLIENT || 0) +
+      (sMap.COMPANY_REVIEW || 0) +
+      (sMap.CLIENT_REVIEW || 0) +
+      (sMap.UNDER_REVIEW || 0) +
+      (sMap.REVIEWING || 0);
+
+    const clientScreenSelectCount =
+      (sMap.CLIENT_SCREEN_SELECT || 0) +
+      (sMap.COMPANY_SCREEN_SELECT || 0) +
+      (sMap.SHORTLISTED || 0) +
+      (sMap.CLIENT_SHORTLISTED || 0) +
+      (sMap.COMPANY_SHORTLISTED || 0);
+
+    const activePipelinesCount =
+      clientScreenSelectCount +
+      (sMap.ASSESSMENT_PENDING || 0) +
+      (sMap.ASSESSMENT_LINK_SENT || 0) +
+      (sMap.ASSESSMENT_LINK_COMPLETE || 0) +
+      (sMap.ASSESSMENT_PASSED || 0) +
+      (sMap.SLOTS_NOT_PUBLISHED || 0) +
+      (sMap.SLOTS_PUBLISHED || 0) +
+      (sMap.SLOT_ASSIGNED || 0) +
+      (sMap.SLOT_DETAILS_SHARED || 0) +
+      (sMap.INTERVIEW_SCHEDULED || 0) +
+      (sMap.INTERVIEW_CONFIRMED || 0) +
+      (sMap.ACTIVE_INTERVIEWS || 0) +
+      (sMap.INTERVIEWED || 0) +
+      (sMap.INTERVIEW_CONDUCTED || 0) +
+      (sMap.ROUND_SELECTED_NEXT || 0) +
+      (sMap.ROUND_SELECTED_DIRECT_HR || 0) +
+      (sMap.ROUND_ON_HOLD || 0) +
+      (sMap.HR_ROUND_PENDING || 0) +
+      (sMap.HR_SELECTED || 0) +
+      (sMap.HR_ON_HOLD || 0) +
+      (sMap.OFFERED || 0) +
+      (sMap.OFFER_SENT || 0) +
+      (sMap.OFFER_ACCEPTED || 0) +
+      (sMap.ONBOARDING || 0) +
+      (sMap.HIRED || 0) +
+      (sMap.JOINED || 0);
+
+    const consentPendingCount = 
+      (sMap.CONSENT_PENDING || 0) + 
+      (sMap.CONSENT_SENT || 0);
+
+    const combinedRejectedCount = 
+      (sMap.REJECTED || 0) + 
+      (sMap.CLIENT_REJECTED || 0) + 
+      (sMap.COMPANY_REJECTED || 0) + 
+      (sMap.S1_REJECTED || 0) + 
+      (sMap.S1_SCREEN_REJECT || 0) + 
+      (sMap.ADMIN_REJECTED || 0) + 
+      (sMap.ROUND_REJECTED || 0) + 
+      (sMap.HR_REJECTED || 0) + 
+      (sMap.OFFER_REJECTED || 0);
+
+    sMap.S1_REVIEW = pendingReviewCount;
+    sMap.S1_SCREEN_SELECT = s1ScreenSelectCount;
+    sMap.SENT_TO_CLIENT = sentToClientCount;
+    sMap.COMPANY_REVIEW = sentToClientCount;
+    sMap.CLIENT_SCREEN_SELECT = clientScreenSelectCount;
+    sMap.ACTIVE_PIPELINE = activePipelinesCount;
+    sMap.CONSENT_PENDING = consentPendingCount;
+    sMap.REJECTED = combinedRejectedCount;
+    sMap.totalAll = totalRegistryCandidates;
 
     res.json({
       success: true,
       data: {
         candidates,
-        summary: (() => {
-          const sMap = statusSummary.reduce((acc, item) => {
-            acc[item._id] = item.count;
-            return acc;
-          }, {});
-          const combinedReview = (sMap.S1_REVIEW || 0) + (sMap.ADMIN_REVIEW || 0) + (sMap.CONSENT_CONFIRMED || 0) + (sMap.PENDING_REVIEW || 0) + (sMap.PENDING_ADMIN_APPROVAL || 0);
-          sMap.S1_REVIEW = combinedReview;
-          const combinedRejected = (sMap.S1_REJECTED || 0) + (sMap.ADMIN_REJECTED || 0) + (sMap.CLIENT_REJECTED || 0) + (sMap.COMPANY_REJECTED || 0) + (sMap.S1_SCREEN_REJECT || 0);
-          sMap.S1_REJECTED = combinedRejected;
-          const combinedCompanyReview = (sMap.COMPANY_REVIEW || 0) + (sMap.UNDER_REVIEW || 0) + (sMap.REVIEWING || 0) + (sMap.SENT_TO_CLIENT || 0) + (sMap.SUBMITTED || 0) + (sMap.CLIENT_REVIEW || 0);
-          if (combinedCompanyReview > 0) sMap.COMPANY_REVIEW = combinedCompanyReview;
-          const combinedConsentPending = (sMap.CONSENT_PENDING || 0) + (sMap.CONSENT_SENT || 0);
-          sMap.CONSENT_PENDING = combinedConsentPending;
-          delete sMap.ADMIN_REVIEW;
-          delete sMap.ADMIN_REJECTED;
-          delete sMap.UNDER_REVIEW;
-          delete sMap.REVIEWING;
-          return sMap;
-        })(),
+        stats: {
+          totalAll: totalRegistryCandidates,
+          platformTotal: totalPlatformCandidates,
+          pendingReview: pendingReviewCount,
+          activePipelines: activePipelinesCount,
+          consentPending: consentPendingCount,
+          s1ScreenSelect: s1ScreenSelectCount,
+          sentToClient: sentToClientCount,
+          byStatus: sMap
+        },
+        summary: sMap,
         pagination: {
           current: sanitizedPage,
-          pages: Math.ceil(total / sanitizedLimit) || 1,
-          total
+          pages: Math.ceil(totalFiltered / sanitizedLimit) || 1,
+          total: totalFiltered
         }
       }
     });

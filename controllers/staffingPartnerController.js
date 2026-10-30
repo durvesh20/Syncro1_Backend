@@ -2928,7 +2928,7 @@ const resolveTalentStatusQuery = (rawStatus, rawTab) => {
       (s.includes('S1') && s.includes('SELECT')) ||
       (s.includes('SCREEN') && s.includes('SELECT'))
     ) {
-      return ['S1_SCREEN_SELECT', 'S1_SELECTED', 'ADMIN_APPROVED', 'SCREEN_SELECTED', 'SCREEN_SELECT', 'S1_SCREEN_SELECTED'];
+      return ['S1_SCREEN_SELECT', 'S1_SELECTED', 'ADMIN_APPROVED', 'SCREEN_SELECTED', 'SCREEN_SELECT', 'SELECT_SCREEN', 'S1_SCREEN_SELECTED'];
     }
 
     // Client Screen Reject (Check BEFORE general S1 or reject)
