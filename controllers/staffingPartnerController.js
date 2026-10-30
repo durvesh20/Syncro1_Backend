@@ -2921,12 +2921,9 @@ const resolveTalentStatusQuery = (rawStatus, rawTab) => {
       s === 'S1_SCREEN_SELECT' ||
       s === 'S1_SELECT' ||
       s === 'SCREEN_SELECT' ||
-      s === 'SELECT_SCREEN' ||
       s === 'S1_SCREEN_SELECTED' ||
       s === 'ADMIN_APPROVED' ||
-      s === 'S1_SELECT_SELECT' ||
-      (s.includes('S1') && s.includes('SELECT')) ||
-      (s.includes('SCREEN') && s.includes('SELECT'))
+      (s.includes('S1') && s.includes('SELECT'))
     ) {
       return ['S1_SCREEN_SELECT', 'S1_SELECTED', 'ADMIN_APPROVED', 'SCREEN_SELECTED', 'SCREEN_SELECT', 'SELECT_SCREEN', 'S1_SCREEN_SELECTED'];
     }
