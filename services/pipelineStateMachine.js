@@ -824,13 +824,10 @@ function validatePipelineTemplate(rounds) {
   if (!Array.isArray(rounds) || rounds.length === 0) {
     return { ok: false, error: 'Pipeline must contain at least one round.' };
   }
-  if (rounds.length > 6) {
-    return { ok: false, error: 'Pipeline cannot exceed 6 rounds.' };
-  }
 
   // Ensure roundType names are unique (case-insensitive) to prevent state mapping collisions
   const seen = new Set();
-  let hasHrRound = false;
+  const validHrNames = ['hr', 'hr round', 'hr_round', 'human resource', 'human resource round'];
 
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
@@ -844,11 +841,6 @@ function validatePipelineTemplate(rounds) {
     }
 
     const normalized = r.roundType.trim().toLowerCase();
-    
-    const validHrNames = ['hr', 'hr round', 'hr_round', 'human resource', 'human resource round'];
-    if (validHrNames.includes(normalized)) {
-      hasHrRound = true;
-    }
 
     if (seen.has(normalized)) {
       return { ok: false, error: `Duplicate round name "${r.roundType}" is not allowed.` };
@@ -856,8 +848,10 @@ function validatePipelineTemplate(rounds) {
     seen.add(normalized);
   }
 
-  if (!hasHrRound) {
-    return { ok: false, error: 'Pipeline must contain an HR round (named "HR", "HR Round", or "Human Resource").' };
+  const lastRound = rounds[rounds.length - 1];
+  const lastRoundNormalized = (lastRound?.roundType || '').trim().toLowerCase();
+  if (!validHrNames.includes(lastRoundNormalized)) {
+    return { ok: false, error: 'The interview pipeline must conclude with an HR Round as the final stage.' };
   }
 
   return { ok: true };

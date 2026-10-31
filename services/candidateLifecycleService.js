@@ -93,8 +93,12 @@ class CandidateLifecycleService {
         slots: [],
         rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
       }));
-      if (candidate.rounds.length > 0 && newStatus === 'SHORTLISTED') {
-        finalStatus = candidate.rounds[0].status;
+      if (candidate.rounds.length > 0) {
+        if (newStatus === 'SHORTLISTED') {
+          finalStatus = candidate.rounds[0].status;
+        } else if (newStatus === 'CLIENT_SCREEN_SELECT' && candidate.rounds[0].status === 'ASSESSMENT_PENDING') {
+          finalStatus = 'ASSESSMENT_PENDING';
+        }
       }
 
       // Populate audit trail for pipeline transition

@@ -1230,9 +1230,17 @@ router.put(
         }
       }
 
+      if (results.successful.length === 0 && results.failed.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: results.failed[0]?.error || 'None of the selected candidates could be sent to client. STRICTLY only candidates with S1 Screen Select status can be sent to client.',
+          data: results
+        });
+      }
+
       res.json({
         success: true,
-        message: `Sent ${results.successful.length} candidate(s) to client successfully.`,
+        message: `Sent ${results.successful.length} candidate(s) to client successfully.${results.failed.length > 0 ? ` (${results.failed.length} candidate(s) were skipped because they were not S1 Screen Select)` : ''}`,
         data: results
       });
     } catch (error) {

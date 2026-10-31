@@ -337,12 +337,13 @@ describe('validatePipelineTemplate', () => {
     expect(r.ok).toBe(true);
   });
 
-  test('HR round can be anywhere in the pipeline template', () => {
+  test('HR round must be the last round in the pipeline template', () => {
     const r = validatePipelineTemplate([
       { roundType: 'HR_ROUND', order: 1 },
       { roundType: 'L1_INTERVIEW', order: 2 },
     ]);
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch('HR Round');
   });
 
   test('duplicate round types rejected', () => {
@@ -354,10 +355,13 @@ describe('validatePipelineTemplate', () => {
     expect(r.error).toMatch('Duplicate');
   });
 
-  test('more than 6 rounds rejected', () => {
-    const rounds = Array.from({ length: 7 }, (_, i) => ({ roundType: 'L1_INTERVIEW', order: i + 1 }));
+  test('more than 6 rounds allowed as long as last is HR round', () => {
+    const rounds = [
+      ...Array.from({ length: 6 }, (_, i) => ({ roundType: `ROUND_${i + 1}`, order: i + 1 })),
+      { roundType: 'HR_ROUND', order: 7 }
+    ];
     const r = validatePipelineTemplate(rounds);
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
   });
 });
 

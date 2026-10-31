@@ -3951,8 +3951,10 @@ exports.getDashboard = async (req, res) => {
       success: true,
       data: {
         partner: {
-          name: `${partner.firstName} ${partner.lastName}`,
+          name: partner.firmName || `${partner.firstName} ${partner.lastName}`,
           firmName: partner.firmName,
+          firstName: partner.firstName,
+          lastName: partner.lastName,
           verificationStatus: partner.verificationStatus
         },
         metrics: {

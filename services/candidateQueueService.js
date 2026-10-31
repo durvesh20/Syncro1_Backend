@@ -488,9 +488,12 @@ class CandidateQueueService {
 
         if (!candidate) throw new Error('Candidate not found');
 
-        const allowedSendStatuses = ['S1_SCREEN_SELECT', 'S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING'];
+        const allowedSendStatuses = [
+            'S1_SCREEN_SELECT',
+            'ADMIN_APPROVED',
+        ];
         if (!allowedSendStatuses.includes(candidate.status)) {
-            throw new Error(`Cannot send candidate to client from status: ${candidate.status}`);
+            throw new Error(`Cannot send candidate to client: candidate '${candidate.firstName} ${candidate.lastName}' has status '${candidate.status}'. STRICTLY only candidates with 'S1 Screen Select' status can be sent to client. Candidates in S1 Review, Consent Pending, or Rejected must first clear S1 Screen Select.`);
         }
 
         candidate.status = 'SENT_TO_CLIENT';
