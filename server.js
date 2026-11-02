@@ -44,6 +44,8 @@ require('./models/WebhookEndpoint');
 require('./models/WebhookDelivery');
 require('./models/ApiLog');
 require('./models/IntegrationEvent');
+require('./models/PartnerTournament');
+require('./models/PartnerPointEvent');
 
 const app = express();
 
@@ -148,7 +150,7 @@ const corsOptions = {
     'X-Syncro1-Signature',
     'X-Syncro1-Timestamp'
   ],
-  exposedHeaders: ['Set-Cookie', 'X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset']
+  exposedHeaders: ['Set-Cookie', 'Content-Disposition', 'X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset']
 };
 
 app.use(cors(corsOptions));

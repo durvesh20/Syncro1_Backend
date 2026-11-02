@@ -820,7 +820,7 @@ const candidateSchema = new mongoose.Schema({
 
     // Weighted composite of the four sub-scores (0–100)
     prescreen_score:  { type: Number, default: null },
-
+    
     // Status label derived from prescreen_score thresholds
     status: {
       type: String,
@@ -999,6 +999,61 @@ candidateSchema.pre('save', function (next) {
     this.uniqueId = `${year}${date}${month}-${hours}${minutes}${seconds}-${random}`;
   }
   next();
+});
+
+// Real-time Partner Program points calculation hooks
+candidateSchema.post('save', async function (doc) {
+  try {
+    if (doc && (doc.submittedBy || doc._id)) {
+      const { processCandidateStageChange } = require('../services/partnerProgramService');
+      setImmediate(async () => {
+        try {
+          await processCandidateStageChange(doc);
+        } catch (e) {
+          console.error('[PARTNER_PROGRAM_HOOK] Error calculating points on save:', e.message);
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[PARTNER_PROGRAM_HOOK] Initialization error:', err.message);
+  }
+});
+
+candidateSchema.post('findOneAndUpdate', async function (doc) {
+  try {
+    const candidateId = doc?._id || this.getQuery?.()?._id;
+    if (candidateId) {
+      const { processCandidateStageChange } = require('../services/partnerProgramService');
+      setImmediate(async () => {
+        try {
+          await processCandidateStageChange(doc || { _id: candidateId });
+        } catch (e) {
+          console.error('[PARTNER_PROGRAM_HOOK] Error calculating points on update:', e.message);
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[PARTNER_PROGRAM_HOOK] Update hook error:', err.message);
+  }
+});
+
+candidateSchema.post('updateOne', async function () {
+  try {
+    const query = this.getQuery ? this.getQuery() : null;
+    const candidateId = query?._id || query?.id;
+    if (candidateId) {
+      const { processCandidateStageChange } = require('../services/partnerProgramService');
+      setImmediate(async () => {
+        try {
+          await processCandidateStageChange({ _id: candidateId });
+        } catch (e) {
+          console.error('[PARTNER_PROGRAM_HOOK] Error calculating points on updateOne:', e.message);
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[PARTNER_PROGRAM_HOOK] updateOne hook error:', err.message);
+  }
 });
 
 module.exports = mongoose.model('Candidate', candidateSchema);

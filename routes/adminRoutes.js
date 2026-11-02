@@ -1504,8 +1504,14 @@ const { pipelineResendInterviewConsent } = require('../controllers/pipelineResen
 router.post('/candidates/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
 
 // Screening Questions Admin endpoint
-const { getJobScreeningQuestionsForAdmin } = require('../controllers/adminController');
+const { 
+  getJobScreeningQuestionsForAdmin,
+  updateJobReportTrackerByAdmin,
+  getJobReportTrackerByAdmin
+} = require('../controllers/adminController');
 router.get('/jobs/:jobId/screening-questions', getJobScreeningQuestionsForAdmin);
+router.patch('/jobs/:jobId/report-tracker', updateJobReportTrackerByAdmin);
+router.get('/jobs/:jobId/report-tracker', getJobReportTrackerByAdmin);
 
 // ==================== PRE-SCREEN & MANUAL AI MATCH ====================
 
@@ -1674,5 +1680,39 @@ const {
 router.get('/integrations', getAllIntegrations);
 router.get('/integrations/:id', getIntegrationDetail);
 router.put('/integrations/:id/status', updateIntegrationStatus);
+
+// ==================== PARTNER PROGRAM & PERFORMANCE CHALLENGE ====================
+const {
+  getAllTournaments,
+  getTournamentById,
+  getCurrentTournament,
+  createTournament,
+  updateTournament,
+  deleteTournament,
+  saveTournament,
+  getAdminRankings,
+  getAdminPartnerAudit,
+  triggerBackfill,
+  createProgramPartners,
+  updatePartnerPointsAndRank,
+  deleteProgramPartner
+} = require('../controllers/partnerProgramController');
+
+router.get('/partner-program/tournaments', getAllTournaments);
+router.get('/partner-program/tournaments/:id', getTournamentById);
+router.post('/partner-program/tournaments', createTournament);
+router.put('/partner-program/tournaments/:id', updateTournament);
+router.delete('/partner-program/tournaments/:id', deleteTournament);
+
+router.get('/partner-program/tournament', getCurrentTournament);
+router.post('/partner-program/tournament', saveTournament);
+router.get('/partner-program/rankings', getAdminRankings);
+router.get('/partner-program/:partnerId/audit', getAdminPartnerAudit);
+router.post('/partner-program/backfill', triggerBackfill);
+
+// Admin Talent Partner creation & Points/Rank Management
+router.post('/partner-program/partners', createProgramPartners);
+router.put('/partner-program/partners/:partnerId/rank-points', updatePartnerPointsAndRank);
+router.delete('/partner-program/partners/:partnerId', deleteProgramPartner);
 
 module.exports = router;

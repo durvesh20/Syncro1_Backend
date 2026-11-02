@@ -146,6 +146,13 @@ class CandidateLifecycleService {
         .catch(err => console.error('[LIFECYCLE] Joining handler failed:', err.message));
     }
 
+    // ✅ Step 6: Trigger Partner Program Tournament points evaluation (fire-and-forget)
+    try {
+      const partnerProgramService = require('./partnerProgramService');
+      partnerProgramService.processCandidateStageChange(candidate)
+        .catch(err => console.error('[PARTNER_PROGRAM] Real-time point award failed:', err.message));
+    } catch (_) {}
+
     return candidate;
   }
 

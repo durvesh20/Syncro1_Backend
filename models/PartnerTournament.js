@@ -1,0 +1,98 @@
+// backend/models/PartnerTournament.js
+const mongoose = require('mongoose');
+
+const partnerTournamentSchema = new mongoose.Schema({
+  title: {
+    type: String,
+    required: true,
+    trim: true,
+    default: 'Syncro1 Vendor Performance & Delivery Challenge 🏆'
+  },
+  description: {
+    type: String,
+    trim: true,
+    default: 'Quality + Speed + Consistency = Higher Score & Recognition 🏆'
+  },
+  bgImage: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  recognitionBadges: [{
+    icon: {
+      type: String,
+      default: '🥇'
+    },
+    title: {
+      type: String,
+      default: ''
+    },
+    desc: {
+      type: String,
+      default: ''
+    }
+  }],
+  startDate: {
+    type: Date,
+    required: true,
+    default: Date.now
+  },
+  endDate: {
+    type: Date,
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['UPCOMING', 'ACTIVE', 'COMPLETED', 'PAUSED'],
+    default: 'ACTIVE'
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  participants: [{
+    partner: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'StaffingPartner'
+    },
+    joinedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  rules: {
+    s1ReviewPoints: { type: Number, default: 10 },
+    s1ScreenSelectPoints: { type: Number, default: 10 },
+    clientScreenSelectPoints: { type: Number, default: 10 },
+    round2Points: { type: Number, default: 10 },
+    offeredPoints: { type: Number, default: 20 },
+    joinedPoints: { type: Number, default: 20 },
+    retention90Points: { type: Number, default: 20 },
+    // backward compatibility
+    screenedPoints: { type: Number, default: 10 },
+    submittedPoints: { type: Number, default: 10 },
+    interviewPoints: { type: Number, default: 10 },
+    selectedPoints: { type: Number, default: 10 }
+  }
+}, {
+  timestamps: true
+});
+
+// Helper virtual to compute live status based on dates
+partnerTournamentSchema.virtual('liveStatus').get(function () {
+  if (!this.isActive) return 'PAUSED';
+  const now = new Date();
+  if (now < this.startDate) return 'UPCOMING';
+  if (now > this.endDate) return 'COMPLETED';
+  return 'ACTIVE';
+});
+
+partnerTournamentSchema.set('toJSON', { virtuals: true });
+partnerTournamentSchema.set('toObject', { virtuals: true });
+
+module.exports = mongoose.model('PartnerTournament', partnerTournamentSchema);
+
