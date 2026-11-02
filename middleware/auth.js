@@ -33,6 +33,10 @@ exports.protect = async (req, res, next) => {
       });
     }
 
+    if (req.user.role === 'staffing' || req.user.role === 'staffing_partner') {
+      req.user.role = 'talent_partner';
+    }
+
     if (req.user.status === 'SUSPENDED') {
       return res.status(403).json({
         success: false,
@@ -52,7 +56,18 @@ exports.protect = async (req, res, next) => {
 // Generic role authorization
 exports.authorize = (...roles) => {
   return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
+    // Treat 'talent_partner' and 'talent' interchangeably
+    const partnerRoles = new Set(['talent_partner', 'talent']);
+    const requestedRoles = new Set(roles);
+    const hasPartnerRequested = roles.some(r => partnerRoles.has(r));
+
+    const userRole = req.user?.role;
+    const isAuthorized = userRole && (
+      requestedRoles.has(userRole) ||
+      (hasPartnerRequested && partnerRoles.has(userRole))
+    );
+
+    if (!req.user || !isAuthorized) {
       return res.status(403).json({
         success: false,
         message: `User role ${req.user?.role} is not authorized to access this route`

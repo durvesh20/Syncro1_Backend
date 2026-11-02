@@ -61,7 +61,7 @@ const CANDIDATE_DETAILS_SECTION = {
     { key: 'cand_resume', label: 'Resume', path: 'resume.url', type: 'string', compute: 'cand_resume', default: false },
     { key: 'cand_linkedin', label: 'LinkedIn', path: 'profile.linkedinProfile', type: 'string', default: false },
     { key: 'cand_consentStatus', label: 'Consent Status', path: 'consent.consentStatus', type: 'string', default: false },
-    { key: 'cand_submittedAt', label: 'Submitted At', path: 'createdAt', type: 'date', default: false }
+    { key: 'cand_submittedAt', label: 'Submitted At', path: 'createdAt', type: 'date', compute: 'cand_submittedAt', default: false }
   ]
 };
 
@@ -97,7 +97,7 @@ const CANDIDATE_REJECTION_SECTION = {
   sectionKey: 'rejectionDetails',
   label: 'Rejection Details',
   fields: [
-    { key: 'rej_adminAction', label: 'Admin Review Action', path: 'adminQueue.action', type: 'string', default: false },
+    { key: 'rej_adminAction', label: 'S1 Review Action', path: 'adminQueue.action', type: 'string', default: false },
     { key: 'rej_reason', label: 'Rejection Reason', path: 'adminQueue.rejectionReason', type: 'string', default: false },
     { key: 'rej_reviewNotes', label: 'Review Notes', path: 'adminQueue.reviewNotes', type: 'string', default: false },
     { key: 'rej_rejectedBy', label: 'Rejected By (Name)', path: 'reviewedByUser.name', type: 'string', compute: 'rej_rejectedBy', default: false },
@@ -190,7 +190,7 @@ const JOB_METRICS_SECTION = {
 
 // Candidate FSM statuses (surfaced as a multi-select filter option list)
 const CANDIDATE_STATUS_OPTIONS = [
-  'CONSENT_PENDING', 'SUBMITTED', 'ADMIN_REVIEW', 'SHORTLISTED', 'SLOT_ASSIGNED', 
+  'CONSENT_PENDING', 'SUBMITTED', 'S1_REVIEW', 'COMPANY_REVIEW', 'SHORTLISTED', 'SLOT_ASSIGNED', 
   'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'ROUND_SELECTED_NEXT', 
   'HR_ROUND_PENDING', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED', 'REJECTED', 
   'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP', 'WITHDRAWN', 'ON_HOLD'
@@ -441,7 +441,7 @@ const reportFieldRegistry = {
   JOB_LIST_WITH_SUBMITTED_CANDIDATES: {
     label: 'Job List with Submitted Candidates',
     description: 'Jobs you have access to, and the candidates you personally submitted for each.',
-    allowedRoles: ['staffing_partner'],
+    allowedRoles: ['talent_partner'],
     base: 'candidates',
     scope: { collection: 'staffingpartners', userField: 'user', field: 'submittedBy' },
     lookups: CANDIDATE_LOOKUPS,
@@ -469,7 +469,7 @@ function getFieldMap(reportType, role) {
   const map = {};
 
   let sections = def.sections || [];
-  if (role === 'staffing_partner' || role === 'company') {
+  if (role === 'talent_partner' || role === 'company') {
     sections = sections.filter((s) => s.sectionKey !== 'candidateScoring');
     sections = sections.map((s) => {
       if (s.sectionKey === 'candidateDetails') {
@@ -522,9 +522,9 @@ function getConfigForRole(reportType, role) {
     return true;
   });
 
-  // Filter out AI Scoring section, linkedin, and submitted by partner fields for staffing_partner and company roles
+  // Filter out AI Scoring section, linkedin, and submitted by partner fields for talent_partner and company roles
   let sections = def.sections || [];
-  if (role === 'staffing_partner' || role === 'company') {
+  if (role === 'talent_partner' || role === 'company') {
     sections = sections.filter((s) => s.sectionKey !== 'candidateScoring');
     sections = sections.map((s) => {
       if (s.sectionKey === 'candidateDetails') {

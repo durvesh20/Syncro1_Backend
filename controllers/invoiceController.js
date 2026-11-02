@@ -337,7 +337,7 @@ exports.getInvoices = async (req, res) => {
         company: company._id,
         invoiceType: 'SYNCRO1_TO_COMPANY'
       };
-    } else if (req.user.role === 'staffing_partner') {
+    } else if (req.user.role === 'talent_partner') {
       const partner = await StaffingPartner.findOne({ user: req.user._id });
       if (!partner) {
         return res.status(404).json({ success: false, message: 'Partner not found' });
@@ -449,7 +449,7 @@ exports.getInvoice = async (req, res) => {
       if (!company || invoice.company._id.toString() !== company._id.toString()) {
         return res.status(403).json({ success: false, message: 'Not authorized' });
       }
-    } else if (req.user.role === 'staffing_partner') {
+    } else if (req.user.role === 'talent_partner') {
       const partner = await StaffingPartner.findOne({ user: req.user._id });
       if (!partner || invoice.staffingPartner._id.toString() !== partner._id.toString()) {
         return res.status(403).json({ success: false, message: 'Not authorized' });

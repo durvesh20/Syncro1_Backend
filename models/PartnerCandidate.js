@@ -122,6 +122,11 @@ const partnerCandidateSchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+  currentDesignation: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   education: {
     type: String,
     trim: true,

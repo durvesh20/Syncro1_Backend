@@ -4,7 +4,7 @@
  * Every transition: (currentState, action, role, payload) -> { ok, nextState, error }
  *
  * Source of truth for all 24 pipeline states defined in the spec §1.7.
- * Existing pre-pipeline states (DRAFT, CONSENT_PENDING, ADMIN_REVIEW, SUBMITTED, etc.)
+ * Existing pre-pipeline states (DRAFT, CONSENT_PENDING, S1_REVIEW, SUBMITTED, etc.)
  * are handled by the existing statusMachine.js — this FSM picks up from SHORTLISTED onward.
  */
 
@@ -15,6 +15,8 @@ const ROUND_TYPES = ['ASSESSMENT', 'L1_INTERVIEW', 'L2_INTERVIEW', 'L3_INTERVIEW
 const PIPELINE_STATES = {
   // Entry (bridges from existing flow)
   SHORTLISTED: 'SHORTLISTED',
+  CLIENT_SCREEN_SELECT: 'CLIENT_SCREEN_SELECT',
+  CLIENT_SCREEN_REJECT: 'CLIENT_SCREEN_REJECT',
 
   // Assessment round
   ASSESSMENT_PENDING: 'ASSESSMENT_PENDING',
@@ -110,7 +112,7 @@ const ACTIONS = {
 // ─── Role constants ───────────────────────────────────────────────────────────
 const ROLES = {
   COMPANY: 'company',      // "Client" in spec
-  STAFFING_PARTNER: 'staffing_partner',  // "Vendor" in spec
+  TALENT_PARTNER: 'talent_partner',      // "Talent Partner"
   CANDIDATE: 'candidate',
   ADMIN: 'admin',          // oversight only — never permitted on mutating transitions
 };
@@ -320,7 +322,7 @@ const TRANSITIONS = {
 
   [PIPELINE_STATES.SLOTS_PUBLISHED]: {
     [ACTIONS.BOOK_SLOT]: {
-      allowedRoles: [ROLES.STAFFING_PARTNER, ROLES.ADMIN],
+      allowedRoles: [ROLES.TALENT_PARTNER, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
     },
     [ACTIONS.SELECT_DIRECT_HR]: {
@@ -349,7 +351,7 @@ const TRANSITIONS = {
       nextState: PIPELINE_STATES.INTERVIEW_CONDUCTED,
     },
     [ACTIONS.REQUEST_RESCHEDULE]: {
-      allowedRoles: [ROLES.COMPANY, ROLES.STAFFING_PARTNER, ROLES.CANDIDATE, ROLES.ADMIN],
+      allowedRoles: [ROLES.COMPANY, ROLES.TALENT_PARTNER, ROLES.CANDIDATE, ROLES.ADMIN],
       nextState: PIPELINE_STATES.RESCHEDULE_REQUESTED,
       requiresReason: true,
     },
@@ -376,7 +378,7 @@ const TRANSITIONS = {
 
   [PIPELINE_STATES.SLOT_DETAILS_SHARED]: {
     [ACTIONS.REQUEST_RESCHEDULE]: {
-      allowedRoles: [ROLES.COMPANY, ROLES.CANDIDATE, ROLES.STAFFING_PARTNER, ROLES.ADMIN],
+      allowedRoles: [ROLES.COMPANY, ROLES.CANDIDATE, ROLES.TALENT_PARTNER, ROLES.ADMIN],
       nextState: PIPELINE_STATES.RESCHEDULE_REQUESTED,
       requiresReason: true,
     },
@@ -407,7 +409,7 @@ const TRANSITIONS = {
 
   [PIPELINE_STATES.RESCHEDULE_REQUESTED]: {
     [ACTIONS.CONFIRM_RESCHEDULE]: {
-      allowedRoles: [ROLES.COMPANY, ROLES.STAFFING_PARTNER, ROLES.ADMIN],
+      allowedRoles: [ROLES.COMPANY, ROLES.TALENT_PARTNER, ROLES.ADMIN],
       nextState: PIPELINE_STATES.SLOT_DETAILS_SHARED,
     },
     [ACTIONS.REJECT_RESCHEDULE]: {
@@ -678,7 +680,11 @@ function transition({ currentState, action, role, payload = {}, context = {} }) 
   }
 
   // ── RBAC check ───────────────────────────────────────────────────────────
-  if (!txn.allowedRoles.includes(role)) {
+  const partnerRoles = new Set(['talent_partner', 'talent']);
+  const isRoleAllowed = txn.allowedRoles.includes(role) ||
+    (partnerRoles.has(role) && txn.allowedRoles.some(r => partnerRoles.has(r)));
+
+  if (!isRoleAllowed) {
     return _err(
       `Role "${role}" cannot perform action "${action}" from state "${state}". Allowed roles: [${txn.allowedRoles.join(', ')}]`,
       'FORBIDDEN'
@@ -722,7 +728,7 @@ function transition({ currentState, action, role, payload = {}, context = {} }) 
   }
 
   // ── Reschedule cap (partner-initiated only) ────────────────────────────
-  if (action === ACTIONS.REQUEST_RESCHEDULE && role === ROLES.STAFFING_PARTNER) {
+  if (action === ACTIONS.REQUEST_RESCHEDULE && (role === ROLES.TALENT_PARTNER || role === 'talent')) {
     const count = context.partnerRescheduleCount ?? 0;
     if (count >= MAX_PARTNER_RESCHEDULES) {
       return _err(
@@ -818,13 +824,10 @@ function validatePipelineTemplate(rounds) {
   if (!Array.isArray(rounds) || rounds.length === 0) {
     return { ok: false, error: 'Pipeline must contain at least one round.' };
   }
-  if (rounds.length > 6) {
-    return { ok: false, error: 'Pipeline cannot exceed 6 rounds.' };
-  }
 
   // Ensure roundType names are unique (case-insensitive) to prevent state mapping collisions
   const seen = new Set();
-  let hasHrRound = false;
+  const validHrNames = ['hr', 'hr round', 'hr_round', 'human resource', 'human resource round'];
 
   for (let i = 0; i < rounds.length; i++) {
     const r = rounds[i];
@@ -838,11 +841,6 @@ function validatePipelineTemplate(rounds) {
     }
 
     const normalized = r.roundType.trim().toLowerCase();
-    
-    const validHrNames = ['hr', 'hr round', 'hr_round', 'human resource', 'human resource round'];
-    if (validHrNames.includes(normalized)) {
-      hasHrRound = true;
-    }
 
     if (seen.has(normalized)) {
       return { ok: false, error: `Duplicate round name "${r.roundType}" is not allowed.` };
@@ -850,8 +848,10 @@ function validatePipelineTemplate(rounds) {
     seen.add(normalized);
   }
 
-  if (!hasHrRound) {
-    return { ok: false, error: 'Pipeline must contain an HR round (named "HR", "HR Round", or "Human Resource").' };
+  const lastRound = rounds[rounds.length - 1];
+  const lastRoundNormalized = (lastRound?.roundType || '').trim().toLowerCase();
+  if (!validHrNames.includes(lastRoundNormalized)) {
+    return { ok: false, error: 'The interview pipeline must conclude with an HR Round as the final stage.' };
   }
 
   return { ok: true };

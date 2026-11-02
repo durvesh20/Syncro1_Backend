@@ -3,24 +3,29 @@
  * 
  * Flow:
  *   Partner submits candidate → SUBMITTED
- *   Company reviews → UNDER_REVIEW → SHORTLISTED → INTERVIEW_SCHEDULED
+ *   Company reviews → COMPANY_REVIEW → SHORTLISTED → INTERVIEW_SCHEDULED
  *   → INTERVIEWED → OFFERED → OFFER_ACCEPTED → JOINED
  *   
  *   At any point: REJECTED, WITHDRAWN, ON_HOLD
  */
 
 const CANDIDATE_TRANSITIONS = {
-  // ✅ NEW STATES
+  // ✅ PRE-PIPELINE STATES
   'DRAFT': ['CONSENT_PENDING', 'WITHDRAWN'],
   'CONSENT_PENDING': ['CONSENT_CONFIRMED', 'CONSENT_DENIED', 'WITHDRAWN'],
-  'CONSENT_CONFIRMED': ['ADMIN_REVIEW', 'WITHDRAWN'],
+  'CONSENT_CONFIRMED': ['S1_REVIEW', 'WITHDRAWN'],
   'CONSENT_DENIED': [],                             // terminal
-  'ADMIN_REVIEW': ['SUBMITTED', 'ADMIN_REJECTED'],
-  'ADMIN_REJECTED': ['ADMIN_REVIEW', 'SUBMITTED'],                             // can be revoked back to review
+  'S1_REVIEW': ['S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED', 'SENT_TO_CLIENT', 'SUBMITTED', 'WITHDRAWN'],
+  'S1_SCREEN_SELECT': ['SENT_TO_CLIENT', 'SUBMITTED', 'S1_SCREEN_REJECT', 'S1_REJECTED', 'S1_REVIEW', 'WITHDRAWN'],
+  'S1_SCREEN_REJECT': ['S1_REVIEW', 'S1_SCREEN_SELECT'],
+  'S1_REJECTED': ['S1_REVIEW', 'S1_SCREEN_SELECT'],                             // can be revoked back to review
 
-  // ✅ EXISTING STATES (unchanged)
-  'SUBMITTED': ['UNDER_REVIEW', 'SHORTLISTED', 'REJECTED', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
-  'UNDER_REVIEW': ['SHORTLISTED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
+  // ✅ PIPELINE STATES
+  'SENT_TO_CLIENT': ['COMPANY_REVIEW', 'CLIENT_SCREEN_SELECT', 'CLIENT_SCREEN_REJECT', 'SHORTLISTED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP', 'S1_SCREEN_SELECT', 'S1_REVIEW'],
+  'SUBMITTED': ['COMPANY_REVIEW', 'CLIENT_SCREEN_SELECT', 'CLIENT_SCREEN_REJECT', 'SHORTLISTED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP', 'S1_SCREEN_SELECT', 'S1_REVIEW'],
+  'COMPANY_REVIEW': ['CLIENT_SCREEN_SELECT', 'CLIENT_SCREEN_REJECT', 'SHORTLISTED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
+  'CLIENT_SCREEN_SELECT': ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'CLIENT_SCREEN_REJECT', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
+  'CLIENT_SCREEN_REJECT': ['CLIENT_SCREEN_SELECT', 'SHORTLISTED', 'COMPANY_REVIEW', 'SENT_TO_CLIENT'],
   'SHORTLISTED': ['INTERVIEW_SCHEDULED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
   'INTERVIEW_SCHEDULED': ['INTERVIEWED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
   'INTERVIEWED': ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'OFFERED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'SLOTS_NOT_PUBLISHED', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
@@ -29,12 +34,12 @@ const CANDIDATE_TRANSITIONS = {
   'ONBOARDING': ['JOINED', 'NOT_JOINED', 'WITHDRAWN', 'CANDIDATE_DROP'],
   'OFFER_DECLINED': ['SHORTLISTED', 'CANDIDATE_DROP'],
   'JOINED': [],               // Terminal
-  'REJECTED': ['SHORTLISTED'],   // Can be reconsidered
+  'REJECTED': ['SHORTLISTED', 'CLIENT_SCREEN_SELECT'],   // Can be reconsidered
   'CLIENT_PORTAL_DUPLICATE': ['SHORTLISTED'],
   'CANDIDATE_DROP': ['SHORTLISTED'],
   'NOT_JOINED': [],           // Terminal
   'WITHDRAWN': [],                // Terminal
-  'ON_HOLD': ['UNDER_REVIEW', 'SHORTLISTED', 'REJECTED', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
+  'ON_HOLD': ['COMPANY_REVIEW', 'SHORTLISTED', 'REJECTED', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
 
   // FSM states compatibility
   'SLOTS_NOT_PUBLISHED': ['SLOTS_PUBLISHED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN', 'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP'],
@@ -67,11 +72,20 @@ const JOB_TRANSITIONS = {
   'DISCONTINUED':     []                    // terminal
 };
 
+const LEGACY_STATUS_ADAPT_MAP = {
+  'ADMIN_REVIEW': 'S1_REVIEW',
+  'ADMIN_REJECTED': 'S1_REJECTED',
+  'UNDER_REVIEW': 'COMPANY_REVIEW',
+  'REVIEWING': 'COMPANY_REVIEW',
+  'PENDING_ADMIN_APPROVAL': 'S1_REVIEW'
+};
+
 // What each role is allowed to change
 const ROLE_PERMISSIONS = {
   candidate: {
     company: [
-      'UNDER_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED',
+      'CLIENT_SCREEN_SELECT', 'CLIENT_SCREEN_REJECT',
+      'COMPANY_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED',
       'INTERVIEWED', 'OFFERED', 'OFFER_ACCEPTED', 'OFFER_DECLINED',
       'JOINED', 'REJECTED', 'ON_HOLD',
       'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED',
@@ -79,9 +93,11 @@ const ROLE_PERMISSIONS = {
       'OFFER_SENT', 'INTERVIEW_CONFIRMED',
       'CLIENT_PORTAL_DUPLICATE', 'CANDIDATE_DROP', 'NOT_JOINED', 'ONBOARDING'
     ],
-    staffing_partner: ['WITHDRAWN'],
+    talent_partner: ['WITHDRAWN'],
     admin: [
-      'UNDER_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED',
+      'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'SENT_TO_CLIENT', 'SUBMITTED',
+      'CLIENT_SCREEN_SELECT', 'CLIENT_SCREEN_REJECT',
+      'COMPANY_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED',
       'INTERVIEWED', 'OFFERED', 'OFFER_ACCEPTED', 'OFFER_DECLINED',
       'JOINED', 'REJECTED', 'ON_HOLD', 'WITHDRAWN',
       'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED',
@@ -107,15 +123,17 @@ class StatusMachine {
    * @param {string} type - 'candidate' or 'job'
    * @param {string} currentStatus 
    * @param {string} newStatus 
-   * @param {string} userRole - 'company', 'staffing_partner', 'admin'
+   * @param {string} userRole - 'company', 'talent_partner', 'admin'
    * @returns {object} { allowed, message, allowedTransitions, hint? }
    */
   static canTransition(type, currentStatus, newStatus, userRole = null) {
     const transitions = type === 'candidate' ? CANDIDATE_TRANSITIONS : JOB_TRANSITIONS;
 
-    // ✅ FIX 1: Normalize status strings (handle case mismatches, whitespace)
-    const current = currentStatus?.toString().toUpperCase().trim();
-    const target = newStatus?.toString().toUpperCase().trim();
+    // ✅ FIX 1: Normalize status strings and adapt legacy statuses
+    const rawCurrent = currentStatus?.toString().toUpperCase().trim();
+    const rawTarget = newStatus?.toString().toUpperCase().trim();
+    const current = (type === 'candidate' && LEGACY_STATUS_ADAPT_MAP[rawCurrent]) ? LEGACY_STATUS_ADAPT_MAP[rawCurrent] : rawCurrent;
+    const target = (type === 'candidate' && LEGACY_STATUS_ADAPT_MAP[rawTarget]) ? LEGACY_STATUS_ADAPT_MAP[rawTarget] : rawTarget;
 
     // ✅ FIX 2: Validate inputs exist
     if (!current || !target) {
@@ -178,8 +196,9 @@ class StatusMachine {
    * Get all valid next statuses for a given status + role
    */
   static getNextActions(type, currentStatus, userRole = null) {
-    // ✅ FIX: Normalize status
-    const current = currentStatus?.toString().toUpperCase().trim();
+    // ✅ FIX: Normalize status and adapt legacy statuses
+    const rawCurrent = currentStatus?.toString().toUpperCase().trim();
+    const current = (type === 'candidate' && LEGACY_STATUS_ADAPT_MAP[rawCurrent]) ? LEGACY_STATUS_ADAPT_MAP[rawCurrent] : rawCurrent;
     const transitions = type === 'candidate' ? CANDIDATE_TRANSITIONS : JOB_TRANSITIONS;
     const allowed = transitions[current] || [];
 
@@ -199,10 +218,15 @@ class StatusMachine {
       'CONSENT_PENDING': 'Awaiting Candidate Consent',
       'CONSENT_CONFIRMED': 'Consent Confirmed',
       'CONSENT_DENIED': 'Consent Denied',
-      'ADMIN_REVIEW': 'Under Admin Review',
-      'ADMIN_REJECTED': 'Not Approved',
-      'SUBMITTED': 'Submitted',
-      'UNDER_REVIEW': 'Under Review',
+      'S1_REVIEW': 'S1 Review',
+      'S1_SCREEN_SELECT': 'S1 Screen Select',
+      'S1_SCREEN_REJECT': 'S1 Screen Reject',
+      'S1_REJECTED': 'S1 Screen Reject',
+      'SENT_TO_CLIENT': 'Sent To Client',
+      'SUBMITTED': 'Sent To Client',
+      'COMPANY_REVIEW': 'Under Company Review',
+      'CLIENT_SCREEN_SELECT': 'Client Screen Select',
+      'CLIENT_SCREEN_REJECT': 'Client Screen Reject',
       'SHORTLISTED': 'Shortlisted',
       'INTERVIEW_SCHEDULED': 'Interview Scheduled',
       'INTERVIEWED': 'Interviewed',
@@ -226,7 +250,8 @@ class StatusMachine {
       'DISCONTINUED':     'Discontinued'
     };
 
-    const normalized = status?.toString().toUpperCase().trim();
+    const rawNormalized = status?.toString().toUpperCase().trim();
+    const normalized = LEGACY_STATUS_ADAPT_MAP[rawNormalized] || rawNormalized;
     return labels[normalized] || status;
   }
 

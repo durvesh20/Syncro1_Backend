@@ -11,7 +11,7 @@ const adminActionLogSchema = new mongoose.Schema({
     },
     actorRole: {
         type: String,
-        enum: ['admin', 'sub_admin', 'company', 'staffing_partner'],
+        enum: ['admin', 'sub_admin', 'company', 'talent_partner'],
         required: true
     },
     actorEmail: {

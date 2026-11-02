@@ -31,7 +31,7 @@ class DuplicateDetectionService {
 
   /**
    * Check if a candidate can be submitted to a job
-   * Called by staffing partner BEFORE submission
+   * Called by Talent Partner BEFORE submission
    * 
    * Rules:
    * 1. Same email/mobile + same job = ALWAYS BLOCK

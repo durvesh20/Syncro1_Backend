@@ -1,4 +1,5 @@
 // backend/controllers/staffingPartnerController.js
+const mongoose = require('mongoose');
 const StaffingPartner = require('../models/StaffingPartner');
 const User = require('../models/User');
 const Job = require('../models/Job');
@@ -19,8 +20,8 @@ const { transition, ACTIONS, PIPELINE_STATES } = require('../services/pipelineSt
 // PROFILE ROUTES
 // ============================================================
 
-// @desc    Get Staffing Partner Profile
-// @route   GET /api/staffing-partners/profile
+// @desc    Get Talent Partner Profile
+// @route   GET /api/talent-partners/profile
 exports.getProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({
@@ -48,7 +49,7 @@ exports.getProfile = async (req, res) => {
 };
 
 // @desc    Update Basic Info
-// @route   PUT /api/staffing-partners/profile/basic-info
+// @route   PUT /api/talent-partners/profile/basic-info
 exports.updateBasicInfo = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -92,7 +93,7 @@ exports.updateBasicInfo = async (req, res) => {
           });
         }
 
-        // Custom domain check: only one staffing partner allowed per custom domain
+        // Custom domain check: only one talent partner allowed per custom domain
         const domain = normalizedEmail.split('@')[1];
         const genericEmailDomains = new Set([
           'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
@@ -101,7 +102,7 @@ exports.updateBasicInfo = async (req, res) => {
         ]);
         if (!genericEmailDomains.has(domain)) {
           const domainExists = await User.findOne({
-            role: 'staffing_partner',
+            role: 'talent_partner',
             email: new RegExp(`@${domain}$`, 'i'),
             _id: { $ne: req.user._id }
           });
@@ -160,7 +161,7 @@ exports.updateBasicInfo = async (req, res) => {
 };
 
 // @desc    Update Firm Details
-// @route   PUT /api/staffing-partners/profile/firm-details
+// @route   PUT /api/talent-partners/profile/firm-details
 exports.updateFirmDetails = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -229,7 +230,7 @@ exports.updateFirmDetails = async (req, res) => {
 };
 
 // @desc    Update Syncro1 Competency
-// @route   PUT /api/staffing-partners/profile/Syncro1-competency
+// @route   PUT /api/talent-partners/profile/Syncro1-competency
 exports.updateSyncro1Competency = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -260,7 +261,7 @@ exports.updateSyncro1Competency = async (req, res) => {
 };
 
 // @desc    Update Geographic Reach
-// @route   PUT /api/staffing-partners/profile/geographic-reach
+// @route   PUT /api/talent-partners/profile/geographic-reach
 exports.updateGeographicReach = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -291,7 +292,7 @@ exports.updateGeographicReach = async (req, res) => {
 };
 
 // @desc    Update Compliance & Ethical Declarations
-// @route   PUT /api/staffing-partners/profile/compliance
+// @route   PUT /api/talent-partners/profile/compliance
 exports.updateCompliance = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -376,7 +377,7 @@ exports.updateCompliance = async (req, res) => {
 };
 
 // @desc    Update Commercial & Payout Details
-// @route   PUT /api/staffing-partners/profile/commercial-details
+// @route   PUT /api/talent-partners/profile/commercial-details
 exports.updateCommercialDetails = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -427,7 +428,7 @@ exports.updateCommercialDetails = async (req, res) => {
 };
 
 // @desc    Update Team Access
-// @route   PUT /api/staffing-partners/profile/team-access
+// @route   PUT /api/talent-partners/profile/team-access
 exports.updateTeamAccess = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -466,7 +467,7 @@ exports.updateTeamAccess = async (req, res) => {
 };
 
 // @desc    Add Team Member
-// @route   POST /api/staffing-partners/profile/team-access/member
+// @route   POST /api/talent-partners/profile/team-access/member
 exports.addTeamMember = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -538,7 +539,7 @@ exports.addTeamMember = async (req, res) => {
 };
 
 // @desc    Update Team Member
-// @route   PUT /api/staffing-partners/profile/team-access/member/:memberId
+// @route   PUT /api/talent-partners/profile/team-access/member/:memberId
 exports.updateTeamMember = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -610,7 +611,7 @@ exports.updateTeamMember = async (req, res) => {
 };
 
 // @desc    Remove Team Member
-// @route   DELETE /api/staffing-partners/profile/team-access/member/:memberId
+// @route   DELETE /api/talent-partners/profile/team-access/member/:memberId
 exports.removeTeamMember = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -667,7 +668,7 @@ exports.removeTeamMember = async (req, res) => {
 };
 
 // @desc    Get Team Members
-// @route   GET /api/staffing-partners/profile/team-access/members
+// @route   GET /api/talent-partners/profile/team-access/members
 exports.getTeamMembers = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -698,7 +699,7 @@ exports.getTeamMembers = async (req, res) => {
 };
 
 // @desc    Get Profile Completion Status
-// @route   GET /api/staffing-partners/profile/completion
+// @route   GET /api/talent-partners/profile/completion
 exports.getProfileCompletion = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id }).populate(
@@ -750,7 +751,7 @@ exports.getProfileCompletion = async (req, res) => {
 };
 
 // @desc    Submit Profile for Verification
-// @route   POST /api/staffing-partners/profile/submit
+// @route   POST /api/talent-partners/profile/submit
 exports.submitProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -833,7 +834,7 @@ exports.submitProfile = async (req, res) => {
     if (!partner.agreement?.agreed) {
       return res.status(400).json({
         success: false,
-        message: 'Please read and accept the Master Staffing Partner Agreement before submitting'
+        message: 'Please read and accept the Master Talent Partner Agreement before submitting'
       });
     }
 
@@ -868,11 +869,11 @@ exports.submitProfile = async (req, res) => {
               <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                           color: white; padding: 30px; border-radius: 10px 10px 0 0;">
                 <h1 style="margin: 0; font-size: 22px;">Syncro1</h1>
-                <p style="margin: 5px 0 0 0; opacity: 0.9;">Master Staffing Partner Agreement</p>
+                <p style="margin: 5px 0 0 0; opacity: 0.9;">Master Talent Partner Agreement</p>
               </div>
               <div style="padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb;">
                 <p>Dear ${partner.firstName} ${partner.lastName},</p>
-                <p>Thank you for accepting the Master Staffing Partner Agreement
+                <p>Thank you for accepting the Master Talent Partner Agreement
                    and submitting your profile for verification.</p>
                 <div style="text-align: center; margin: 30px 0;">
                   <a href="${partner.agreement.pdfUrl}"
@@ -931,7 +932,7 @@ exports.submitProfile = async (req, res) => {
 // ============================================================
 
 // @desc    Get Available Jobs
-// @route   GET /api/staffing-partners/jobs
+// @route   GET /api/talent-partners/jobs
 exports.getAvailableJobs = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -1010,7 +1011,7 @@ exports.getAvailableJobs = async (req, res) => {
 };
 
 // @desc    Get Job Details
-// @route   GET /api/staffing-partners/jobs/:id
+// @route   GET /api/talent-partners/jobs/:id
 exports.getJobDetails = async (req, res) => {
   try {
     const job = await Job.findById(req.params.id)
@@ -1114,7 +1115,7 @@ exports.getJobDetails = async (req, res) => {
 };
 
 // @desc    Download Job Position / JD as PDF
-// @route   GET /api/staffing-partners/jobs/:id/download-jd
+// @route   GET /api/talent-partners/jobs/:id/download-jd
 exports.downloadJobPositionPdf = async (req, res) => {
   try {
     const Job = require('../models/Job');
@@ -1152,7 +1153,7 @@ exports.downloadJobPositionPdf = async (req, res) => {
 // ============================================================
 
 // @desc    Submit candidate WITH resume — single multipart/form-data request
-// @route   POST /api/staffing-partners/jobs/:jobId/candidates
+// @route   POST /api/talent-partners/jobs/:jobId/candidates
 //
 // Request:  multipart/form-data
 // Required fields:
@@ -1265,6 +1266,7 @@ exports.submitCandidate = async (req, res) => {
       lastWorkingDay,
       willingToRelocate,
       currentCompany,
+      currentDesignation,
       education
     } = req.body;
 
@@ -1573,7 +1575,7 @@ exports.submitCandidate = async (req, res) => {
         expectedSalary: parsedExpectedSalary, // ✅ parsed int (no comma issue)
         writeup: writeup?.trim() || '',
         currentCompany: currentCompany?.trim() || parsedProfile?.currentCompany || '',
-        currentDesignation: parsedProfile?.currentDesignation || '',
+        currentDesignation: currentDesignation?.trim() || parsedProfile?.currentDesignation || '',
         skills: parsedProfile?.skills || [],
         education: normalizedEducation,
         experience: parsedProfile?.experience || [],
@@ -1801,7 +1803,7 @@ exports.getAvailableSlotsForPartner = async (req, res) => {
     const partnerCandidates = await Candidate.find({
       job: req.params.jobId,
       submittedBy: partner._id,
-      status: { $in: ['SHORTLISTED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED', 'RESCHEDULE_REQUESTED'] },
+      status: { $in: ['SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED', 'SLOT_ASSIGNED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_DETAILS_SHARED', 'RESCHEDULE_REQUESTED'] },
     })
       .populate('assignedSlot')
       .select('firstName lastName email mobile status assignedSlot profile.currentDesignation rounds');
@@ -1974,11 +1976,11 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    // Candidate must be SHORTLISTED (legacy), SLOTS_PUBLISHED (pipeline), or SLOTS_NOT_PUBLISHED
-    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED') {
+    // Candidate must be SHORTLISTED (legacy), CLIENT_SCREEN_SELECT, SLOTS_PUBLISHED (pipeline), or SLOTS_NOT_PUBLISHED
+    if (candidate.status !== 'SHORTLISTED' && candidate.status !== 'CLIENT_SCREEN_SELECT' && candidate.status !== 'SLOTS_PUBLISHED' && candidate.status !== 'SLOTS_NOT_PUBLISHED') {
       return res.status(400).json({
         success: false,
-        message: `Only SHORTLISTED, SLOTS_PUBLISHED, or SLOTS_NOT_PUBLISHED candidates can be assigned to slots. Current status: ${candidate.status}`,
+        message: `Only SHORTLISTED, CLIENT_SCREEN_SELECT, SLOTS_PUBLISHED, or SLOTS_NOT_PUBLISHED candidates can be assigned to slots. Current status: ${candidate.status}`,
       });
     }
 
@@ -2171,7 +2173,7 @@ exports.assignCandidateToSlot = async (req, res) => {
       const fsmResult = transition({
         currentState: oldStatus,
         action: ACTIONS.BOOK_SLOT,
-        role: 'staffing_partner',
+        role: 'talent_partner',
       });
       if (!fsmResult.ok) {
         return res.status(400).json({ success: false, message: fsmResult.error });
@@ -2181,7 +2183,7 @@ exports.assignCandidateToSlot = async (req, res) => {
       const fsmResult = transition({
         currentState: oldStatus,
         action: ACTIONS.CONFIRM_RESCHEDULE,
-        role: 'staffing_partner',
+        role: 'talent_partner',
       });
       if (!fsmResult.ok) {
         return res.status(400).json({ success: false, message: fsmResult.error });
@@ -2266,7 +2268,7 @@ exports.assignCandidateToSlot = async (req, res) => {
       candidate.auditTrail = candidate.auditTrail || [];
       candidate.auditTrail.push({
         actorId: req.user._id,
-        actorRole: 'staffing_partner',
+        actorRole: 'talent_partner',
         action: ACTIONS.BOOK_SLOT,
         fromState: oldStatus,
         toState: candidate.status,
@@ -2454,7 +2456,7 @@ exports.removeCandidateFromSlot = async (req, res) => {
       candidate.auditTrail = candidate.auditTrail || [];
       candidate.auditTrail.push({
         actorId: req.user._id,
-        actorRole: 'staffing_partner',
+        actorRole: 'talent_partner',
         action: ACTIONS.REQUEST_RESCHEDULE,
         fromState: oldStatus,
         toState: nextStatus,
@@ -2486,7 +2488,7 @@ exports.removeCandidateFromSlot = async (req, res) => {
 };
 
 // PARTNER: Confirm pre-allotted tagged slot & send consent to candidate
-// POST /api/staffing-partners/jobs/:jobId/tagged-slot/confirm
+// POST /api/talent-partners/jobs/:jobId/tagged-slot/confirm
 exports.confirmTaggedSlot = async (req, res) => {
   try {
     const { candidateId, slotId } = req.body;
@@ -2606,7 +2608,7 @@ exports.confirmTaggedSlot = async (req, res) => {
       candidate.auditTrail = candidate.auditTrail || [];
       candidate.auditTrail.push({
         actorId: req.user._id,
-        actorRole: 'staffing_partner',
+        actorRole: 'talent_partner',
         action: 'CONFIRM_TAGGED_SLOT',
         fromState: oldStatus,
         toState: 'SLOT_DETAILS_SHARED',
@@ -2662,7 +2664,7 @@ exports.confirmTaggedSlot = async (req, res) => {
 };
 
 // PARTNER: Candidate Reject - candidate does not want to proceed with application
-// POST /api/staffing-partners/jobs/:jobId/tagged-slot/reject
+// POST /api/talent-partners/jobs/:jobId/tagged-slot/reject
 exports.rejectTaggedSlotByCandidate = async (req, res) => {
   try {
     const { candidateId, slotId, reason } = req.body;
@@ -2707,7 +2709,7 @@ exports.rejectTaggedSlotByCandidate = async (req, res) => {
         slot.activityLogs.push({
           action: 'SLOT_OPENED_ON_REJECT',
           performedBy: req.user._id,
-          performedByRole: 'staffing_partner',
+          performedByRole: 'talent_partner',
           performedByName: `${partner.firstName || ''} ${partner.lastName || ''}`.trim() || 'Partner',
           details: `Candidate ${candidate.firstName} ${candidate.lastName} dropped application. Slot opened to candidate pool. Reason: ${reason || ''}`.trim(),
           timestamp: new Date()
@@ -2758,7 +2760,7 @@ exports.rejectTaggedSlotByCandidate = async (req, res) => {
 // ============================================================
 
 // @desc    Update resume for an existing candidate
-// @route   POST /api/staffing-partners/candidates/:id/resume
+// @route   POST /api/talent-partners/candidates/:id/resume
 // @body    multipart/form-data — field name: "resume"
 // @note    Only the partner who submitted the candidate can update
 exports.uploadResume = async (req, res) => {
@@ -2837,8 +2839,323 @@ exports.uploadResume = async (req, res) => {
 // SUBMISSIONS
 // ============================================================
 
+// A single definition of each talent-partner submission group. These groups
+// power the tabs, their badges, dashboard cards, and deep links.
+const TALENT_SUBMISSION_STATUS_GROUPS = Object.freeze({
+  consent_pending: [
+    'CONSENT_PENDING',
+    'CONSENT_SENT',
+    'CONSENT_INITIATED',
+    'DRAFT'
+  ],
+  interview: [
+    'INTERVIEW_SCHEDULED',
+    'INTERVIEW_CONFIRMED',
+    'ACTIVE_INTERVIEWS',
+    'SLOT_ASSIGNED',
+    'SLOT_DETAILS_SHARED',
+    'INTERVIEWED',
+    'INTERVIEW_CONDUCTED',
+    'ROUND_ON_HOLD',
+    'ROUND_SELECTED_NEXT',
+    'ROUND_SELECTED_DIRECT_HR',
+    'HR_ROUND_PENDING',
+    'HR_SELECTED',
+    'HR_ON_HOLD'
+  ],
+  offer: [
+    'OFFERED',
+    'OFFER_SENT',
+    'OFFER_ACCEPTED',
+    'OFFER_DECLINED',
+    'OFFER_REJECTED',
+    'OFFER_EXTENDED'
+  ],
+  joined: [
+    'JOINED',
+    'HIRED',
+    'PLACED',
+    'ONBOARDING'
+  ],
+  slots_pending: [
+    'SLOTS_NOT_PUBLISHED',
+    'SLOTS_PUBLISHED',
+    'SLOTS_PENDING',
+    'RESCHEDULE_REQUESTED'
+  ]
+});
+
+// Comprehensive talent partner status group resolution
+const resolveTalentStatusQuery = (rawStatus, rawTab) => {
+  const s = String(rawStatus || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  const t = String(rawTab || '').trim().toLowerCase();
+
+  // 1. If explicit status filter is applied, it completely overrides any active tab
+  if (s && s !== 'ALL') {
+    // S1 Review (Pre-screening review queue)
+    if (
+      s === 'S1_REVIEW' ||
+      s === 'ADMIN_REVIEW' ||
+      s === 'PENDING_REVIEW' ||
+      s === 'PENDING_ADMIN_APPROVAL' ||
+      s === 'ADMIN_PENDING' ||
+      s === 'PRESCREEN_PENDING' ||
+      s === 'REVIEW' ||
+      s.includes('S1_REVIEW') ||
+      s.includes('ADMIN_REVIEW')
+    ) {
+      return ['S1_REVIEW', 'ADMIN_REVIEW', 'PENDING_REVIEW', 'PENDING_ADMIN_APPROVAL', 'ADMIN_PENDING', 'CONSENT_CONFIRMED', 'PRESCREEN_PENDING'];
+    }
+
+    // Client Screen Select (Check BEFORE general select to avoid conflict)
+    if (
+      s === 'CLIENT_SCREEN_SELECT' ||
+      s === 'COMPANY_SCREEN_SELECT' ||
+      ((s.includes('CLIENT') || s.includes('COMPANY')) && s.includes('SELECT'))
+    ) {
+      return ['CLIENT_SCREEN_SELECT', 'COMPANY_SCREEN_SELECT', 'SHORTLISTED', 'COMPANY_SHORTLISTED', 'CLIENT_SHORTLISTED'];
+    }
+
+    // S1 Screen Select (Passed internal S1 screening)
+    if (
+      s === 'S1_SCREEN_SELECT' ||
+      s === 'S1_SELECT' ||
+      s === 'SCREEN_SELECT' ||
+      s === 'S1_SCREEN_SELECTED' ||
+      s === 'ADMIN_APPROVED' ||
+      (s.includes('S1') && s.includes('SELECT'))
+    ) {
+      return ['S1_SCREEN_SELECT', 'S1_SELECTED', 'ADMIN_APPROVED', 'SCREEN_SELECTED', 'SCREEN_SELECT', 'SELECT_SCREEN', 'S1_SCREEN_SELECTED'];
+    }
+
+    // Client Screen Reject (Check BEFORE general S1 or reject)
+    if (
+      s === 'CLIENT_SCREEN_REJECT' ||
+      s === 'COMPANY_SCREEN_REJECT' ||
+      s === 'CLIENT_REJECTED' ||
+      s === 'COMPANY_REJECTED' ||
+      ((s.includes('CLIENT') || s.includes('COMPANY')) && s.includes('REJECT'))
+    ) {
+      return ['CLIENT_SCREEN_REJECT', 'COMPANY_SCREEN_REJECT', 'CLIENT_REJECTED', 'COMPANY_REJECTED', 'REJECTED'];
+    }
+
+    // S1 Screen Reject (Rejected during S1 review)
+    if (
+      s === 'S1_SCREEN_REJECT' ||
+      s === 'S1_SCREEN_REJECTED' ||
+      s === 'S1_REJECT' ||
+      s === 'S1_REJECTED' ||
+      s === 'ADMIN_REJECTED' ||
+      s === 'ADMIN_SCREEN_REJECT' ||
+      (s.includes('S1') && s.includes('REJECT'))
+    ) {
+      return ['S1_SCREEN_REJECT', 'S1_SCREEN_REJECTED', 'S1_REJECTED', 'ADMIN_REJECTED', 'ADMIN_SCREEN_REJECT'];
+    }
+
+    // Consent Pending / Consent
+    if (s === 'CONSENT_PENDING' || s === 'CONSENT_SENT' || s === 'CONSENT_INITIATED' || s.includes('CONSENT_PENDING')) {
+      return ['CONSENT_PENDING', 'CONSENT_SENT', 'CONSENT_INITIATED', 'DRAFT'];
+    }
+
+    if (s === 'CONSENT_CONFIRMED') {
+      return ['CONSENT_CONFIRMED', 'S1_REVIEW'];
+    }
+
+    if (s === 'CONSENT_DENIED') {
+      return ['CONSENT_DENIED'];
+    }
+
+    if (s === 'DRAFT') {
+      return ['DRAFT'];
+    }
+
+    // Sent to Client / Client Review
+    if (
+      s === 'SENT_TO_CLIENT' ||
+      s === 'SENT_TO_COMPANY' ||
+      s === 'SUBMITTED' ||
+      s === 'SUBMITTED_TO_COMPANY' ||
+      s === 'SUBMITTED_TO_CLIENT' ||
+      s === 'COMPANY_REVIEW' ||
+      s === 'CLIENT_REVIEW' ||
+      s === 'UNDER_REVIEW' ||
+      s === 'REVIEWING' ||
+      s.includes('SENT_TO') ||
+      s.includes('CLIENT_REVIEW') ||
+      s.includes('COMPANY_REVIEW')
+    ) {
+      return ['SENT_TO_CLIENT', 'SENT_TO_COMPANY', 'SUBMITTED', 'SUBMITTED_TO_COMPANY', 'SUBMITTED_TO_CLIENT', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'UNDER_REVIEW', 'REVIEWING'];
+    }
+
+    // Shortlisted
+    if (s === 'SHORTLISTED') {
+      return ['SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'COMPANY_SCREEN_SELECT', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'ROUND_ON_HOLD'];
+    }
+
+    // Assessment Pending & Assessment Failed (Must check BEFORE generic reject)
+    if (s === 'ASSESSMENT_FAILED') {
+      return ['ASSESSMENT_FAILED'];
+    }
+    if (s === 'ASSESSMENT_PENDING' || s === 'ASSESSMENT' || s.includes('ASSESSMENT')) {
+      return ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE', 'ASSESSMENT_PASSED'];
+    }
+
+    // Offer Rejected / Declined (Must check BEFORE generic offer and generic reject)
+    if (s === 'OFFER_REJECTED' || s === 'OFFER_DECLINED' || (s.includes('OFFER') && (s.includes('REJECT') || s.includes('DECLIN')))) {
+      return ['OFFER_REJECTED', 'OFFER_DECLINED'];
+    }
+
+    // Specific Interview Outcomes / Rounds (Check BEFORE broad interview or reject)
+    if (s === 'ROUND_REJECTED') {
+      return ['ROUND_REJECTED'];
+    }
+    if (s === 'HR_REJECTED') {
+      return ['HR_REJECTED'];
+    }
+    if (s === 'ROUND_SELECTED_NEXT' || s === 'PASSED_TO_NEXT_ROUND') {
+      return ['ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR'];
+    }
+    if (s === 'ROUND_SELECTED_DIRECT_HR' || s === 'SKIPPED_TO_HR') {
+      return ['ROUND_SELECTED_DIRECT_HR', 'ROUND_SELECTED_NEXT'];
+    }
+    if (s === 'ROUND_ON_HOLD') {
+      return ['ROUND_ON_HOLD', 'INTERVIEW_CONDUCTED', 'INTERVIEWED'];
+    }
+    if (s === 'HR_ROUND_PENDING') {
+      return ['HR_ROUND_PENDING', 'HR_ON_HOLD'];
+    }
+    if (s === 'HR_SELECTED') {
+      return ['HR_SELECTED'];
+    }
+    if (s === 'HR_ON_HOLD') {
+      return ['HR_ON_HOLD', 'HR_ROUND_PENDING'];
+    }
+    if (s === 'INTERVIEW_CONDUCTED' || s === 'INTERVIEWED') {
+      return ['INTERVIEW_CONDUCTED', 'INTERVIEWED', 'ROUND_ON_HOLD'];
+    }
+    if (s === 'RESCHEDULE_REQUESTED') {
+      return ['RESCHEDULE_REQUESTED', 'SLOTS_PENDING', 'SLOTS_NOT_PUBLISHED'];
+    }
+    if (s === 'INTERVIEW_SCHEDULED' || s === 'INTERVIEW_CONFIRMED') {
+      return ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'];
+    }
+
+    // Slots Pending / Slots Published (Check BEFORE broad interview)
+    if (s === 'SLOTS_PENDING' || s === 'SLOTS_NOT_PUBLISHED' || s === 'PENDING_INTERVIEW_SLOTS' || (s.includes('SLOT') && !s.includes('ASSIGN') && !s.includes('SHARE'))) {
+      return TALENT_SUBMISSION_STATUS_GROUPS.slots_pending;
+    }
+    if (s === 'SLOT_ASSIGNED' || s === 'SLOT_DETAILS_SHARED' || s.includes('SLOT_BOOKED')) {
+      return ['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'];
+    }
+
+    // Active Interviews (Broad group)
+    if (s === 'ACTIVE_INTERVIEWS' || s === 'INTERVIEW' || s.includes('INTERVIEW')) {
+      return TALENT_SUBMISSION_STATUS_GROUPS.interview;
+    }
+
+    // Specific Offer statuses
+    if (s === 'OFFER_ACCEPTED') {
+      return ['OFFER_ACCEPTED'];
+    }
+    if (s === 'OFFER_SENT' || s === 'OFFERED' || s === 'OFFER_EXTENDED') {
+      return ['OFFERED', 'OFFER_SENT'];
+    }
+    if (s === 'OFFER' || s.includes('OFFER')) {
+      return ['OFFERED', 'OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_EXTENDED'];
+    }
+
+    // Joined / Placed
+    if (s === 'JOINED' || s === 'HIRED' || s === 'PLACED' || s === 'ONBOARDING' || s.includes('JOIN')) {
+      return TALENT_SUBMISSION_STATUS_GROUPS.joined;
+    }
+
+    // General Rejection (Matches all rejection variants)
+    if (s === 'REJECT' || s === 'REJECTED' || s.includes('REJECT')) {
+      return [
+        'REJECTED',
+        'CLIENT_REJECTED',
+        'COMPANY_REJECTED',
+        'S1_REJECTED',
+        'S1_SCREEN_REJECT',
+        'S1_SCREEN_REJECTED',
+        'ADMIN_REJECTED',
+        'ADMIN_SCREEN_REJECT',
+        'ROUND_REJECTED',
+        'HR_REJECTED',
+        'OFFER_REJECTED',
+        'OFFER_DECLINED',
+        'ASSESSMENT_FAILED',
+        'CLIENT_SCREEN_REJECT',
+        'COMPANY_SCREEN_REJECT'
+      ];
+    }
+
+    // Duplicates and withdrawals
+    if (s.includes('DUPLICATE')) {
+      return ['CLIENT_PORTAL_DUPLICATE', 'COMPANY_PORTAL_DUPLICATE'];
+    }
+    if (s.includes('DROP')) {
+      return ['CANDIDATE_DROP'];
+    }
+    if (s.includes('WITHDRAW')) {
+      return ['WITHDRAWN'];
+    }
+
+    // Fallback: match normalized and original status
+    return [s, rawStatus].filter(Boolean);
+  }
+
+  // 2. Tab-based grouping when no specific status filter is chosen
+  if (t === 'consent_pending') return TALENT_SUBMISSION_STATUS_GROUPS.consent_pending;
+  if (t === 'interview') return TALENT_SUBMISSION_STATUS_GROUPS.interview;
+  if (t === 'offer') return TALENT_SUBMISSION_STATUS_GROUPS.offer;
+  if (t === 'joined') return TALENT_SUBMISSION_STATUS_GROUPS.joined;
+
+  return null;
+};
+
+const getTalentSubmissionCounts = async (baseQuery, existingStatusBreakdown) => {
+  const statusBreakdown = existingStatusBreakdown || await Candidate.aggregate([
+    { $match: baseQuery },
+    { $group: { _id: '$status', count: { $sum: 1 } } }
+  ]);
+
+  const countByStatus = new Map();
+  statusBreakdown.forEach(({ _id, count }) => {
+    const rawKey = String(_id || '').trim();
+    const normalizedKey = rawKey.toUpperCase().replace(/[\s-]+/g, '_');
+    countByStatus.set(normalizedKey, (countByStatus.get(normalizedKey) || 0) + count);
+    if (!countByStatus.has(rawKey)) {
+      countByStatus.set(rawKey, count);
+    }
+  });
+
+  const countGroup = (statuses) => statuses.reduce(
+    (total, candidateStatus) => {
+      const norm = String(candidateStatus).trim().toUpperCase().replace(/[\s-]+/g, '_');
+      return total + (countByStatus.get(norm) || countByStatus.get(candidateStatus) || 0);
+    },
+    0
+  );
+
+  const byStatus = {};
+  statusBreakdown.forEach(item => {
+    byStatus[item._id || 'UNKNOWN'] = item.count;
+  });
+
+  return {
+    all: statusBreakdown.reduce((total, item) => total + item.count, 0),
+    consent_pending: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.consent_pending),
+    interview: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.interview),
+    offer: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.offer),
+    joined: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.joined),
+    slots_pending: countGroup(TALENT_SUBMISSION_STATUS_GROUPS.slots_pending),
+    byStatus
+  };
+};
+
 // @desc    Get My Submissions
-// @route   GET /api/staffing-partners/submissions
+// @route   GET /api/talent-partners/submissions
 exports.getMySubmissions = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -2850,47 +3167,92 @@ exports.getMySubmissions = async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all', jobId, job: jobParam } = req.query;
-    const parsedPage = parseInt(page, 10) || 1;
-    const parsedLimit = parseInt(limit, 10) || 10;
+    const { page = 1, limit = 10, status, search, isManual, isInterview, tab = 'all', jobId, job: jobParam, company: companyParam, client: clientParam } = req.query;
+    const parsedPage = Math.max(parseInt(page, 10) || 1, 1);
+    const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
     const skip = (parsedPage - 1) * parsedLimit;
 
-    const query = { submittedBy: partner._id };
+    const partnerIds = [partner._id, req.user._id].filter(Boolean);
+    const partnerMatch = {
+      $or: [
+        { submittedBy: { $in: partnerIds } },
+        { partner: { $in: partnerIds } }
+      ]
+    };
+
+    const andConditions = [partnerMatch];
+    const baseCountsConditions = [partnerMatch];
 
     const targetJobId = jobId || jobParam;
-    if (targetJobId) {
-      query.job = targetJobId;
+    if (targetJobId && targetJobId !== 'all' && targetJobId !== 'ALL') {
+      const jobObjId = mongoose.Types.ObjectId.isValid(targetJobId)
+        ? new mongoose.Types.ObjectId(targetJobId)
+        : targetJobId;
+      const jobCond = { job: jobObjId };
+      andConditions.push(jobCond);
+      baseCountsConditions.push(jobCond);
     }
 
-    if (tab === 'consent_pending' || status === 'CONSENT_PENDING') {
-      query.status = 'CONSENT_PENDING';
-    } else if (tab === 'interview' || isInterview === 'true' || status === 'ACTIVE_INTERVIEWS') {
-      query.status = { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED'] };
-    } else if (tab === 'offer' || status === 'OFFERED') {
-      query.status = { $in: ['OFFERED', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'OFFER_REJECTED'] };
-    } else if (tab === 'joined' || status === 'JOINED') {
-      query.status = { $in: ['JOINED', 'HIRED'] };
-    } else if (status) {
-      query.status = status;
+    const targetCompanyId = companyParam || clientParam;
+    if (targetCompanyId && targetCompanyId !== 'all' && targetCompanyId !== 'ALL') {
+      if (mongoose.Types.ObjectId.isValid(targetCompanyId)) {
+        const compObjId = new mongoose.Types.ObjectId(targetCompanyId);
+        // Find jobs belonging to this company as fallback for older candidates where candidate.company was not set
+        const companyJobs = await Job.find({ company: compObjId }).select('_id').lean();
+        const companyJobIds = companyJobs.map(j => j._id);
+        
+        const compCond = {
+          $or: [
+            { company: compObjId },
+            { job: { $in: companyJobIds } }
+          ]
+        };
+        andConditions.push(compCond);
+        baseCountsConditions.push(compCond);
+      } else {
+        const compCond = { company: targetCompanyId };
+        andConditions.push(compCond);
+        baseCountsConditions.push(compCond);
+      }
     }
 
-    const andConditions = [];
+    const resolvedStatuses = resolveTalentStatusQuery(status, isInterview === 'true' ? 'interview' : tab);
+
+    if (resolvedStatuses && resolvedStatuses.length > 0) {
+      const statusRegexes = resolvedStatuses.map(s => {
+        const escaped = String(s).replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const pattern = escaped.replace(/_/g, '[\\s_-]*');
+        return new RegExp(`^\\s*${pattern}\\s*$`, 'i');
+      });
+
+      andConditions.push({
+        $or: [
+          { status: { $in: resolvedStatuses } },
+          { status: { $in: statusRegexes } }
+        ]
+      });
+    }
 
     if (isManual === 'true') {
-      andConditions.push({
+      const manualCond = {
         $or: [
           { poolCandidateRef: null },
           { poolCandidateRef: { $exists: false } }
         ]
-      });
+      };
+      andConditions.push(manualCond);
+      baseCountsConditions.push(manualCond);
     } else if (isManual === 'false') {
-      andConditions.push({
+      const notManualCond = {
         poolCandidateRef: { $ne: null, $exists: true }
-      });
+      };
+      andConditions.push(notManualCond);
+      baseCountsConditions.push(notManualCond);
     }
 
     if (search && search.trim()) {
-      const rx = new RegExp(search.trim(), 'i');
+      const escapedSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = new RegExp(escapedSearch, 'i');
 
       // Find matching jobs
       const matchingJobs = await Job.find({ title: rx }).select('_id');
@@ -2900,7 +3262,7 @@ exports.getMySubmissions = async (req, res) => {
       const matchingCompanies = await Company.find({ companyName: rx }).select('_id');
       const companyIds = matchingCompanies.map(c => c._id);
 
-      andConditions.push({
+      const searchCond = {
         $or: [
           { firstName: rx },
           { lastName: rx },
@@ -2909,14 +3271,15 @@ exports.getMySubmissions = async (req, res) => {
           { job: { $in: jobIds } },
           { company: { $in: companyIds } }
         ]
-      });
+      };
+      andConditions.push(searchCond);
+      baseCountsConditions.push(searchCond);
     }
 
-    if (andConditions.length > 0) {
-      query.$and = andConditions;
-    }
+    const query = andConditions.length === 1 ? andConditions[0] : { $and: andConditions };
+    const baseCountsQuery = baseCountsConditions.length === 1 ? baseCountsConditions[0] : { $and: baseCountsConditions };
 
-    const [rawSubmissions, total, countAll, countConsentPending, countInterview, countOffer, countJoined] = await Promise.all([
+    const [rawSubmissions, total, counts] = await Promise.all([
       Candidate.find(query)
         .populate('job', 'title company commission salary uniqueId')
         .populate('company', 'companyName')
@@ -2934,11 +3297,7 @@ exports.getMySubmissions = async (req, res) => {
         .populate('assignedSlot', 'date startTime endTime status interviewMode interviewDetails interviewerName notes isTagged candidateId')
         .lean(),
       Candidate.countDocuments(query),
-      Candidate.countDocuments({ submittedBy: partner._id }),
-      Candidate.countDocuments({ submittedBy: partner._id, status: 'CONSENT_PENDING' }),
-      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'SLOTS_PUBLISHED', 'SLOTS_NOT_PUBLISHED'] } }),
-      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['OFFERED', 'OFFER_ACCEPTED', 'OFFER_DECLINED', 'OFFER_REJECTED'] } }),
-      Candidate.countDocuments({ submittedBy: partner._id, status: { $in: ['JOINED', 'HIRED'] } })
+      getTalentSubmissionCounts(baseCountsQuery)
     ]);
 
     const submissions = rawSubmissions.map(sub => {
@@ -2961,13 +3320,7 @@ exports.getMySubmissions = async (req, res) => {
           limit: parsedLimit,
           pages: Math.ceil(total / parsedLimit)
         },
-        counts: {
-          all: countAll,
-          consent_pending: countConsentPending,
-          interview: countInterview,
-          offer: countOffer,
-          joined: countJoined
-        }
+        counts
       }
     });
   } catch (error) {
@@ -2985,7 +3338,7 @@ async function checkAndElevateCandidateStatus(candidate, userId) {
 }
 
 // @desc    Get Single Submission
-// @route   GET /api/staffing-partners/submissions/:id
+// @route   GET /api/talent-partners/submissions/:id
 exports.getSubmission = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -3026,7 +3379,7 @@ exports.getSubmission = async (req, res) => {
 };
 
 // @desc    Update Candidate Submission Details (Before Consent Confirmation)
-// @route   PUT /api/staffing-partners/submissions/:id
+// @route   PUT /api/talent-partners/submissions/:id
 exports.updateSubmission = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -3044,7 +3397,7 @@ exports.updateSubmission = async (req, res) => {
     }
 
     // Check status lock
-    const CONSENT_LOCKED_STATUSES = ['CONSENT_CONFIRMED', 'ADMIN_REVIEW', 'SUBMITTED', 'UNDER_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'];
+    const CONSENT_LOCKED_STATUSES = ['CONSENT_CONFIRMED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED', 'SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'];
     if (CONSENT_LOCKED_STATUSES.includes(submission.status)) {
       return res.status(403).json({
         success: false,
@@ -3069,6 +3422,7 @@ exports.updateSubmission = async (req, res) => {
       writeup,
       lastWorkingDay,
       currentCompany,
+      currentDesignation,
       education
     } = req.body;
 
@@ -3105,6 +3459,7 @@ exports.updateSubmission = async (req, res) => {
     if (expectedSalary !== undefined && expectedSalary !== '') submission.profile.expectedSalary = Number(expectedSalary);
     if (writeup !== undefined) submission.profile.writeup = writeup.trim();
     if (currentCompany !== undefined) submission.profile.currentCompany = currentCompany.trim();
+    if (currentDesignation !== undefined) submission.profile.currentDesignation = currentDesignation.trim();
     if (education !== undefined) {
       if (typeof education === 'string') {
         submission.profile.education = education.trim() ? [{ degree: education.trim() }] : [];
@@ -3149,6 +3504,7 @@ exports.updateSubmission = async (req, res) => {
         if (expectedSalary !== undefined && expectedSalary !== '') poolCandidate.expectedSalary = Number(expectedSalary);
         if (writeup !== undefined) poolCandidate.writeup = writeup.trim();
         if (currentCompany !== undefined) poolCandidate.currentCompany = currentCompany.trim();
+        if (currentDesignation !== undefined) poolCandidate.currentDesignation = currentDesignation.trim();
         if (education !== undefined) {
           poolCandidate.education = typeof education === 'string' ? education.trim() : (education?.[0]?.degree || '');
         }
@@ -3196,8 +3552,8 @@ exports.updateSubmission = async (req, res) => {
 // ============================================================
 
 // @desc    Resend WhatsApp consent to candidate
-// @route   POST /api/staffing-partners/submissions/:id/resend-consent
-// @access  Staffing Partner — only when candidate status is CONSENT_PENDING
+// @route   POST /api/talent-partners/submissions/:id/resend-consent
+// @access  Talent Partner — only when candidate status is CONSENT_PENDING
 exports.resendConsent = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -3297,7 +3653,7 @@ exports.resendConsent = async (req, res) => {
 // ============================================================
 
 // @desc    Withdraw Candidate
-// @route   PUT /api/staffing-partners/submissions/:id/withdraw
+// @route   PUT /api/talent-partners/submissions/:id/withdraw
 exports.withdrawCandidate = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -3328,8 +3684,10 @@ exports.withdrawCandidate = async (req, res) => {
       'DRAFT',
       'CONSENT_PENDING',
       'CONSENT_CONFIRMED',
-      'ADMIN_REVIEW',
-      'ADMIN_REJECTED',
+      'S1_REVIEW',
+      'S1_SCREEN_SELECT',
+      'S1_SCREEN_REJECT',
+      'S1_REJECTED',
       'CONSENT_DENIED'
     ];
 
@@ -3341,7 +3699,7 @@ exports.withdrawCandidate = async (req, res) => {
         status: 'WITHDRAWN',
         changedBy: req.user._id,
         changedAt: new Date(),
-        notes: reason || 'Withdrawn by staffing partner'
+        notes: reason || 'Withdrawn by Talent Partner'
       });
       await candidate.save();
 
@@ -3364,8 +3722,8 @@ exports.withdrawCandidate = async (req, res) => {
         candidate._id,
         'WITHDRAWN',
         req.user._id,
-        'staffing_partner',
-        reason || 'Withdrawn by staffing partner'
+        'talent_partner',
+        reason || 'Withdrawn by Talent Partner'
       );
 
       res.json({
@@ -3403,7 +3761,7 @@ exports.withdrawCandidate = async (req, res) => {
 // ============================================================
 
 // @desc    Get Dashboard Stats
-// @route   GET /api/staffing-partners/dashboard
+// @route   GET /api/talent-partners/dashboard
 exports.getDashboard = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id }).populate(
@@ -3420,13 +3778,21 @@ exports.getDashboard = async (req, res) => {
 
     const PartnerCandidate = require('../models/PartnerCandidate');
 
+    const partnerIds = [partner._id, req.user._id].filter(Boolean);
+    const partnerBaseQuery = {
+      $or: [
+        { submittedBy: { $in: partnerIds } },
+        { partner: { $in: partnerIds } }
+      ]
+    };
+
     // 1. Worked Jobs Count (unique jobs partner has submitted candidate(s) to)
-    const workedJobs = await Candidate.distinct('job', { submittedBy: partner._id });
+    const workedJobs = await Candidate.distinct('job', partnerBaseQuery);
     const totalWorkedJobs = workedJobs.length;
 
     // 2. Shortlisted Jobs Count (unique jobs with shortlisted/interview/joined candidate)
     const shortlistedJobs = await Candidate.distinct('job', {
-      submittedBy: partner._id,
+      ...partnerBaseQuery,
       status: { $in: ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'] }
     });
     const totalShortlistedJobs = shortlistedJobs.length;
@@ -3436,17 +3802,21 @@ exports.getDashboard = async (req, res) => {
 
     // 4. Total Manual Candidates submitted to jobs (where poolCandidateRef is null/undefined)
     const totalManualSubmissions = await Candidate.countDocuments({
-      submittedBy: partner._id,
-      $or: [
-        { poolCandidateRef: null },
-        { poolCandidateRef: { $exists: false } }
+      ...partnerBaseQuery,
+      $and: [
+        {
+          $or: [
+            { poolCandidateRef: null },
+            { poolCandidateRef: { $exists: false } }
+          ]
+        }
       ]
     });
 
     // 5. Active Interviews count
     const activeInterviewsCount = await Candidate.countDocuments({
-      submittedBy: partner._id,
-      status: { $in: ['INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'] }
+      ...partnerBaseQuery,
+      status: { $in: TALENT_SUBMISSION_STATUS_GROUPS.interview }
     });
 
     // 6. Calculate monthly placements for the last 6 months dynamically
@@ -3458,7 +3828,7 @@ exports.getDashboard = async (req, res) => {
     const monthlyPlacements = await Candidate.aggregate([
       {
         $match: {
-          submittedBy: partner._id,
+          ...partnerBaseQuery,
           status: { $in: ['JOINED', 'OFFER_ACCEPTED', 'HIRED', 'PLACED'] },
           createdAt: { $gte: sixMonthsAgo }
         }
@@ -3492,7 +3862,7 @@ exports.getDashboard = async (req, res) => {
       });
     }
 
-    const rawRecentSubmissions = await Candidate.find({ submittedBy: partner._id })
+    const rawRecentSubmissions = await Candidate.find(partnerBaseQuery)
       .populate('job', 'title')
       .populate('company', 'companyName')
       .sort({ createdAt: -1 })
@@ -3509,9 +3879,10 @@ exports.getDashboard = async (req, res) => {
     });
 
     const statusBreakdown = await Candidate.aggregate([
-      { $match: { submittedBy: partner._id } },
+      { $match: partnerBaseQuery },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
+    const counts = await getTalentSubmissionCounts(partnerBaseQuery, statusBreakdown);
 
     const mappedStatusBreakdown = [];
     statusBreakdown.forEach(item => {
@@ -3550,7 +3921,7 @@ exports.getDashboard = async (req, res) => {
       pendingPayouts: partner.metrics.pendingPayouts || 0,
       eligiblePayouts: partner.metrics.eligiblePayouts || 0,
       paidOut: partner.metrics.paidOut || 0,
-      totalPlacements: partner.metrics.totalPlacements || 0
+      totalPlacements: counts.joined || partner.metrics.totalPlacements || 0
     };
 
     const upcomingDate = new Date();
@@ -3580,8 +3951,10 @@ exports.getDashboard = async (req, res) => {
       success: true,
       data: {
         partner: {
-          name: `${partner.firstName} ${partner.lastName}`,
+          name: partner.firmName || `${partner.firstName} ${partner.lastName}`,
           firmName: partner.firmName,
+          firstName: partner.firstName,
+          lastName: partner.lastName,
           verificationStatus: partner.verificationStatus
         },
         metrics: {
@@ -3590,7 +3963,8 @@ exports.getDashboard = async (req, res) => {
           totalShortlistedJobs,
           totalPoolCandidates,
           totalManualSubmissions,
-          activeInterviewsCount
+          activeInterviewsCount: counts.interview || activeInterviewsCount,
+          totalPlacements: counts.joined || partner.metrics.totalPlacements || 0
         },
         subscription: partner.subscription,
         profileCompletion: {
@@ -3615,6 +3989,7 @@ exports.getDashboard = async (req, res) => {
           }))
         },
         recentSubmissions,
+        counts,
         statusBreakdown: mappedStatusBreakdown,
         availableJobsCount,
         placementData
@@ -3635,7 +4010,7 @@ exports.getDashboard = async (req, res) => {
 // ============================================================
 
 // @desc    Get Earnings / Payouts list
-// @route   GET /api/staffing-partners/earnings
+// @route   GET /api/talent-partners/earnings
 exports.getEarnings = async (req, res) => {
   try {
     const Payout = require('../models/Payout');
@@ -3746,7 +4121,7 @@ exports.getEarnings = async (req, res) => {
 };
 
 // @desc    Get single payout details
-// @route   GET /api/staffing-partners/earnings/:id
+// @route   GET /api/talent-partners/earnings/:id
 exports.getPayoutDetails = async (req, res) => {
   try {
     const Payout = require('../models/Payout');
@@ -3799,7 +4174,7 @@ exports.getPayoutDetails = async (req, res) => {
 // ============================================================
 
 // @desc    Get partner invoices list
-// @route   GET /api/staffing-partners/invoices
+// @route   GET /api/talent-partners/invoices
 exports.getInvoices = async (req, res) => {
   try {
     const Invoice = require('../models/Invoice');
@@ -3855,7 +4230,7 @@ exports.getInvoices = async (req, res) => {
 };
 
 // @desc    Get single invoice
-// @route   GET /api/staffing-partners/invoices/:id
+// @route   GET /api/talent-partners/invoices/:id
 exports.getInvoice = async (req, res) => {
   try {
     const Invoice = require('../models/Invoice');
@@ -3898,7 +4273,7 @@ exports.getInvoice = async (req, res) => {
 };
 
 // @desc    Get Worked Jobs (Jobs the partner has submitted candidates to)
-// @route   GET /api/staffing-partners/worked-jobs
+// @route   GET /api/talent-partners/worked-jobs
 exports.getWorkedJobs = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
@@ -4054,6 +4429,7 @@ exports.getWorkedJobs = async (req, res) => {
           uniqueId: item.jobDetails.uniqueId
         },
         company: {
+          _id: item.companyDetails?._id,
           companyName: item.companyDetails?.companyName || "N/A"
         },
         stats: {
@@ -4095,7 +4471,7 @@ exports.getWorkedJobs = async (req, res) => {
 
 /**
  * @desc   Get screening questions for a job (partner fetches before submitting)
- * @route  GET /api/staffing-partners/jobs/:jobId/screening-questions
+ * @route  GET /api/talent-partners/jobs/:jobId/screening-questions
  * @access StaffingPartner
  */
 exports.getJobScreeningQuestionsForPartner = async (req, res) => {

@@ -181,7 +181,7 @@ exports.getDashboard = async (req, res) => {
       }
       const userCount = await User.countDocuments(userQuery);
 
-      // Staffing Partners
+      // Talent Partners
       let partnerStatsQuery = {};
       if (!canViewAllPartners) {
         partnerStatsQuery.assignedTo = req.user._id;
@@ -417,7 +417,7 @@ exports.getPendingVerifications = async (req, res) => {
   }
 };
 
-// @desc    Verify Staffing Partner
+// @desc    Verify Talent Partner
 // @route   PUT /api/admin/verify/partner/:id
 exports.verifyPartner = async (req, res) => {
   try {
@@ -433,14 +433,14 @@ exports.verifyPartner = async (req, res) => {
     if (action === 'approve' && !hasPermission(req.user, PERMISSIONS.APPROVE_PARTNER)) {
       return res.status(403).json({
         success: false,
-        message: 'You do not have permission to approve staffing partners'
+        message: 'You do not have permission to approve talent partners'
       });
     }
 
     if (action === 'reject' && !hasPermission(req.user, PERMISSIONS.REJECT_PARTNER)) {
       return res.status(403).json({
         success: false,
-        message: 'You do not have permission to reject staffing partners'
+        message: 'You do not have permission to reject talent partners'
       });
     }
 
@@ -449,11 +449,11 @@ exports.verifyPartner = async (req, res) => {
     if (!partner) {
       return res.status(404).json({
         success: false,
-        message: 'Staffing partner not found'
+        message: 'Talent partner not found'
       });
     }
 
-    // Sub-admins can process any staffing partner
+    // Sub-admins can process any talent partner
 
     const user = await User.findById(partner.user);
 
@@ -475,7 +475,7 @@ exports.verifyPartner = async (req, res) => {
       await emailService.sendVerificationApproved(
         user.email,
         `${partner.firstName} ${partner.lastName}`,
-        'staffing_partner'
+        'talent_partner'
       );
     } else {
       if (!rejectionReason || rejectionReason.trim().length < 5) {
@@ -663,7 +663,19 @@ exports.getPayouts = async (req, res) => {
     const { status, page = 1, limit = 20, partnerId } = req.query;
 
     const query = {};
-    if (status) query.status = status;
+    if (status) {
+      if (status === 'S1_REVIEW' || status === 'ADMIN_REVIEW') {
+        query.status = 'S1_REVIEW';
+      } else if (status === 'S1_SCREEN_SELECT') {
+        query.status = 'S1_SCREEN_SELECT';
+      } else if (status === 'S1_SCREEN_REJECT' || status === 'S1_REJECTED' || status === 'ADMIN_REJECTED') {
+        query.status = { $in: ['S1_SCREEN_REJECT', 'S1_REJECTED'] };
+      } else if (status === 'SENT_TO_CLIENT' || status === 'SUBMITTED' || status === 'COMPANY_REVIEW' || status === 'CLIENT_REVIEW' || status === 'UNDER_REVIEW' || status === 'REVIEWING') {
+        query.status = { $in: ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW'] };
+      } else {
+        query.status = status;
+      }
+    }
     if (partnerId) query.staffingPartner = partnerId;
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
@@ -1196,6 +1208,7 @@ exports.adminCreateJobInterviewSlots = async (req, res) => {
         // 2. Shortlisted pipeline status validation
         const allowedCandidateStatuses = [
           'SHORTLISTED',
+          'CLIENT_SCREEN_SELECT',
           'SLOTS_NOT_PUBLISHED',
           'SLOTS_PUBLISHED',
           'ROUND_SELECTED_NEXT',
@@ -1666,6 +1679,7 @@ exports.adminUpdateJobInterviewSlot = async (req, res) => {
         // Validate shortlisted
         const allowedStatuses = [
           'SHORTLISTED',
+          'CLIENT_SCREEN_SELECT',
           'SLOTS_NOT_PUBLISHED',
           'SLOTS_PUBLISHED',
           'ROUND_SELECTED_NEXT',
@@ -1882,46 +1896,132 @@ exports.getUsers = async (req, res) => {
   try {
     const { role, status, emailVerified, mobileVerified, verified, page = 1, limit = 20, search } = req.query;
 
+    let roleQuery = undefined;
+    if (role === 'talent_partner') {
+      roleQuery = { $in: ['talent_partner', 'talent', 'staffing', 'staffing_partner'] };
+    } else if (role === 'company') {
+      roleQuery = { $in: ['company', 'employer', 'client'] };
+    } else if (role) {
+      roleQuery = role;
+    }
+
     const query = {};
-    if (role) query.role = role;
+    if (roleQuery) {
+      query.role = roleQuery;
+    }
 
     // Fetch profile status maps for role
     let approvedUserIds = [];
     let underReviewUserIds = [];
     let rejectedUserIds = [];
+    let suspendedUserIds = [];
 
-    if (role === 'staffing_partner') {
-      const [approved, underReview, rejected] = await Promise.all([
-        StaffingPartner.find({ verificationStatus: 'APPROVED' }).select('user'),
-        StaffingPartner.find({ verificationStatus: 'UNDER_REVIEW' }).select('user'),
-        StaffingPartner.find({ verificationStatus: 'REJECTED' }).select('user')
+    if (role === 'talent_partner') {
+      const [approved, underReview, rejected, partnerSuspended, userDocApproved, userDocUnderReview, userDocRejected, userDocSuspended] = await Promise.all([
+        StaffingPartner.find({ verificationStatus: { $in: ['APPROVED', 'VERIFIED', 'approved', 'verified'] } }).select('user'),
+        StaffingPartner.find({ verificationStatus: { $in: ['UNDER_REVIEW', 'UNDER_VERIFICATION', 'under_review', 'under_verification'] } }).select('user'),
+        StaffingPartner.find({ verificationStatus: { $in: ['REJECTED', 'rejected'] } }).select('user'),
+        StaffingPartner.find({
+          $or: [
+            { verificationStatus: { $in: ['SUSPENDED', 'suspended'] } },
+            { status: { $in: ['SUSPENDED', 'suspended'] } },
+            { isActive: false }
+          ]
+        }).select('user'),
+        User.find({ role: roleQuery, status: { $in: ['VERIFIED', 'APPROVED'] } }).select('_id'),
+        User.find({ role: roleQuery, status: { $in: ['UNDER_VERIFICATION', 'PROFILE_SUBMITTED', 'UNDER_REVIEW'] } }).select('_id'),
+        User.find({ role: roleQuery, status: { $in: ['REJECTED', 'rejected'] } }).select('_id'),
+        User.find({
+          role: roleQuery,
+          $or: [
+            { status: { $in: ['SUSPENDED', 'suspended'] } },
+            { suspendedAt: { $ne: null } },
+            { isSuspended: true }
+          ]
+        }).select('_id')
       ]);
-      approvedUserIds = approved.map(p => p.user?.toString()).filter(Boolean);
-      underReviewUserIds = underReview.map(p => p.user?.toString()).filter(Boolean);
-      rejectedUserIds = rejected.map(p => p.user?.toString()).filter(Boolean);
+
+      suspendedUserIds = [...new Set([
+        ...userDocSuspended.map(u => u._id.toString()),
+        ...partnerSuspended.map(p => p.user?.toString())
+      ])].filter(Boolean);
+
+      rejectedUserIds = [...new Set([
+        ...rejected.map(p => p.user?.toString()),
+        ...userDocRejected.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id));
+
+      approvedUserIds = [...new Set([
+        ...approved.map(p => p.user?.toString()),
+        ...userDocApproved.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id) && !rejectedUserIds.includes(id));
+
+      underReviewUserIds = [...new Set([
+        ...underReview.map(p => p.user?.toString()),
+        ...userDocUnderReview.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id) && !rejectedUserIds.includes(id) && !approvedUserIds.includes(id));
+
     } else if (role === 'company') {
-      const [approved, underReview, rejected] = await Promise.all([
-        Company.find({ verificationStatus: 'APPROVED' }).select('user'),
-        Company.find({ verificationStatus: 'UNDER_REVIEW' }).select('user'),
-        Company.find({ verificationStatus: 'REJECTED' }).select('user')
+      const [approved, underReview, rejected, companySuspended, userDocApproved, userDocUnderReview, userDocRejected, userDocSuspended] = await Promise.all([
+        Company.find({ verificationStatus: { $in: ['APPROVED', 'VERIFIED', 'approved', 'verified'] } }).select('user'),
+        Company.find({ verificationStatus: { $in: ['UNDER_REVIEW', 'UNDER_VERIFICATION', 'under_review', 'under_verification'] } }).select('user'),
+        Company.find({ verificationStatus: { $in: ['REJECTED', 'rejected'] } }).select('user'),
+        Company.find({
+          $or: [
+            { verificationStatus: { $in: ['SUSPENDED', 'suspended'] } },
+            { status: { $in: ['SUSPENDED', 'suspended'] } },
+            { isActive: false }
+          ]
+        }).select('user'),
+        User.find({ role: roleQuery, status: { $in: ['VERIFIED', 'APPROVED'] } }).select('_id'),
+        User.find({ role: roleQuery, status: { $in: ['UNDER_VERIFICATION', 'PROFILE_SUBMITTED', 'UNDER_REVIEW'] } }).select('_id'),
+        User.find({ role: roleQuery, status: { $in: ['REJECTED', 'rejected'] } }).select('_id'),
+        User.find({
+          role: roleQuery,
+          $or: [
+            { status: { $in: ['SUSPENDED', 'suspended'] } },
+            { suspendedAt: { $ne: null } },
+            { isSuspended: true }
+          ]
+        }).select('_id')
       ]);
-      approvedUserIds = approved.map(c => c.user?.toString()).filter(Boolean);
-      underReviewUserIds = underReview.map(c => c.user?.toString()).filter(Boolean);
-      rejectedUserIds = rejected.map(c => c.user?.toString()).filter(Boolean);
+
+      suspendedUserIds = [...new Set([
+        ...userDocSuspended.map(u => u._id.toString()),
+        ...companySuspended.map(c => c.user?.toString())
+      ])].filter(Boolean);
+
+      rejectedUserIds = [...new Set([
+        ...rejected.map(c => c.user?.toString()),
+        ...userDocRejected.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id));
+
+      approvedUserIds = [...new Set([
+        ...approved.map(c => c.user?.toString()),
+        ...userDocApproved.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id) && !rejectedUserIds.includes(id));
+
+      underReviewUserIds = [...new Set([
+        ...underReview.map(c => c.user?.toString()),
+        ...userDocUnderReview.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id) && !rejectedUserIds.includes(id) && !approvedUserIds.includes(id));
     }
 
     const nonActiveUserIds = [
       ...approvedUserIds,
       ...underReviewUserIds,
-      ...rejectedUserIds
+      ...rejectedUserIds,
+      ...suspendedUserIds
     ];
 
     if (verified === 'true') {
       query._id = { $in: approvedUserIds };
-    } else if (status === 'UNDER_VERIFICATION') {
+    } else if (status === 'UNDER_VERIFICATION' || status === 'UNDER_REVIEW') {
       query._id = { $in: underReviewUserIds };
     } else if (status === 'REJECTED') {
       query._id = { $in: rejectedUserIds };
+    } else if (status === 'SUSPENDED') {
+      query._id = { $in: suspendedUserIds };
     } else if (status === 'ACTIVE') {
       query._id = { $nin: nonActiveUserIds };
       if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
@@ -1944,7 +2044,7 @@ exports.getUsers = async (req, res) => {
         });
       }
 
-      if (!role || role === 'staffing_partner') {
+      if (!role || role === 'talent_partner') {
         const matchingPartners = await StaffingPartner.find({ firmName: searchRegex }).select('user');
         matchingPartners.forEach(p => {
           if (p.user) matchedUserIdsFromProfiles.push(p.user);
@@ -1994,7 +2094,7 @@ exports.getUsers = async (req, res) => {
       companies.forEach(c => {
         if (c.user) companyMap[c.user.toString()] = c.companyName;
       });
-    } else if (role === 'staffing_partner') {
+    } else if (role === 'talent_partner') {
       const partners = await StaffingPartner.find({ user: { $in: userIds } }).select('user firmName verificationStatus');
       partners.forEach(p => {
         if (p.user) partnerMap[p.user.toString()] = p.firmName;
@@ -2005,12 +2105,19 @@ exports.getUsers = async (req, res) => {
       const uObj = u.toObject();
       const uIdStr = u._id.toString();
 
+      const isSuspended = suspendedUserIds.includes(uIdStr) ||
+        String(u.status || '').toUpperCase() === 'SUSPENDED' ||
+        !!u.suspendedAt ||
+        u.isSuspended === true;
+
       let vStatus = 'ACTIVE';
-      if (approvedUserIds.includes(uIdStr)) {
+      if (isSuspended) {
+        vStatus = 'SUSPENDED';
+      } else if (approvedUserIds.includes(uIdStr) || String(u.status || '').toUpperCase() === 'VERIFIED' || String(u.status || '').toUpperCase() === 'APPROVED') {
         vStatus = 'APPROVED';
-      } else if (underReviewUserIds.includes(uIdStr)) {
+      } else if (underReviewUserIds.includes(uIdStr) || ['UNDER_VERIFICATION', 'PROFILE_SUBMITTED', 'UNDER_REVIEW'].includes(String(u.status || '').toUpperCase())) {
         vStatus = 'UNDER_REVIEW';
-      } else if (rejectedUserIds.includes(uIdStr)) {
+      } else if (rejectedUserIds.includes(uIdStr) || String(u.status || '').toUpperCase() === 'REJECTED') {
         vStatus = 'REJECTED';
       }
 
@@ -2027,10 +2134,11 @@ exports.getUsers = async (req, res) => {
 
       return {
         ...uObj,
+        status: isSuspended ? 'SUSPENDED' : u.status,
         verificationStatus: vStatus,
         subStatus,
         ...(role === 'company' ? { companyName: companyMap[uIdStr] || null } : {}),
-        ...(role === 'staffing_partner' ? { firmName: partnerMap[uIdStr] || null } : {})
+        ...((role === 'talent_partner') ? { firmName: partnerMap[uIdStr] || null } : {})
       };
     });
 
@@ -2040,7 +2148,7 @@ exports.getUsers = async (req, res) => {
     let stats = null;
     if (role) {
       const activeStageQuery = {
-        role,
+        role: roleQuery,
         _id: { $nin: nonActiveUserIds }
       };
 
@@ -2051,7 +2159,7 @@ exports.getUsers = async (req, res) => {
         mobilePendingCount,
         activeCompletedOtpCount
       ] = await Promise.all([
-        User.countDocuments({ role }),
+        User.countDocuments({ role: roleQuery }),
         User.countDocuments(activeStageQuery),
         User.countDocuments({ ...activeStageQuery, emailVerified: false }),
         User.countDocuments({ ...activeStageQuery, emailVerified: true, mobileVerified: false }),
@@ -2063,6 +2171,7 @@ exports.getUsers = async (req, res) => {
         verified: approvedUserIds.length,
         underVerification: underReviewUserIds.length,
         rejected: rejectedUserIds.length,
+        suspended: suspendedUserIds.length,
         active: activeTotalCount,
         emailPending: emailPendingCount,
         mobilePending: mobilePendingCount,
@@ -2103,7 +2212,7 @@ exports.updateUserStatus = async (req, res) => {
         return res.status(404).json({ success: false, message: 'User not found' });
       }
 
-      if (targetUser.role !== 'staffing_partner' && targetUser.role !== 'company' && targetUser.role !== 'employer') {
+      if (targetUser.role !== 'talent_partner' && targetUser.role !== 'company' && targetUser.role !== 'employer') {
         return res.status(403).json({ success: false, message: 'Unauthorized. Sub-admins cannot modify this user type.' });
       }
     }
@@ -2867,6 +2976,48 @@ exports.approveEditRequest = async (req, res) => {
       notes || 'Edit request approved'
     );
     await job.save();
+
+    // ✅ Sync candidates if pipelineTemplate was updated on edit approval
+    if (appliedChanges.pipelineTemplate && Array.isArray(appliedChanges.pipelineTemplate.new)) {
+      try {
+        const Candidate = require('../models/Candidate');
+        const { getInitialRoundState } = require('../services/pipelineStateMachine');
+        const normalized = appliedChanges.pipelineTemplate.new
+          .filter(r => r && r.roundType && typeof r.roundType === 'string' && r.roundType.trim().length > 0)
+          .map((r, i) => ({
+            roundType: r.roundType.trim(),
+            order: r.order ?? i + 1,
+          }));
+
+        const nonTerminalStates = [
+          'SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'SHORTLISTED',
+          'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED',
+          'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'
+        ];
+
+        const candidatesToUpdate = await Candidate.find({
+          job: job._id,
+          status: { $in: nonTerminalStates }
+        });
+
+        for (const cand of candidatesToUpdate) {
+          const hasOutcome = cand.rounds?.some(r => r.outcome && r.outcome.decision);
+          if (!hasOutcome) {
+            cand.pipelineTemplate = normalized;
+            cand.rounds = normalized.map(r => ({
+              roundType: r.roundType,
+              order: r.order,
+              status: getInitialRoundState(r.roundType),
+              slots: [],
+              rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+            }));
+            await cand.save();
+          }
+        }
+      } catch (ptSyncErr) {
+        console.error('Failed to sync candidates on pipelineTemplate edit approval:', ptSyncErr);
+      }
+    }
 
     // ✅ Sync talent partner slot sizes (submissionLimit) if vacancies were updated (1 vacancy = 5 slots)
     if (appliedChanges.vacancies) {
@@ -3729,6 +3880,333 @@ exports.setJobReportTrackerByAdmin = async (req, res) => {
   }
 };
 
+const resolveAdminStatusQuery = (rawStatus) => {
+  if (!rawStatus || rawStatus === 'all' || rawStatus === 'ALL') {
+    return null;
+  }
+  const s = String(rawStatus).trim().toUpperCase();
+
+  // 1. S1 Review (Awaiting internal S1 evaluation)
+  if (
+    s === 'S1_REVIEW' ||
+    s === 'ADMIN_REVIEW' ||
+    s === 'PENDING_REVIEW' ||
+    s === 'PENDING_ADMIN_APPROVAL' ||
+    s === 'ADMIN_PENDING' ||
+    s === 'CONSENT_CONFIRMED' ||
+    s === 'PRESCREEN_PENDING' ||
+    (s.includes('S1') && s.includes('REVIEW'))
+  ) {
+    return [
+      'S1_REVIEW',
+      'ADMIN_REVIEW',
+      'PENDING_REVIEW',
+      'PENDING_ADMIN_APPROVAL',
+      'ADMIN_PENDING',
+      'CONSENT_CONFIRMED',
+      'PRESCREEN_PENDING'
+    ];
+  }
+
+  // 2. S1 Screen Select (Passed internal S1 screening)
+  if (
+    s === 'S1_SCREEN_SELECT' ||
+    s === 'S1_SELECT' ||
+    s === 'SCREEN_SELECT' ||
+    s === 'SELECT_SCREEN' ||
+    s === 'S1_SCREEN_SELECTED' ||
+    s === 'ADMIN_APPROVED' ||
+    s === 'S1_SELECT_SELECT' ||
+    (s.includes('S1') && s.includes('SELECT')) ||
+    (s.includes('SCREEN') && s.includes('SELECT') && !s.includes('CLIENT') && !s.includes('COMPANY'))
+  ) {
+    return [
+      'S1_SCREEN_SELECT',
+      'S1_SELECTED',
+      'ADMIN_APPROVED',
+      'SCREEN_SELECTED',
+      'SCREEN_SELECT',
+      'SELECT_SCREEN',
+      'S1_SCREEN_SELECTED'
+    ];
+  }
+
+  // 3. S1 Screen Reject
+  if (
+    s === 'S1_SCREEN_REJECT' ||
+    s === 'S1_SCREEN_REJECTED' ||
+    s === 'S1_REJECTED' ||
+    s === 'ADMIN_REJECTED' ||
+    s === 'ADMIN_SCREEN_REJECT' ||
+    (s.includes('S1') && s.includes('REJECT'))
+  ) {
+    return [
+      'S1_SCREEN_REJECT',
+      'S1_SCREEN_REJECTED',
+      'S1_REJECTED',
+      'ADMIN_REJECTED',
+      'ADMIN_SCREEN_REJECT'
+    ];
+  }
+
+  // 4. Consent Pending
+  if (s === 'CONSENT_PENDING' || s === 'CONSENT_SENT' || s.includes('CONSENT_PENDING')) {
+    return ['CONSENT_PENDING', 'CONSENT_SENT'];
+  }
+
+  // 5. Consent Denied
+  if (s === 'CONSENT_DENIED' || s.includes('CONSENT_DENIED')) {
+    return ['CONSENT_DENIED'];
+  }
+
+  // 6. Sent to Client / Company Review
+  if (
+    s === 'SENT_TO_CLIENT' ||
+    s === 'SENT_TO_COMPANY' ||
+    s === 'SUBMITTED' ||
+    s === 'SUBMITTED_TO_COMPANY' ||
+    s === 'SUBMITTED_TO_CLIENT' ||
+    s === 'COMPANY_REVIEW' ||
+    s === 'CLIENT_REVIEW' ||
+    s === 'UNDER_REVIEW' ||
+    s === 'REVIEWING'
+  ) {
+    return [
+      'SENT_TO_CLIENT',
+      'SENT_TO_COMPANY',
+      'SUBMITTED',
+      'SUBMITTED_TO_COMPANY',
+      'SUBMITTED_TO_CLIENT',
+      'COMPANY_REVIEW',
+      'CLIENT_REVIEW',
+      'UNDER_REVIEW',
+      'REVIEWING'
+    ];
+  }
+
+  // 7. Client Screen Select / Shortlisted
+  if (
+    s === 'CLIENT_SCREEN_SELECT' ||
+    s === 'COMPANY_SCREEN_SELECT' ||
+    s === 'CLIENT_SHORTLISTED' ||
+    s === 'COMPANY_SHORTLISTED' ||
+    ((s.includes('CLIENT') || s.includes('COMPANY')) && s.includes('SELECT'))
+  ) {
+    return [
+      'CLIENT_SCREEN_SELECT',
+      'COMPANY_SCREEN_SELECT',
+      'SHORTLISTED',
+      'COMPANY_SHORTLISTED',
+      'CLIENT_SHORTLISTED'
+    ];
+  }
+
+  // 8. Client Screen Reject
+  if (
+    s === 'CLIENT_SCREEN_REJECT' ||
+    s === 'COMPANY_SCREEN_REJECT' ||
+    s === 'CLIENT_REJECTED' ||
+    s === 'COMPANY_REJECTED' ||
+    ((s.includes('CLIENT') || s.includes('COMPANY')) && s.includes('REJECT'))
+  ) {
+    return [
+      'CLIENT_SCREEN_REJECT',
+      'COMPANY_SCREEN_REJECT',
+      'CLIENT_REJECTED',
+      'COMPANY_REJECTED'
+    ];
+  }
+
+  // 9. Active Interviews Group
+  if (s === 'ACTIVE_INTERVIEWS' || s === 'INTERVIEW') {
+    return [
+      'INTERVIEW_SCHEDULED',
+      'INTERVIEW_CONFIRMED',
+      'ACTIVE_INTERVIEWS',
+      'SLOT_ASSIGNED',
+      'SLOT_DETAILS_SHARED',
+      'INTERVIEWED',
+      'INTERVIEW_CONDUCTED',
+      'ROUND_ON_HOLD',
+      'ROUND_SELECTED_NEXT',
+      'ROUND_SELECTED_DIRECT_HR',
+      'HR_ROUND_PENDING',
+      'HR_SELECTED',
+      'HR_ON_HOLD'
+    ];
+  }
+
+  // 10. Active Pipelines / Placed (All stages past screening up to placed)
+  if (s === 'ACTIVE_PIPELINE' || s === 'PIPELINE_ACTIVE') {
+    return [
+      'SHORTLISTED',
+      'CLIENT_SCREEN_SELECT',
+      'COMPANY_SCREEN_SELECT',
+      'ASSESSMENT_PENDING',
+      'ASSESSMENT_LINK_SENT',
+      'ASSESSMENT_LINK_COMPLETE',
+      'ASSESSMENT_PASSED',
+      'SLOTS_NOT_PUBLISHED',
+      'SLOTS_PUBLISHED',
+      'SLOT_ASSIGNED',
+      'SLOT_DETAILS_SHARED',
+      'INTERVIEW_SCHEDULED',
+      'INTERVIEW_CONFIRMED',
+      'ACTIVE_INTERVIEWS',
+      'INTERVIEWED',
+      'INTERVIEW_CONDUCTED',
+      'ROUND_SELECTED_NEXT',
+      'ROUND_SELECTED_DIRECT_HR',
+      'ROUND_ON_HOLD',
+      'HR_ROUND_PENDING',
+      'HR_SELECTED',
+      'HR_ON_HOLD',
+      'OFFERED',
+      'OFFER_SENT',
+      'OFFER_ACCEPTED',
+      'ONBOARDING',
+      'HIRED',
+      'JOINED'
+    ];
+  }
+
+  // 11. Shortlisted (broad)
+  if (s === 'SHORTLISTED') {
+    return [
+      'SHORTLISTED',
+      'CLIENT_SCREEN_SELECT',
+      'COMPANY_SCREEN_SELECT',
+      'SLOTS_NOT_PUBLISHED',
+      'SLOTS_PUBLISHED',
+      'ROUND_SELECTED_NEXT',
+      'ROUND_SELECTED_DIRECT_HR',
+      'ROUND_ON_HOLD'
+    ];
+  }
+
+  // 12. Assessment stages
+  if (s === 'ASSESSMENT_PENDING' || s === 'ASSESSMENT') {
+    return ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT'];
+  }
+  if (s === 'ASSESSMENT_FAILED') {
+    return ['ASSESSMENT_FAILED'];
+  }
+  if (s === 'ASSESSMENT_PASSED') {
+    return ['ASSESSMENT_PASSED', 'ASSESSMENT_LINK_COMPLETE'];
+  }
+
+  // 13. Slots stages
+  if (s === 'SLOTS_NOT_PUBLISHED' || s === 'SLOTS_PENDING') {
+    return ['SLOTS_NOT_PUBLISHED', 'SLOTS_PENDING', 'RESCHEDULE_REQUESTED'];
+  }
+  if (s === 'SLOTS_PUBLISHED') {
+    return ['SLOTS_PUBLISHED'];
+  }
+  if (s === 'SLOT_ASSIGNED' || s === 'SLOT_DETAILS_SHARED') {
+    return ['SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED'];
+  }
+
+  // 14. Interview specific statuses
+  if (s === 'INTERVIEW_SCHEDULED') {
+    return ['INTERVIEW_SCHEDULED'];
+  }
+  if (s === 'INTERVIEW_CONFIRMED') {
+    return ['INTERVIEW_CONFIRMED'];
+  }
+  if (s === 'INTERVIEW_CONDUCTED' || s === 'INTERVIEWED') {
+    return ['INTERVIEW_CONDUCTED', 'INTERVIEWED'];
+  }
+  if (s === 'RESCHEDULE_REQUESTED') {
+    return ['RESCHEDULE_REQUESTED'];
+  }
+  if (s === 'ROUND_ON_HOLD') {
+    return ['ROUND_ON_HOLD'];
+  }
+  if (s === 'ROUND_REJECTED') {
+    return ['ROUND_REJECTED'];
+  }
+  if (s === 'ROUND_SELECTED_NEXT') {
+    return ['ROUND_SELECTED_NEXT'];
+  }
+  if (s === 'ROUND_SELECTED_DIRECT_HR') {
+    return ['ROUND_SELECTED_DIRECT_HR'];
+  }
+
+  // 15. HR round statuses
+  if (s === 'HR_ROUND_PENDING') {
+    return ['HR_ROUND_PENDING'];
+  }
+  if (s === 'HR_SELECTED') {
+    return ['HR_SELECTED'];
+  }
+  if (s === 'HR_ON_HOLD') {
+    return ['HR_ON_HOLD'];
+  }
+  if (s === 'HR_REJECTED') {
+    return ['HR_REJECTED'];
+  }
+
+  // 16. Offer statuses
+  if (s === 'OFFER_SENT' || s === 'OFFERED') {
+    return ['OFFERED', 'OFFER_SENT'];
+  }
+  if (s === 'OFFER_ACCEPTED') {
+    return ['OFFER_ACCEPTED'];
+  }
+  if (s === 'OFFER_REJECTED' || s === 'OFFER_DECLINED') {
+    return ['OFFER_REJECTED', 'OFFER_DECLINED'];
+  }
+
+  // 17. Placed / Joined
+  if (s === 'JOINED' || s === 'HIRED' || s === 'PLACED' || s === 'ONBOARDING') {
+    return ['JOINED', 'HIRED', 'PLACED', 'ONBOARDING'];
+  }
+
+  // 18. Rejected (Broad)
+  if (s === 'REJECTED') {
+    return [
+      'REJECTED',
+      'CLIENT_REJECTED',
+      'COMPANY_REJECTED',
+      'S1_REJECTED',
+      'S1_SCREEN_REJECT',
+      'ADMIN_REJECTED',
+      'ROUND_REJECTED',
+      'HR_REJECTED',
+      'OFFER_REJECTED',
+      'OFFER_DECLINED'
+    ];
+  }
+
+  // 19. Other Inactive
+  if (s === 'CANDIDATE_DROP') {
+    return ['CANDIDATE_DROP'];
+  }
+  if (s === 'WITHDRAWN') {
+    return ['WITHDRAWN'];
+  }
+  if (s === 'NOT_JOINED') {
+    return ['NOT_JOINED'];
+  }
+  if (s === 'CLIENT_PORTAL_DUPLICATE' || s === 'COMPANY_PORTAL_DUPLICATE') {
+    return ['CLIENT_PORTAL_DUPLICATE', 'COMPANY_PORTAL_DUPLICATE'];
+  }
+  if (s === 'DRAFT') {
+    return ['DRAFT'];
+  }
+
+  return [s];
+};
+
+const buildStatusRegexArray = (statuses) => {
+  if (!Array.isArray(statuses) || statuses.length === 0) return [];
+  return statuses.map(st => {
+    const escaped = String(st).replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const pattern = escaped.replace(/_/g, '[\\s_-]*');
+    return new RegExp(`^\\s*${pattern}\\s*$`, 'i');
+  });
+};
+
 // @desc    Get all candidates (admin registry)
 // @route   GET /api/admin/candidates
 exports.getAllCandidates = async (req, res) => {
@@ -3736,65 +4214,365 @@ exports.getAllCandidates = async (req, res) => {
     const {
       status,
       job,
+      jobId,
       company,
       partner,
+      submittedBy,
       page = 1,
       limit = 20,
-      search
+      search,
+      score,
+      scoreFilter,
+      scoreMin,
+      scoreMax,
+      sortBy,
+      sortOrder,
+      sort: sortParam
     } = req.query;
 
-    const query = {};
-    if (status) query.status = status;
-    if (job) query.job = job;
-    if (company) query.company = company;
-    if (partner) query.submittedBy = partner;
-    // Sub-admins can see all candidates
-    if (search) {
-      query.$or = [
-        { firstName: new RegExp(search, 'i') },
-        { lastName: new RegExp(search, 'i') },
-        { email: new RegExp(search, 'i') },
-        { mobile: new RegExp(search, 'i') },
-        { uniqueId: new RegExp(search, 'i') }
-      ];
+    const andConditions = [];
+
+    // 1. Status Filter
+    const resolvedStatuses = resolveAdminStatusQuery(status);
+    if (resolvedStatuses && resolvedStatuses.length > 0) {
+      const statusRegexes = buildStatusRegexArray(resolvedStatuses);
+      andConditions.push({ status: { $in: statusRegexes } });
     }
+
+    // 2. Job Filter
+    const effectiveJob = job || jobId;
+    if (effectiveJob) {
+      if (mongoose.Types.ObjectId.isValid(effectiveJob)) {
+        andConditions.push({ job: new mongoose.Types.ObjectId(effectiveJob) });
+      } else {
+        andConditions.push({ job: effectiveJob });
+      }
+    }
+
+    // 3. Company Filter
+    if (company) {
+      if (mongoose.Types.ObjectId.isValid(company)) {
+        andConditions.push({ company: new mongoose.Types.ObjectId(company) });
+      } else {
+        andConditions.push({ company: company });
+      }
+    }
+
+    // 4. Partner Filter
+    const effectivePartner = partner || submittedBy;
+    if (effectivePartner) {
+      if (mongoose.Types.ObjectId.isValid(effectivePartner)) {
+        andConditions.push({ submittedBy: new mongoose.Types.ObjectId(effectivePartner) });
+      } else {
+        andConditions.push({ submittedBy: effectivePartner });
+      }
+    }
+
+    // 5. Score Filter
+    const activeScore = String(score || scoreFilter || '').toLowerCase().trim();
+    if (activeScore === 'strong') {
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gte: 80 } },
+          { 'resumeAnalysis.score': { $gte: 80 } },
+          { 'resumeAnalysis.overallScore': { $gte: 80 } },
+          { score: { $gte: 80 } },
+          { profileScore: { $gte: 80 } },
+          { matchScore: { $gte: 80 } },
+          { aiScore: { $gte: 80 } },
+          { 'resumeAnalysis.matchLevel': /strong/i },
+          { matchLevel: /strong/i }
+        ]
+      });
+    } else if (activeScore === 'good') {
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gte: 60, $lt: 80 } },
+          { 'resumeAnalysis.score': { $gte: 60, $lt: 80 } },
+          { 'resumeAnalysis.overallScore': { $gte: 60, $lt: 80 } },
+          { score: { $gte: 60, $lt: 80 } },
+          { profileScore: { $gte: 60, $lt: 80 } },
+          { matchScore: { $gte: 60, $lt: 80 } },
+          { aiScore: { $gte: 60, $lt: 80 } },
+          { 'resumeAnalysis.matchLevel': /good/i },
+          { matchLevel: /good/i }
+        ]
+      });
+    } else if (activeScore === 'partial') {
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gte: 40, $lt: 60 } },
+          { 'resumeAnalysis.score': { $gte: 40, $lt: 60 } },
+          { 'resumeAnalysis.overallScore': { $gte: 40, $lt: 60 } },
+          { score: { $gte: 40, $lt: 60 } },
+          { profileScore: { $gte: 40, $lt: 60 } },
+          { matchScore: { $gte: 40, $lt: 60 } },
+          { aiScore: { $gte: 40, $lt: 60 } },
+          { 'resumeAnalysis.matchLevel': /partial/i },
+          { matchLevel: /partial/i }
+        ]
+      });
+    } else if (activeScore === 'weak') {
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gt: 0, $lt: 40 } },
+          { 'resumeAnalysis.score': { $gt: 0, $lt: 40 } },
+          { 'resumeAnalysis.overallScore': { $gt: 0, $lt: 40 } },
+          { score: { $gt: 0, $lt: 40 } },
+          { profileScore: { $gt: 0, $lt: 40 } },
+          { matchScore: { $gt: 0, $lt: 40 } },
+          { aiScore: { $gt: 0, $lt: 40 } },
+          { 'resumeAnalysis.matchLevel': /weak/i },
+          { matchLevel: /weak/i }
+        ]
+      });
+    } else if (scoreMin !== undefined || scoreMax !== undefined) {
+      const minVal = scoreMin !== undefined ? Number(scoreMin) : 0;
+      const maxVal = scoreMax !== undefined ? Number(scoreMax) : 100;
+      andConditions.push({
+        $or: [
+          { 'resumeAnalysis.profileScore': { $gte: minVal, $lte: maxVal } },
+          { score: { $gte: minVal, $lte: maxVal } },
+          { profileScore: { $gte: minVal, $lte: maxVal } },
+          { matchScore: { $gte: minVal, $lte: maxVal } }
+        ]
+      });
+    }
+
+    // 6. Search across candidate details + Job title + Company name + Partner firm name
+    if (search && search.trim()) {
+      const sanitizedSearch = search.trim().replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&');
+      const rx = new RegExp(sanitizedSearch, 'i');
+      const words = search.trim().split(/\s+/).filter(Boolean).map(w => w.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&'));
+
+      const [matchedJobs, matchedCompanies, matchedPartners] = await Promise.all([
+        Job.find({ $or: [{ title: rx }, { uniqueId: rx }] }).select('_id'),
+        Company.find({ $or: [{ companyName: rx }, { uniqueId: rx }] }).select('_id'),
+        StaffingPartner.find({ $or: [{ firmName: rx }, { firstName: rx }, { lastName: rx }, { uniqueId: rx }] }).select('_id')
+      ]);
+
+      const searchOr = [
+        { firstName: rx },
+        { lastName: rx },
+        { email: rx },
+        { mobile: rx },
+        { uniqueId: rx }
+      ];
+
+      if (words.length > 1) {
+        searchOr.push({
+          $and: words.map(w => ({
+            $or: [
+              { firstName: new RegExp(w, 'i') },
+              { lastName: new RegExp(w, 'i') }
+            ]
+          }))
+        });
+      }
+
+      if (matchedJobs.length > 0) searchOr.push({ job: { $in: matchedJobs.map(j => j._id) } });
+      if (matchedCompanies.length > 0) searchOr.push({ company: { $in: matchedCompanies.map(c => c._id) } });
+      if (matchedPartners.length > 0) searchOr.push({ submittedBy: { $in: matchedPartners.map(p => p._id) } });
+
+      andConditions.push({ $or: searchOr });
+    }
+
+    const finalQuery = andConditions.length > 0 ? { $and: andConditions } : {};
 
     const sanitizedPage = Math.max(1, Math.min(1000, parseInt(page)));
     const sanitizedLimit = Math.max(1, Math.min(100, parseInt(limit)));
     const skip = (sanitizedPage - 1) * sanitizedLimit;
 
-    const [candidates, total] = await Promise.all([
-      Candidate.find(query)
+    // 7. Sort Order
+    let sortObj = { createdAt: -1 };
+    if (sortBy === 'candidateName' || sortParam === 'name_asc') {
+      sortObj = { firstName: sortOrder === 'desc' ? -1 : 1, lastName: sortOrder === 'desc' ? -1 : 1 };
+    } else if (sortBy === 'score' || sortParam === 'score_desc') {
+      sortObj = { 'resumeAnalysis.profileScore': -1, score: -1, profileScore: -1 };
+    } else if (sortParam === 'oldest' || (sortBy === 'createdAt' && sortOrder === 'asc')) {
+      sortObj = { createdAt: 1 };
+    } else if (sortParam === 'newest' || (sortBy === 'createdAt' && sortOrder === 'desc')) {
+      sortObj = { createdAt: -1 };
+    }
+
+    // 8. Execute candidate query
+    const [candidates, totalFiltered, totalPlatformCandidates] = await Promise.all([
+      Candidate.find(finalQuery)
         .populate('submittedBy', 'firmName firstName lastName uniqueId')
-        .populate('job', 'title uniqueId')
+        .populate({
+          path: 'job',
+          select: 'title uniqueId company',
+          populate: { path: 'company', select: 'companyName uniqueId' }
+        })
         .populate('company', 'companyName uniqueId')
-        .sort({ createdAt: -1 })
+        .sort(sortObj)
         .skip(skip)
         .limit(sanitizedLimit)
-        .select('-statusHistory -notes -qualityCheck')
-        .lean(),
-      Candidate.countDocuments(query)
+        .select('-statusHistory -notes -qualityCheck'),
+      Candidate.countDocuments(finalQuery),
+      Candidate.countDocuments({})
     ]);
 
-    const summaryQuery = { ...query };
-    delete summaryQuery.status;
-    const statusSummary = await Candidate.aggregate([
-      { $match: summaryQuery },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
+    if (sortBy === 'jobTitle' || sortParam === 'job_asc' || sortParam === 'job_desc') {
+      candidates.sort((a, b) => {
+        const titleA = (a.job?.title || '').toLowerCase();
+        const titleB = (b.job?.title || '').toLowerCase();
+        return (sortOrder === 'desc' || sortParam === 'job_desc')
+          ? titleB.localeCompare(titleA)
+          : titleA.localeCompare(titleB);
+      });
+    }
+
+    // 9. Scoped Registry Total (scoped by Job/Partner/Company if specified, but NOT by status/page/score/search)
+    const registryScopeConditions = [];
+    if (effectiveJob) {
+      if (mongoose.Types.ObjectId.isValid(effectiveJob)) {
+        registryScopeConditions.push({ job: new mongoose.Types.ObjectId(effectiveJob) });
+      } else {
+        registryScopeConditions.push({ job: effectiveJob });
+      }
+    }
+    if (effectivePartner) {
+      if (mongoose.Types.ObjectId.isValid(effectivePartner)) {
+        registryScopeConditions.push({ submittedBy: new mongoose.Types.ObjectId(effectivePartner) });
+      } else {
+        registryScopeConditions.push({ submittedBy: effectivePartner });
+      }
+    }
+    if (company) {
+      if (mongoose.Types.ObjectId.isValid(company)) {
+        registryScopeConditions.push({ company: new mongoose.Types.ObjectId(company) });
+      } else {
+        registryScopeConditions.push({ company: company });
+      }
+    }
+    const registryScopeQuery = registryScopeConditions.length > 0 ? { $and: registryScopeConditions } : {};
+
+    const [statusSummary, totalRegistryCandidates] = await Promise.all([
+      Candidate.aggregate([
+        { $match: registryScopeQuery },
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      Candidate.countDocuments(registryScopeQuery)
     ]);
+
+    const sMap = {};
+    for (const item of statusSummary) {
+      if (!item._id) continue;
+      const norm = String(item._id).trim().toUpperCase().replace(/[\s-]+/g, '_');
+      sMap[norm] = (sMap[norm] || 0) + item.count;
+    }
+
+    // Canonical Group Computations
+    const pendingReviewCount = 
+      (sMap.S1_REVIEW || 0) + 
+      (sMap.ADMIN_REVIEW || 0) + 
+      (sMap.PENDING_REVIEW || 0) + 
+      (sMap.PENDING_ADMIN_APPROVAL || 0) + 
+      (sMap.ADMIN_PENDING || 0) + 
+      (sMap.CONSENT_CONFIRMED || 0) + 
+      (sMap.PRESCREEN_PENDING || 0);
+
+    const s1ScreenSelectCount =
+      (sMap.S1_SCREEN_SELECT || 0) +
+      (sMap.S1_SELECTED || 0) +
+      (sMap.ADMIN_APPROVED || 0) +
+      (sMap.SCREEN_SELECTED || 0) +
+      (sMap.SCREEN_SELECT || 0) +
+      (sMap.SELECT_SCREEN || 0) +
+      (sMap.S1_SCREEN_SELECTED || 0) +
+      (sMap.S1_SELECT_SELECT || 0);
+
+    const sentToClientCount =
+      (sMap.SENT_TO_CLIENT || 0) +
+      (sMap.SENT_TO_COMPANY || 0) +
+      (sMap.SUBMITTED || 0) +
+      (sMap.SUBMITTED_TO_COMPANY || 0) +
+      (sMap.SUBMITTED_TO_CLIENT || 0) +
+      (sMap.COMPANY_REVIEW || 0) +
+      (sMap.CLIENT_REVIEW || 0) +
+      (sMap.UNDER_REVIEW || 0) +
+      (sMap.REVIEWING || 0);
+
+    const clientScreenSelectCount =
+      (sMap.CLIENT_SCREEN_SELECT || 0) +
+      (sMap.COMPANY_SCREEN_SELECT || 0) +
+      (sMap.SHORTLISTED || 0) +
+      (sMap.CLIENT_SHORTLISTED || 0) +
+      (sMap.COMPANY_SHORTLISTED || 0);
+
+    const activePipelinesCount =
+      clientScreenSelectCount +
+      (sMap.ASSESSMENT_PENDING || 0) +
+      (sMap.ASSESSMENT_LINK_SENT || 0) +
+      (sMap.ASSESSMENT_LINK_COMPLETE || 0) +
+      (sMap.ASSESSMENT_PASSED || 0) +
+      (sMap.SLOTS_NOT_PUBLISHED || 0) +
+      (sMap.SLOTS_PUBLISHED || 0) +
+      (sMap.SLOT_ASSIGNED || 0) +
+      (sMap.SLOT_DETAILS_SHARED || 0) +
+      (sMap.INTERVIEW_SCHEDULED || 0) +
+      (sMap.INTERVIEW_CONFIRMED || 0) +
+      (sMap.ACTIVE_INTERVIEWS || 0) +
+      (sMap.INTERVIEWED || 0) +
+      (sMap.INTERVIEW_CONDUCTED || 0) +
+      (sMap.ROUND_SELECTED_NEXT || 0) +
+      (sMap.ROUND_SELECTED_DIRECT_HR || 0) +
+      (sMap.ROUND_ON_HOLD || 0) +
+      (sMap.HR_ROUND_PENDING || 0) +
+      (sMap.HR_SELECTED || 0) +
+      (sMap.HR_ON_HOLD || 0) +
+      (sMap.OFFERED || 0) +
+      (sMap.OFFER_SENT || 0) +
+      (sMap.OFFER_ACCEPTED || 0) +
+      (sMap.ONBOARDING || 0) +
+      (sMap.HIRED || 0) +
+      (sMap.JOINED || 0);
+
+    const consentPendingCount = 
+      (sMap.CONSENT_PENDING || 0) + 
+      (sMap.CONSENT_SENT || 0);
+
+    const combinedRejectedCount = 
+      (sMap.REJECTED || 0) + 
+      (sMap.CLIENT_REJECTED || 0) + 
+      (sMap.COMPANY_REJECTED || 0) + 
+      (sMap.S1_REJECTED || 0) + 
+      (sMap.S1_SCREEN_REJECT || 0) + 
+      (sMap.ADMIN_REJECTED || 0) + 
+      (sMap.ROUND_REJECTED || 0) + 
+      (sMap.HR_REJECTED || 0) + 
+      (sMap.OFFER_REJECTED || 0);
+
+    sMap.S1_REVIEW = pendingReviewCount;
+    sMap.S1_SCREEN_SELECT = s1ScreenSelectCount;
+    sMap.SENT_TO_CLIENT = sentToClientCount;
+    sMap.COMPANY_REVIEW = sentToClientCount;
+    sMap.CLIENT_SCREEN_SELECT = clientScreenSelectCount;
+    sMap.ACTIVE_PIPELINE = activePipelinesCount;
+    sMap.CONSENT_PENDING = consentPendingCount;
+    sMap.REJECTED = combinedRejectedCount;
+    sMap.totalAll = totalRegistryCandidates;
 
     res.json({
       success: true,
       data: {
         candidates,
-        summary: statusSummary.reduce((acc, item) => {
-          acc[item._id] = item.count;
-          return acc;
-        }, {}),
+        stats: {
+          totalAll: totalRegistryCandidates,
+          platformTotal: totalPlatformCandidates,
+          pendingReview: pendingReviewCount,
+          activePipelines: activePipelinesCount,
+          consentPending: consentPendingCount,
+          s1ScreenSelect: s1ScreenSelectCount,
+          sentToClient: sentToClientCount,
+          byStatus: sMap
+        },
+        summary: sMap,
         pagination: {
           current: sanitizedPage,
-          pages: Math.ceil(total / sanitizedLimit),
-          total
+          pages: Math.ceil(totalFiltered / sanitizedLimit) || 1,
+          total: totalFiltered
         }
       }
     });
@@ -3901,10 +4679,23 @@ exports.getAllPartners = async (req, res) => {
       success: true,
       data: {
         partners,
-        summary: statusSummary.reduce((acc, item) => {
-          acc[item._id] = item.count;
-          return acc;
-        }, {}),
+        summary: (() => {
+          const sMap = statusSummary.reduce((acc, item) => {
+            acc[item._id] = item.count;
+            return acc;
+          }, {});
+          const combinedReview = (sMap.S1_REVIEW || 0) + (sMap.ADMIN_REVIEW || 0);
+          sMap.S1_REVIEW = combinedReview;
+          const combinedRejected = (sMap.S1_REJECTED || 0) + (sMap.ADMIN_REJECTED || 0);
+          sMap.S1_REJECTED = combinedRejected;
+          const combinedCompanyReview = (sMap.COMPANY_REVIEW || 0) + (sMap.UNDER_REVIEW || 0) + (sMap.REVIEWING || 0);
+          if (combinedCompanyReview > 0) sMap.COMPANY_REVIEW = combinedCompanyReview;
+          delete sMap.ADMIN_REVIEW;
+          delete sMap.ADMIN_REJECTED;
+          delete sMap.UNDER_REVIEW;
+          delete sMap.REVIEWING;
+          return sMap;
+        })(),
         pagination: {
           current: sanitizedPage,
           pages: Math.ceil(total / sanitizedLimit),
@@ -4057,10 +4848,23 @@ exports.getAllCompanies = async (req, res) => {
       success: true,
       data: {
         companies,
-        summary: statusSummary.reduce((acc, item) => {
-          acc[item._id] = item.count;
-          return acc;
-        }, {}),
+        summary: (() => {
+          const sMap = statusSummary.reduce((acc, item) => {
+            acc[item._id] = item.count;
+            return acc;
+          }, {});
+          const combinedReview = (sMap.S1_REVIEW || 0) + (sMap.ADMIN_REVIEW || 0);
+          sMap.S1_REVIEW = combinedReview;
+          const combinedRejected = (sMap.S1_REJECTED || 0) + (sMap.ADMIN_REJECTED || 0);
+          sMap.S1_REJECTED = combinedRejected;
+          const combinedCompanyReview = (sMap.COMPANY_REVIEW || 0) + (sMap.UNDER_REVIEW || 0) + (sMap.REVIEWING || 0);
+          if (combinedCompanyReview > 0) sMap.COMPANY_REVIEW = combinedCompanyReview;
+          delete sMap.ADMIN_REVIEW;
+          delete sMap.ADMIN_REJECTED;
+          delete sMap.UNDER_REVIEW;
+          delete sMap.REVIEWING;
+          return sMap;
+        })(),
         pagination: {
           current: sanitizedPage,
           pages: Math.ceil(total / sanitizedLimit),
@@ -4174,7 +4978,19 @@ exports.getAllJobsWithCandidates = async (req, res) => {
     } = req.query;
 
     const query = {};
-    if (status) query.status = status;
+    if (status) {
+      if (status === 'S1_REVIEW' || status === 'ADMIN_REVIEW') {
+        query.status = 'S1_REVIEW';
+      } else if (status === 'S1_SCREEN_SELECT') {
+        query.status = 'S1_SCREEN_SELECT';
+      } else if (status === 'S1_SCREEN_REJECT' || status === 'S1_REJECTED' || status === 'ADMIN_REJECTED') {
+        query.status = { $in: ['S1_SCREEN_REJECT', 'S1_REJECTED'] };
+      } else if (status === 'SENT_TO_CLIENT' || status === 'SUBMITTED' || status === 'COMPANY_REVIEW' || status === 'CLIENT_REVIEW' || status === 'UNDER_REVIEW' || status === 'REVIEWING') {
+        query.status = { $in: ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW'] };
+      } else {
+        query.status = status;
+      }
+    }
     if (company) {
       if (typeof company === 'string' && company.includes(',')) {
         const ids = company.split(',').map(id => id.trim()).filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
@@ -4331,8 +5147,11 @@ exports.getAllJobsWithCandidates = async (req, res) => {
           candidateStatusBreakdown: {
             draft: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'DRAFT'] } } } },
             consentPending: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'CONSENT_PENDING'] } } } },
-            adminReview: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'ADMIN_REVIEW'] } } } },
-            submitted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SUBMITTED'] } } } },
+            s1Review: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'S1_REVIEW'] } } } },
+            s1ScreenSelect: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'S1_SCREEN_SELECT'] } } } },
+            sentToClient: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', ['SENT_TO_CLIENT', 'SUBMITTED']] } } } },
+            sentToCompany: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', ['SENT_TO_CLIENT', 'SUBMITTED']] } } } },
+            submitted: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', ['SENT_TO_CLIENT', 'SUBMITTED']] } } } },
             shortlisted: { $size: { $filter: { input: '$candidates', cond: { $eq: ['$$this.status', 'SHORTLISTED'] } } } },
             interviewScheduled: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', PRE_HR_STATUSES] } } } },
             interviewRounds: { $size: { $filter: { input: '$candidates', cond: { $in: ['$$this.status', PRE_HR_STATUSES] } } } },
@@ -4359,7 +5178,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
             $size: {
               $filter: {
                 input: '$candidates',
-                cond: { $not: { $in: ['$$this.status', ['WITHDRAWN', 'ADMIN_REJECTED', 'CONSENT_DENIED']] } }
+                cond: { $not: { $in: ['$$this.status', ['WITHDRAWN', 'S1_SCREEN_REJECT', 'S1_REJECTED', 'CONSENT_DENIED']] } }
               }
             }
           },
@@ -4377,7 +5196,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
       },
 
       // Filter if needsAdminReview, stage, or hasCandidates is requested
-      ...(needsAdminReview === 'true' ? [{ $match: { 'candidateStatusBreakdown.adminReview': { $gt: 0 } } }] : []),
+      ...(needsAdminReview === 'true' ? [{ $match: { $or: [{ 'candidateStatusBreakdown.s1Review': { $gt: 0 } }, { 'candidateStatusBreakdown.adminReview': { $gt: 0 } }] } }] : []),
       ...(stage === 'interviews' ? [{ $match: { 'candidateStatusBreakdown.interviewRounds': { $gt: 0 } } }] : []),
       ...(stage === 'hr_round' ? [{ $match: { 'candidateStatusBreakdown.hrRounds': { $gt: 0 } } }] : []),
       ...(hasCandidates === 'true' || hasCandidates === 'yes' ? [{ $match: { totalCandidates: { $gt: 0 } } }] : []),
@@ -4521,7 +5340,7 @@ exports.getAllJobsWithCandidates = async (req, res) => {
               $size: {
                 $filter: {
                   input: '$candidates',
-                  cond: { $eq: ['$$this.status', 'ADMIN_REVIEW'] }
+                  cond: { $eq: ['$$this.status', 'S1_REVIEW'] }
                 }
               }
             }
@@ -4678,6 +5497,9 @@ exports.getJobWithCandidates = async (req, res) => {
     // ✅ Get ALL candidates for this job with full details including prescreen
     const candidates = await Candidate.find({ job: job._id })
       .populate('submittedBy', 'firmName firstName lastName uniqueId metrics user')
+      .populate('adminQueue.reviewedBy', 'email role firstName lastName')
+      .populate('adminQueue.dispatchedBy', 'email role firstName lastName')
+      .populate('statusHistory.changedBy', 'email role firstName lastName')
       .sort({ createdAt: -1 })
       .select(
         'firstName lastName email mobile status profile resume interviewConfig ' +
@@ -4761,7 +5583,7 @@ exports.getJobWithCandidates = async (req, res) => {
     // ✅ Slot calculation: Sum of all partner submission limits (falling back to vacancies * 5)
     const totalSlots = interests.reduce((sum, i) => sum + (i.submissionLimit || 5), 0) || (job.vacancies * 5);
     const activeCandidates = candidates.filter(
-      c => !['WITHDRAWN', 'ADMIN_REJECTED', 'CONSENT_DENIED'].includes(c.status)
+      c => !['WITHDRAWN', 'S1_SCREEN_REJECT', 'S1_REJECTED', 'CONSENT_DENIED'].includes(c.status)
     );
     const slotsUsed = activeCandidates.length;
     const slotsRemaining = Math.max(0, totalSlots - slotsUsed);
@@ -4932,7 +5754,7 @@ exports.withdrawCandidateByAdmin = async (req, res) => {
       userAgent: req.headers['user-agent']
     });
 
-    // Notify the staffing partner (fire-and-forget)
+    // Notify the talent partner (fire-and-forget)
     try {
       const notificationEngine = require('../services/notificationEngine');
       // Resolve partner user ID
@@ -5393,7 +6215,7 @@ exports.assignVerification = async (req, res) => {
     let label;
     if (type === 'partner' || type === 'partners') {
       model = StaffingPartner;
-      label = 'Staffing Partner';
+      label = 'Talent Partner';
     } else if (type === 'company' || type === 'companies') {
       model = Company;
       label = 'Company';
@@ -5502,7 +6324,7 @@ exports.revokeVerificationAssignment = async (req, res) => {
     let label;
     if (type === 'partner' || type === 'partners') {
       model = StaffingPartner;
-      label = 'Staffing Partner';
+      label = 'Talent Partner';
     } else if (type === 'company' || type === 'companies') {
       model = Company;
       label = 'Company';
@@ -5599,7 +6421,7 @@ exports.bulkAssignVerification = async (req, res) => {
       let label;
       if (type === 'partner' || type === 'partners') {
         model = StaffingPartner;
-        label = 'Staffing Partner';
+        label = 'Talent Partner';
       } else if (type === 'company' || type === 'companies') {
         model = Company;
         label = 'Company';
@@ -5626,7 +6448,7 @@ exports.bulkAssignVerification = async (req, res) => {
       let label;
       if (type === 'partner' || type === 'partners') {
         model = StaffingPartner;
-        label = 'Staffing Partner';
+        label = 'Talent Partner';
       } else if (type === 'company' || type === 'companies') {
         model = Company;
         label = 'Company';
@@ -5711,7 +6533,7 @@ exports.bulkRevokeVerificationAssignment = async (req, res) => {
       let label;
       if (type === 'partner' || type === 'partners') {
         model = StaffingPartner;
-        label = 'Staffing Partner';
+        label = 'Talent Partner';
       } else if (type === 'company' || type === 'companies') {
         model = Company;
         label = 'Company';
@@ -5779,6 +6601,7 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
     }
 
     const allowedStatuses = [
+      'CLIENT_SCREEN_SELECT',
       'SHORTLISTED',
       'SLOTS_PUBLISHED',
       'SLOTS_NOT_PUBLISHED',
@@ -5792,19 +6615,35 @@ exports.adminAssignCandidateToSlot = async (req, res) => {
       'HR_ROUND_PENDING',
       'HR_SELECTED'
     ];
+    const REJECTED_STATUSES = [
+      'CLIENT_SCREEN_REJECT',
+      'REJECTED',
+      'ROUND_REJECTED',
+      'HR_REJECTED',
+      'S1_SCREEN_REJECT',
+      'S1_REJECTED',
+      'ASSESSMENT_FAILED',
+      'CANDIDATE_DROP',
+      'WITHDRAWN',
+      'OFFER_REJECTED',
+      'CONSENT_DENIED'
+    ];
+    if (REJECTED_STATUSES.includes(candidate.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Candidate ${candidate.firstName} ${candidate.lastName} is rejected/dropped and cannot be assigned to an interview slot.`
+      });
+    }
+
     if (
-      candidate.status === 'CONSENT_PENDING' ||
-      candidate.status === 'CONSENT_SENT' ||
       candidate.status === 'CONSENT_DENIED' ||
-      candidate.status === 'DRAFT' ||
-      candidate.whatsappConsent?.status === 'PENDING' ||
       candidate.whatsappConsent?.status === 'DENIED' ||
-      candidate.consent?.consentStatus === 'PENDING_CONFIRMATION' ||
-      candidate.consent?.consentStatus === 'DENIED'
+      candidate.consent?.consentStatus === 'DENIED' ||
+      ((candidate.status === 'CONSENT_PENDING' || candidate.status === 'CONSENT_SENT' || candidate.status === 'DRAFT') && candidate.status !== 'CLIENT_SCREEN_SELECT')
     ) {
       return res.status(400).json({
         success: false,
-        message: `Candidate ${candidate.firstName} ${candidate.lastName} is pending consent and cannot be assigned to an interview slot.`
+        message: `Candidate ${candidate.firstName} ${candidate.lastName} is pending consent or consent denied and cannot be assigned to an interview slot.`
       });
     }
 

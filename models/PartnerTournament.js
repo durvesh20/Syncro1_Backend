@@ -65,11 +65,18 @@ const partnerTournamentSchema = new mongoose.Schema({
     }
   }],
   rules: {
-    screenedPoints: { type: Number, default: 2 },
-    submittedPoints: { type: Number, default: 5 },
+    s1ReviewPoints: { type: Number, default: 10 },
+    s1ScreenSelectPoints: { type: Number, default: 10 },
+    clientScreenSelectPoints: { type: Number, default: 10 },
+    round2Points: { type: Number, default: 10 },
+    offeredPoints: { type: Number, default: 20 },
+    joinedPoints: { type: Number, default: 20 },
+    retention90Points: { type: Number, default: 20 },
+    // backward compatibility
+    screenedPoints: { type: Number, default: 10 },
+    submittedPoints: { type: Number, default: 10 },
     interviewPoints: { type: Number, default: 10 },
-    selectedPoints: { type: Number, default: 20 },
-    joinedPoints: { type: Number, default: 40 }
+    selectedPoints: { type: Number, default: 10 }
   }
 }, {
   timestamps: true

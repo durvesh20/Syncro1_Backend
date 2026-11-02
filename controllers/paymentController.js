@@ -200,7 +200,7 @@ exports.verifyPayment = async (req, res) => {
     const partner = await StaffingPartner.findOne({ user: req.user._id });
     if (!partner) {
       console.error('❌ Partner not found during verification:', req.user._id);
-      return res.status(404).json({ success: false, message: 'Staffing partner profile not found' });
+      return res.status(404).json({ success: false, message: 'Talent Partner profile not found' });
     }
 
     const plans = await paymentService.getSubscriptionPlans();

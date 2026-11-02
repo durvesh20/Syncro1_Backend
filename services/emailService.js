@@ -227,9 +227,10 @@ class EmailService {
   }
 
   async sendVerificationApproved(email, name, role) {
-    const dashboardUrl = role === 'staffing_partner'
-      ? `${process.env.FRONTEND_URL}/partner/dashboard`
-      : `${process.env.FRONTEND_URL}/company/dashboard`;
+    const isPartner = role === 'talent_partner';
+    const dashboardUrl = isPartner
+      ? `${process.env.FRONTEND_URL}/dashboard/talent-partner`
+      : `${process.env.FRONTEND_URL}/dashboard/company`;
 
     console.log('=================================================');
     console.log('✅ Verification Approved Email');
@@ -267,7 +268,7 @@ class EmailService {
             <div class="features">
               <h3>What you can do now:</h3>
               <ul>
-                ${role === 'staffing_partner' ? `
+                ${isPartner ? `
                   <li>✨ Browse and apply for job opportunities</li>
                   <li>📤 Submit candidate profiles</li>
                   <li>📊 Track your submissions and earnings</li>

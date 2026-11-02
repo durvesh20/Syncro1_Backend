@@ -3,7 +3,7 @@
  * Controller for resending interview invitation (WhatsApp + Email) to a candidate
  * when the active round status is SLOT_DETAILS_SHARED.
  *
- * Accessible by: Company, Admin/Sub-admin, Staffing Partner (own submission)
+ * Accessible by: Company, Admin/Sub-admin, Talent Partner (own submission)
  */
 
 const Candidate = require('../models/Candidate');
@@ -72,13 +72,13 @@ async function verifyCompanyCandidateOwnership(candidateId, userId) {
 
 // @route POST /api/companies/candidates/:id/pipeline/resend-interview-consent
 //        POST /api/admin/candidates/:id/pipeline/resend-interview-consent
-//        POST /api/staffing-partners/submissions/:id/pipeline/resend-interview-consent
+//        POST /api/talent-partners/submissions/:id/pipeline/resend-interview-consent
 exports.pipelineResendInterviewConsent = async (req, res) => {
   try {
     const role = req.user?.role;
     let candidate;
 
-    if (role === 'staffing_partner' || role === 'staffing') {
+    if (role === 'talent_partner' || role === 'talent') {
       const StaffingPartner = require('../models/StaffingPartner');
       const partner = await StaffingPartner.findOne({ user: req.user._id });
       if (!partner) return res.status(403).json({ success: false, message: 'Partner profile not found' });

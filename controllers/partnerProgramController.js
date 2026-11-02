@@ -234,8 +234,9 @@ exports.getLeaderboard = async (req, res) => {
       tournament = await partnerProgramService.getCurrentTournament(partnerId);
     }
 
+    const requestedLimit = req.query.limit ? parseInt(req.query.limit, 10) : null;
     const leaderboardData = await partnerProgramService.getLeaderboard({
-      limit: 15,
+      limit: requestedLimit, // null returns all participants
       tournamentId: tournament?._id || tournamentId
     });
 

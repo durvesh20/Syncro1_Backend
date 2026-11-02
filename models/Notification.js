@@ -27,7 +27,7 @@ const notificationSchema = new mongoose.Schema({
       'CANDIDATE_ON_HOLD',
       'CANDIDATE_WITHDRAWN',
 
-      // Candidate submission — sent to COMPANY
+      // Candidate submission — sent to CLIENT
       'NEW_CANDIDATE_SUBMITTED',
 
       // Job notifications — sent to PARTNER

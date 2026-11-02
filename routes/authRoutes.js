@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 
 const {
+  initTalentPartnerRegistration,
   initStaffingPartnerRegistration,
   initCompanyRegistration,
   verifyEmailByToken,     // Legacy GET support
@@ -23,7 +24,8 @@ const {
 const { protect } = require('../middleware/auth');
 
 // ==================== REGISTRATION ====================
-router.post('/register/staffing-partner/init', initStaffingPartnerRegistration);
+router.post('/register/talent-partner/init', initTalentPartnerRegistration);
+router.post('/register/staffing-partner/init', initTalentPartnerRegistration);
 router.post('/register/company/init', initCompanyRegistration);
 
 // ==================== VERIFICATION ====================
