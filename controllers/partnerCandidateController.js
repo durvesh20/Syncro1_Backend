@@ -476,18 +476,18 @@ exports.applyFromPool = async (req, res) => {
       await interest.save();
     }
 
-    // ✅ Ensure partner slot size matches current job vacancies (1 vacancy = 5 slots)
-    const { ensureMinJobInterestSlots } = require('../services/slotService');
-    await ensureMinJobInterestSlots(interest, job);
+    // ── 4. Submission limit (1 vacancy = 5 slots; rejected candidates reopen slots) ──
+    const { getPartnerSlotMetrics } = require('../services/slotService');
+    const slotMetrics = await getPartnerSlotMetrics(job._id, partner._id, job, interest);
 
-    // ── 4. Submission limit ──
-    if (interest.submissionCount >= interest.submissionLimit) {
+    if (!slotMetrics.canSubmit) {
       return res.status(403).json({
         success: false,
-        message: `You have reached your submission limit of ${interest.submissionLimit} for this job`,
+        message: `All ${slotMetrics.submissionLimit} submission slots are currently in use. A slot will open if any candidate is rejected.`,
         data: {
-          submissionCount: interest.submissionCount,
-          submissionLimit: interest.submissionLimit
+          submissionCount: slotMetrics.activeSubmissions,
+          submissionLimit: slotMetrics.submissionLimit,
+          remainingSlots: slotMetrics.remainingSlots
         }
       });
     }

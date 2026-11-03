@@ -28,6 +28,7 @@ const {
   getMySubmissions,
   getSubmission,
   getDashboard,
+  getPartnerStats,
   getEarnings,
   getPayoutDetails,
   getInvoices,
@@ -84,8 +85,9 @@ const safeUpload = (multerFn) => (req, res, next) => {
 router.use(protect);
 router.use(authorize('talent_partner'));
 
-// ==================== DASHBOARD ====================
+// ==================== DASHBOARD & LIVE STATS ====================
 router.get('/dashboard', getDashboard);
+router.get('/partner-stats', getPartnerStats);
 
 // ==================== PROFILE ROUTES ====================
 router.get('/profile', getProfile);
@@ -396,7 +398,7 @@ const {
   getTournamentById,
   getCurrentTournament,
   getLeaderboard,
-  getPartnerStats,
+  getPartnerStats: getPartnerProgramStats,
   enterTournament
 } = require('../controllers/partnerProgramController');
 
@@ -405,6 +407,6 @@ router.get('/partner-program/tournaments/:id', getTournamentById);
 router.post('/partner-program/tournaments/:id/enter', enterTournament);
 router.get('/partner-program/tournament', getCurrentTournament);
 router.get('/partner-program/leaderboard', getLeaderboard);
-router.get('/partner-program/stats', getPartnerStats);
+router.get('/partner-program/stats', getPartnerProgramStats);
 
 module.exports = router;

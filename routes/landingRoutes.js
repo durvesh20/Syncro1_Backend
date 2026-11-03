@@ -3,6 +3,8 @@ const router = express.Router();
 const Testimonial = require('../models/Testimonial');
 const Award = require('../models/Award');
 const CompanyLogo = require('../models/CompanyLogo');
+const PlatformStats = require('../models/PlatformStats');
+const platformStatsService = require('../services/platformStatsService');
 const { protect, authorizeAdminAccess } = require('../middleware/auth');
 
 // Default Testimonials
@@ -133,6 +135,25 @@ router.get('/logos', async (req, res) => {
       logos = await CompanyLogo.insertMany(defaultLogos);
     }
     res.status(200).json({ success: true, data: logos });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Platform Stats (Public / Talent Partner Dashboard / Admin)
+router.get('/platform-stats', async (req, res) => {
+  try {
+    const data = await platformStatsService.getEffectivePlatformStats();
+    res.status(200).json({
+      success: true,
+      data: {
+        ...data.stats,
+        liveStats: data.liveStats,
+        customOverrides: data.customOverrides,
+        useCustomOverrides: data.useCustomOverrides,
+        updatedAt: data.updatedAt
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -453,6 +474,46 @@ router.delete('/logos/:id', async (req, res) => {
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Platform Stats Update (Admin only - updates the 2 highlight stats cards)
+router.put('/platform-stats', async (req, res) => {
+  try {
+    const {
+      totalVacanciesClosed,
+      totalRevenueEarned
+    } = req.body;
+
+    const data = await platformStatsService.updatePlatformStatsOverrides({
+      totalVacanciesClosed,
+      totalRevenueEarned,
+      updatedBy: req.user._id
+    });
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'WEBSITE_CONTENT_MODIFIED',
+      entityType: 'PlatformStats',
+      description: `Updated platform highlight stats: Vacancies closed = ${data.stats.totalVacanciesClosed}, Revenue = ₹${data.stats.totalRevenueEarned}`,
+      after: data,
+      ipAddress: auditService.getIp(req),
+      userAgent: auditService.getUserAgent(req)
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Platform stats updated successfully',
+      data: {
+        ...data.stats,
+        liveStats: data.liveStats,
+        updatedAt: data.updatedAt
+      }
+    });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
   }
 });
 

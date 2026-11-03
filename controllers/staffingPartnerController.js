@@ -1216,19 +1216,18 @@ exports.submitCandidate = async (req, res) => {
       });
     }
 
-    // ✅ Ensure partner slot size matches current job vacancies (1 vacancy = 5 slots)
-    const { ensureMinJobInterestSlots } = require('../services/slotService');
-    await ensureMinJobInterestSlots(interest, job);
+    // ✅ STEP 2: Check submission limit (1 vacancy = 5 slots; rejected candidates reopen slots)
+    const { getPartnerSlotMetrics } = require('../services/slotService');
+    const slotMetrics = await getPartnerSlotMetrics(job._id, partner._id, job, interest);
 
-    // ✅ STEP 2: Check submission limit
-    if (interest.submissionCount >= interest.submissionLimit) {
+    if (!slotMetrics.canSubmit) {
       return res.status(403).json({
         success: false,
-        message: `You have reached your submission limit of ${interest.submissionLimit} for this job`,
+        message: `All ${slotMetrics.submissionLimit} submission slots are currently in use. A slot will open if any candidate is rejected.`,
         data: {
-          submissionCount: interest.submissionCount,
-          submissionLimit: interest.submissionLimit,
-          action: 'REQUEST_EXTENSION'
+          submissionCount: slotMetrics.activeSubmissions,
+          submissionLimit: slotMetrics.submissionLimit,
+          remainingSlots: slotMetrics.remainingSlots
         }
       });
     }
@@ -3947,6 +3946,10 @@ exports.getDashboard = async (req, res) => {
       .sort({ updatedAt: -1 })
       .limit(5);
 
+    // Compute live 3x3 partner-specific stats
+    const partnerStatsService = require('../services/partnerStatsService');
+    const partnerStats = await partnerStatsService.computePartnerStats(partner._id, req.user._id);
+
     res.json({
       success: true,
       data: {
@@ -3966,6 +3969,7 @@ exports.getDashboard = async (req, res) => {
           activeInterviewsCount: counts.interview || activeInterviewsCount,
           totalPlacements: counts.joined || partner.metrics.totalPlacements || 0
         },
+        partnerStats,
         subscription: partner.subscription,
         profileCompletion: {
           ...profileCompletion,
@@ -4000,6 +4004,33 @@ exports.getDashboard = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch dashboard',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get live 3x3 partner stats cards for the logged-in Talent Partner
+// @route   GET /api/talent-partners/partner-stats
+exports.getPartnerStats = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Profile not found'
+      });
+    }
+    const partnerStatsService = require('../services/partnerStatsService');
+    const stats = await partnerStatsService.computePartnerStats(partner._id, req.user._id);
+    res.json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    console.error('[PARTNER] Stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch partner stats',
       error: error.message
     });
   }
@@ -4287,7 +4318,7 @@ exports.getWorkedJobs = async (req, res) => {
     const {
       limit = 10, page = 1, search,
       category, location, experienceLevel, companyName,
-      salaryMin, salaryMax, workMode, isUrgent
+      salaryMin, salaryMax, workMode, isUrgent, status
     } = req.query;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -4310,6 +4341,19 @@ exports.getWorkedJobs = async (req, res) => {
 
     if (isUrgent !== undefined && isUrgent !== '') {
       filterMatch['jobDetails.isUrgent'] = isUrgent === 'true';
+    }
+
+    if (status) {
+      const s = String(status).trim().toUpperCase();
+      if (s === 'ACTIVE') {
+        filterMatch['jobDetails.status'] = 'ACTIVE';
+      } else if (s === 'PAUSED' || s === 'DELIVERY_PAUSED') {
+        filterMatch['jobDetails.status'] = { $in: ['PAUSED', 'DELIVERY_PAUSED'] };
+      } else if (s === 'ONHOLD' || s === 'ON_HOLD' || s === 'HOLD') {
+        filterMatch['jobDetails.status'] = { $in: ['ON_HOLD', 'ONHOLD', 'HOLD'] };
+      } else if (s === 'CANCELLED' || s === 'CLOSED') {
+        filterMatch['jobDetails.status'] = { $in: ['CLOSED', 'CANCELLED', 'FILLED', 'REJECTED'] };
+      }
     }
 
     if (salaryMin) filterMatch['jobDetails.salary.max'] = { $gte: Number(salaryMin) };

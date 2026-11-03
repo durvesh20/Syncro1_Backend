@@ -203,7 +203,7 @@ exports.getMyInterestedJobs = async (req, res) => {
         const { 
           page = 1, limit = 20, search, 
           category, location, experienceLevel, companyName, 
-          salaryMin, salaryMax, workMode, isUrgent 
+          salaryMin, salaryMax, workMode, isUrgent, status 
         } = req.query;
         
         const sanitizedPage = Math.max(1, parseInt(page));
@@ -230,6 +230,19 @@ exports.getMyInterestedJobs = async (req, res) => {
         
         if (isUrgent !== undefined && isUrgent !== '') {
           filterMatch['jobDetails.isUrgent'] = isUrgent === 'true';
+        }
+
+        if (status) {
+          const s = String(status).trim().toUpperCase();
+          if (s === 'ACTIVE') {
+            filterMatch['jobDetails.status'] = 'ACTIVE';
+          } else if (s === 'PAUSED' || s === 'DELIVERY_PAUSED') {
+            filterMatch['jobDetails.status'] = { $in: ['PAUSED', 'DELIVERY_PAUSED'] };
+          } else if (s === 'ONHOLD' || s === 'ON_HOLD' || s === 'HOLD') {
+            filterMatch['jobDetails.status'] = { $in: ['ON_HOLD', 'ONHOLD', 'HOLD'] };
+          } else if (s === 'CANCELLED' || s === 'CLOSED') {
+            filterMatch['jobDetails.status'] = { $in: ['CLOSED', 'CANCELLED', 'FILLED', 'REJECTED'] };
+          }
         }
         
         if (salaryMin) filterMatch['jobDetails.salary.max'] = { $gte: Number(salaryMin) };
@@ -316,34 +329,65 @@ exports.getMyInterestedJobs = async (req, res) => {
         const uniqueLocations = aggregationResult[0].locations.map(l => l._id).filter(Boolean).sort();
         const uniqueCompanies = aggregationResult[0].companies.map(c => c._id).filter(Boolean).sort();
 
-        const enriched = interests.map(i => ({
-            interestId: i._id,
-            job: {
-                _id: i.jobDetails._id,
-                title: i.jobDetails.title,
-                category: i.jobDetails.category,
-                location: i.jobDetails.location,
-                salary: i.jobDetails.salary,
-                experienceLevel: i.jobDetails.experienceLevel,
-                vacancies: i.jobDetails.vacancies,
-                status: i.jobDetails.status,
-                metrics: i.jobDetails.metrics,
-                eligiblePlans: i.jobDetails.eligiblePlans,
-                isUrgent: i.jobDetails.isUrgent,
-                uniqueId: i.jobDetails.uniqueId,
-                company: i.companyDetails ? {
-                    companyName: i.companyDetails.companyName,
-                    logo: i.companyDetails.kyc?.logo || i.companyDetails.logo,
-                    industry: i.companyDetails.kyc?.industry || i.companyDetails.industry
-                } : null
+        const Candidate = require('../models/Candidate');
+        const { REJECTED_CANDIDATE_STATUSES } = require('../services/slotService');
+        
+        // Count active candidates for the returned page of interests (rejected candidates free up slots)
+        const jobIds = interests.map(i => i.jobDetails._id);
+        const activeCandidatesCounts = await Candidate.aggregate([
+            {
+                $match: {
+                    job: { $in: jobIds },
+                    submittedBy: partnerId,
+                    status: { $nin: REJECTED_CANDIDATE_STATUSES }
+                }
             },
-            submissionCount: i.submissionCount,
-            submissionLimit: i.submissionLimit,
-            remainingSlots: Math.max(0, i.submissionLimit - i.submissionCount),
-            limitExtended: i.limitExtended,
-            canSubmit: !['ON_HOLD', 'PAUSED', 'CLOSED', 'FILLED'].includes(i.jobDetails.status) && (i.submissionCount < i.submissionLimit),
-            registeredAt: i.createdAt
-        }));
+            {
+                $group: {
+                    _id: "$job",
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+        const activeCountMap = {};
+        activeCandidatesCounts.forEach(c => {
+            activeCountMap[String(c._id)] = c.count;
+        });
+
+        const enriched = interests.map(i => {
+            const activeSubmissions = activeCountMap[String(i.jobDetails._id)] || 0;
+            const submissionLimit = (i.jobDetails.vacancies || 1) * 5;
+            const remainingSlots = Math.max(0, submissionLimit - activeSubmissions);
+            const canSubmit = !['ON_HOLD', 'PAUSED', 'CLOSED', 'FILLED'].includes(i.jobDetails.status) && (activeSubmissions < submissionLimit);
+
+            return {
+                interestId: i._id,
+                job: {
+                    _id: i.jobDetails._id,
+                    title: i.jobDetails.title,
+                    category: i.jobDetails.category,
+                    location: i.jobDetails.location,
+                    salary: i.jobDetails.salary,
+                    experienceLevel: i.jobDetails.experienceLevel,
+                    vacancies: i.jobDetails.vacancies,
+                    status: i.jobDetails.status,
+                    metrics: i.jobDetails.metrics,
+                    eligiblePlans: i.jobDetails.eligiblePlans,
+                    isUrgent: i.jobDetails.isUrgent,
+                    uniqueId: i.jobDetails.uniqueId,
+                    company: i.companyDetails ? {
+                        companyName: i.companyDetails.companyName,
+                        logo: i.companyDetails.kyc?.logo || i.companyDetails.logo,
+                        industry: i.companyDetails.kyc?.industry || i.companyDetails.industry
+                    } : null
+                },
+                submissionCount: activeSubmissions,
+                submissionLimit: submissionLimit,
+                remainingSlots: remainingSlots,
+                canSubmit: canSubmit,
+                registeredAt: i.createdAt
+            };
+        });
 
         res.json({
             success: true,
@@ -396,27 +440,9 @@ exports.getInterestStatus = async (req, res) => {
             });
         }
 
-        // ✅ Auto-heal submissionLimit if job vacancies were increased
         const job = await Job.findById(req.params.jobId);
-        if (job) {
-            const { ensureMinJobInterestSlots } = require('../services/slotService');
-            await ensureMinJobInterestSlots(interest, job);
-        }
-
-        const pendingExtension = await LimitExtensionRequest.findOne({
-            partner: partner._id,
-            job: req.params.jobId,
-            status: 'PENDING'
-        });
-
-        const extensionRequestsCount = await LimitExtensionRequest.countDocuments({
-            partner: partner._id,
-            job: req.params.jobId
-        });
-
-        const isJobOnHold = job?.status === 'ON_HOLD';
-        const isJobPaused = job?.status === 'PAUSED';
-        const isJobClosed = ['CLOSED', 'FILLED'].includes(job?.status);
+        const { getPartnerSlotMetrics } = require('../services/slotService');
+        const slotMetrics = await getPartnerSlotMetrics(req.params.jobId, partner._id, job, interest);
 
         res.json({
             success: true,
@@ -424,19 +450,12 @@ exports.getInterestStatus = async (req, res) => {
                 hasInterest: interest.status === 'ACTIVE',
                 interestId: interest._id,
                 status: interest.status,
-                submissionCount: interest.submissionCount,
-                submissionLimit: interest.submissionLimit,
-                remainingSlots: Math.max(0, interest.submissionLimit - interest.submissionCount),
-                canSubmit: interest.status === 'ACTIVE' && !isJobOnHold && !isJobPaused && !isJobClosed && interest.submissionCount < interest.submissionLimit,
-                limitExtended: interest.limitExtended,
-                hasPendingExtension: !!pendingExtension,
-                pendingExtension: pendingExtension ? {
-                    id: pendingExtension._id,
-                    requestedAdditional: pendingExtension.requestedAdditional,
-                    createdAt: pendingExtension.createdAt
-                } : null,
-                extensionRequestsCount,
-                maxExtensionRequestsReached: extensionRequestsCount >= 4
+                submissionCount: slotMetrics.activeSubmissions,
+                activeSubmissions: slotMetrics.activeSubmissions,
+                totalSubmissions: slotMetrics.totalSubmissions,
+                submissionLimit: slotMetrics.submissionLimit,
+                remainingSlots: slotMetrics.remainingSlots,
+                canSubmit: slotMetrics.canSubmit
             }
         });
     } catch (error) {

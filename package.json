@@ -9,6 +9,8 @@
     "seed": "node seeders/seed.js",
     "create-dirs": "node scripts/createDirs.js",
     "setup": "npm run create-dirs && npm run seed",
+    "check:platform-stats": "node scripts/sanityCheckPlatformStats.js",
+    "check:partner-stats": "node scripts/sanityCheckPartnerStats.js",
     "test": "jest"
   },
   "dependencies": {

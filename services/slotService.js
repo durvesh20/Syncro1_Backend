@@ -1,6 +1,89 @@
 // backend/services/slotService.js
 const JobInterest = require('../models/JobInterest');
 
+const REJECTED_CANDIDATE_STATUSES = [
+  'REJECTED',
+  'S1_SCREEN_REJECT',
+  'S1_REJECTED',
+  'ADMIN_REJECTED',
+  'CLIENT_SCREEN_REJECT',
+  'CLIENT_REJECTED',
+  'COMPANY_REJECTED',
+  'ROUND_REJECTED',
+  'HR_REJECTED',
+  'ASSESSMENT_FAILED',
+  'OFFER_REJECTED',
+  'OFFER_DECLINED',
+  'CLIENT_PORTAL_DUPLICATE',
+  'COMPANY_PORTAL_DUPLICATE',
+  'CANDIDATE_DROP',
+  'NOT_JOINED',
+  'CONSENT_DENIED',
+  'WITHDRAWN'
+];
+
+/**
+ * Calculates slot metrics for a talent partner on a specific job.
+ * Rule: 1 vacancy = 5 slots.
+ * Any candidate rejected at any level frees up their slot so the talent partner can upload a new one.
+ * @param {ObjectId|string} jobId
+ * @param {ObjectId|string} partnerId
+ * @param {Object} [job] - optional Job document
+ * @param {Object} [interest] - optional JobInterest document
+ * @returns {Promise<{ submissionLimit: number, activeSubmissions: number, totalSubmissions: number, remainingSlots: number, canSubmit: boolean }>}
+ */
+async function getPartnerSlotMetrics(jobId, partnerId, job = null, interest = null) {
+  const Candidate = require('../models/Candidate');
+  const Job = require('../models/Job');
+
+  if (!job) {
+    job = await Job.findById(jobId);
+  }
+
+  const submissionLimit = (job?.vacancies || 1) * 5;
+
+  const [activeSubmissions, totalSubmissions] = await Promise.all([
+    Candidate.countDocuments({
+      job: jobId,
+      submittedBy: partnerId,
+      status: { $nin: REJECTED_CANDIDATE_STATUSES }
+    }),
+    Candidate.countDocuments({
+      job: jobId,
+      submittedBy: partnerId
+    })
+  ]);
+
+  const remainingSlots = Math.max(0, submissionLimit - activeSubmissions);
+  const isJobBlocked = !job || job.status === 'ON_HOLD' || job.status === 'PAUSED' || ['CLOSED', 'FILLED'].includes(job.status);
+  const isInterestActive = interest ? interest.status === 'ACTIVE' : true;
+  const canSubmit = isInterestActive && !isJobBlocked && activeSubmissions < submissionLimit;
+
+  // Sync JobInterest submissionLimit and submissionCount if interest is provided
+  if (interest) {
+    let changed = false;
+    if (interest.submissionLimit !== submissionLimit) {
+      interest.submissionLimit = submissionLimit;
+      changed = true;
+    }
+    if (interest.submissionCount !== activeSubmissions) {
+      interest.submissionCount = activeSubmissions;
+      changed = true;
+    }
+    if (changed) {
+      await interest.save();
+    }
+  }
+
+  return {
+    submissionLimit,
+    activeSubmissions,
+    totalSubmissions,
+    remainingSlots,
+    canSubmit
+  };
+}
+
 /**
  * Synchronizes existing talent partner JobInterest submission limits when job vacancies change.
  * Rule: 1 vacancy = 5 slots.
@@ -57,6 +140,8 @@ async function ensureMinJobInterestSlots(interest, job) {
 }
 
 module.exports = {
+  REJECTED_CANDIDATE_STATUSES,
+  getPartnerSlotMetrics,
   syncJobInterestSlots,
   ensureMinJobInterestSlots
 };
