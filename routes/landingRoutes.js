@@ -482,12 +482,18 @@ router.put('/platform-stats', async (req, res) => {
   try {
     const {
       totalVacanciesClosed,
-      totalRevenueEarned
+      totalRevenueEarned,
+      mockVacanciesClosed,
+      mockRevenueEarned,
+      mockMode
     } = req.body;
 
     const data = await platformStatsService.updatePlatformStatsOverrides({
       totalVacanciesClosed,
       totalRevenueEarned,
+      mockVacanciesClosed,
+      mockRevenueEarned,
+      mockMode,
       updatedBy: req.user._id
     });
 

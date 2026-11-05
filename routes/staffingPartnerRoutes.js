@@ -42,6 +42,7 @@ const {
   confirmTaggedSlot,
   rejectTaggedSlotByCandidate,
   getWorkedJobs,
+  getReportJobs,
   resendConsent,
   updateSubmission,
   getJobScreeningQuestionsForPartner,
@@ -321,6 +322,7 @@ router.get('/submissions/:id', getSubmission);
 router.get('/submissions/:id/pipeline', partnerGetPipeline);
 router.post('/submissions/:id/pipeline/reschedule', jobOnHoldGuard, partnerRequestReschedule);
 router.get('/worked-jobs', getWorkedJobs);
+router.get('/report-jobs', getReportJobs);
 
 // @desc    Withdraw a submitted candidate
 // @route   PUT /api/talent-partners/submissions/:id/withdraw

@@ -85,7 +85,10 @@ async function computePartnerStats(partnerId, userId = null) {
   // ROW 1: SHORTLISTED REQUIREMENTS (Pipeline)
   // ==========================================
   const activeInterests = await JobInterest.find({
-    partner: pObjectId,
+    $or: [
+      { partner: { $in: partnerIds } },
+      { user: { $in: partnerIds } }
+    ],
     status: 'ACTIVE'
   })
     .populate('job')
@@ -105,11 +108,13 @@ async function computePartnerStats(partnerId, userId = null) {
   }
 
   const totalRequirementsShortlisted = shortlistedJobs.length;
+  let totalVacanciesShortlisted = 0;
   let shortlistedRequirementsPotentialRevenue = 0;
   let estimatedCandidatesRequired = 0;
 
   for (const job of shortlistedJobs) {
     const vac = Math.max(1, Number(job.vacancies) || 1);
+    totalVacanciesShortlisted += vac;
     shortlistedRequirementsPotentialRevenue += calculateJobPotentialRevenue(job);
     // In Syncro1: 1 vacancy = 5 candidate submission slots
     estimatedCandidatesRequired += (vac * 5);
@@ -123,8 +128,11 @@ async function computePartnerStats(partnerId, userId = null) {
   const workedJobs = await Job.find({ _id: { $in: workedJobObjectIds } }).lean();
 
   const totalRequirementsWorkedOn = workedJobs.length;
+  let totalVacanciesWorkedOn = 0;
   let workedOnPotentialRevenue = 0;
   for (const job of workedJobs) {
+    const vac = Math.max(1, Number(job.vacancies) || 1);
+    totalVacanciesWorkedOn += vac;
     workedOnPotentialRevenue += calculateJobPotentialRevenue(job);
   }
 
@@ -172,20 +180,24 @@ async function computePartnerStats(partnerId, userId = null) {
     // Row 1: Shortlisted Requirements
     row1: {
       totalRequirementsShortlisted,
+      totalVacanciesShortlisted,
       shortlistedRequirementsPotentialRevenue,
       estimatedCandidatesRequired
     },
     totalRequirementsShortlisted,
+    totalVacanciesShortlisted,
     shortlistedRequirementsPotentialRevenue,
     estimatedCandidatesRequired,
 
     // Row 2: Worked on Requirements
     row2: {
       totalRequirementsWorkedOn,
+      totalVacanciesWorkedOn,
       workedOnPotentialRevenue,
       actualCandidatesUploaded
     },
     totalRequirementsWorkedOn,
+    totalVacanciesWorkedOn,
     workedOnPotentialRevenue,
     actualCandidatesUploaded,
 

@@ -74,7 +74,9 @@ async function resolveScope(user, def) {
   }
   if (def.scope.collection === 'staffingpartners') {
     const doc = await StaffingPartner.findOne({ user: user._id }).select('_id').lean();
-    return doc ? { [def.scope.field]: doc._id } : null;
+    if (!doc) return null;
+    const partnerIds = [doc._id, user._id].filter(Boolean);
+    return { [def.scope.field]: { $in: partnerIds } };
   }
   return {};
 }

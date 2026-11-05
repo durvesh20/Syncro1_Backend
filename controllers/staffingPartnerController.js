@@ -4541,3 +4541,84 @@ exports.getJobScreeningQuestionsForPartner = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
   }
 };
+
+// ==================== REPORT JOBS (Shortlisted or Worked Jobs ONLY) ====================
+
+/**
+ * @desc   Get authorized jobs for reports (shortlisted or worked jobs only)
+ * @route  GET /api/talent-partners/report-jobs
+ * @access Talent Partner
+ */
+exports.getReportJobs = async (req, res) => {
+  try {
+    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    if (!partner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Partner profile not found'
+      });
+    }
+
+    const partnerIds = [partner._id, req.user._id].filter(Boolean);
+
+    // 1. Shortlisted jobs (Active JobInterests for this partner)
+    const shortlistedInterests = await JobInterest.find({
+      $or: [
+        { partner: { $in: partnerIds } },
+        { user: req.user._id }
+      ],
+      status: 'ACTIVE'
+    }).select('job').lean();
+
+    const shortlistedJobIds = shortlistedInterests
+      .map(i => i.job)
+      .filter(Boolean);
+
+    // 2. Worked jobs (Jobs with candidate submissions by this partner)
+    const workedJobIds = await Candidate.distinct('job', {
+      $or: [
+        { submittedBy: { $in: partnerIds } },
+        { partner: { $in: partnerIds } }
+      ]
+    });
+
+    // 3. Deduplicate IDs
+    const uniqueJobIds = Array.from(
+      new Set([
+        ...shortlistedJobIds.map(id => String(id)),
+        ...workedJobIds.map(id => String(id))
+      ])
+    ).filter(Boolean);
+
+    if (uniqueJobIds.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          jobs: []
+        }
+      });
+    }
+
+    // 4. Fetch details for these authorized jobs
+    const jobs = await Job.find({ _id: { $in: uniqueJobIds } })
+      .select('_id title uniqueId status company category location experienceLevel')
+      .populate('company', 'companyName')
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      data: {
+        jobs
+      }
+    });
+  } catch (error) {
+    console.error('[PARTNER REPORT JOBS] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch partner report jobs',
+      error: error.message
+    });
+  }
+};
+

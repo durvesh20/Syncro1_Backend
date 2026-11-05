@@ -50,13 +50,38 @@ const PlatformStatsSchema = new mongoose.Schema(
       totalActiveCandidates: { type: Number, default: null },
     },
 
-    // Legacy fields preserved for backward compatibility
+    // Highlight cards manual/mock configuration
     totalVacanciesClosed: {
       type: Number,
       default: 0,
       min: 0,
     },
     totalRevenueEarned: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    mockVacanciesClosed: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    mockRevenueEarned: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    mockMode: {
+      type: String,
+      enum: ['ADD', 'OVERRIDE'],
+      default: 'ADD',
+    },
+    liveVacanciesClosed: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    liveRevenueEarned: {
       type: Number,
       default: 0,
       min: 0,
