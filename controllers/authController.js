@@ -126,8 +126,24 @@ exports.initTalentPartnerRegistration = async (req, res) => {
       designation,
       linkedinProfile,
       city,
-      state
+      state,
+      termsAccepted,
+      termsAgreed
     } = req.body;
+
+    // Check & log Terms & MSA Agreement (Date/Time & True/False status)
+    const isTermsAgreed = termsAccepted === true || termsAgreed === true || termsAccepted === 'true' || termsAgreed === 'true';
+    const agreementTimestamp = new Date().toISOString();
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+    console.log(`[Terms & MSA Agreement Log] [${agreementTimestamp}] Role: TALENT_PARTNER | Email: ${email} | Terms Agreed: ${isTermsAgreed} | IP: ${clientIp}`);
+
+    if (!isTermsAgreed) {
+      console.warn(`[Terms & MSA Agreement Log] [${agreementTimestamp}] Registration rejected: Terms not accepted (termsAgreed=false) for email: ${email}`);
+      return res.status(400).json({
+        success: false,
+        message: 'You must agree to the Terms of Service & Master Service Agreement to register.'
+      });
+    }
 
     if (!firstName || !lastName || !email || !mobile || !password || !firmName || !designation || !city || !state) {
       return res.status(400).json({
@@ -160,14 +176,19 @@ exports.initTalentPartnerRegistration = async (req, res) => {
     const normalizedEmail = email.toLowerCase().trim();
     const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
 
-    const existingUser = await User.findOne({
-      $or: [{ email: normalizedEmail }, { mobile: normalizedMobile }]
-    });
-
-    if (existingUser) {
+    const existingEmail = await User.findOne({ email: normalizedEmail });
+    if (existingEmail) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid details entered. Please verify your information or try logging in.'
+        message: "An account with this email address already exists. Please sign in or use a different email."
+      });
+    }
+
+    const existingMobile = await User.findOne({ mobile: normalizedMobile });
+    if (existingMobile) {
+      return res.status(400).json({
+        success: false,
+        message: "An account with this mobile number already exists. Please sign in or use a different mobile number."
       });
     }
 
@@ -331,8 +352,24 @@ exports.initCompanyRegistration = async (req, res) => {
       department,
       linkedinProfile,
       city,
-      state
+      state,
+      termsAccepted,
+      termsAgreed
     } = req.body;
+
+    // Check & log Terms & MSA Agreement (Date/Time & True/False status)
+    const isTermsAgreed = termsAccepted === true || termsAgreed === true || termsAccepted === 'true' || termsAgreed === 'true';
+    const agreementTimestamp = new Date().toISOString();
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+    console.log(`[Terms & MSA Agreement Log] [${agreementTimestamp}] Role: COMPANY | Email: ${email} | Terms Agreed: ${isTermsAgreed} | IP: ${clientIp}`);
+
+    if (!isTermsAgreed) {
+      console.warn(`[Terms & MSA Agreement Log] [${agreementTimestamp}] Registration rejected: Terms not accepted (termsAgreed=false) for email: ${email}`);
+      return res.status(400).json({
+        success: false,
+        message: 'You must agree to the Terms of Service & Master Service Agreement to register.'
+      });
+    }
 
     if (!firstName || !lastName || !email || !mobile || !password || !companyName || !designation || !department || !city || !state) {
       return res.status(400).json({
@@ -384,14 +421,19 @@ exports.initCompanyRegistration = async (req, res) => {
     const normalizedEmail = email.toLowerCase().trim();
     const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
 
-    const existingUser = await User.findOne({
-      $or: [{ email: normalizedEmail }, { mobile: normalizedMobile }]
-    });
-
-    if (existingUser) {
+    const existingEmail = await User.findOne({ email: normalizedEmail });
+    if (existingEmail) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid details entered. Please verify your information or try logging in.'
+        message: "An account with this work email already exists. Please sign in or use a different email."
+      });
+    }
+
+    const existingMobile = await User.findOne({ mobile: normalizedMobile });
+    if (existingMobile) {
+      return res.status(400).json({
+        success: false,
+        message: "An account with this mobile number already exists. Please sign in or use a different mobile number."
       });
     }
 
