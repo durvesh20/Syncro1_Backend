@@ -212,6 +212,7 @@ app.use('/api/reports', require('./routes/reportRoutes'));
 app.use('/api/landing', require('./routes/landingRoutes'));
 app.use('/api/landingpage', require('./routes/landingpageRoutes'));
 app.use('/api/contact', require('./routes/contactRoutes'));
+app.use('/api/demo', require('./routes/demoRoutes'));
 
 // ── Developer Portal & ATS Integration Routes ──
 app.use('/api/developer/auth', require('./routes/developerAuthRoutes'));
