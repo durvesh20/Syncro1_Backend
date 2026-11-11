@@ -32,6 +32,10 @@ const partnerCandidateSchema = new mongoose.Schema({
     required: [true, 'Last name is required'],
     trim: true
   },
+  dob: {
+    type: Date,
+    default: null
+  },
   email: {
     type: String,
     required: [true, 'Email is required'],

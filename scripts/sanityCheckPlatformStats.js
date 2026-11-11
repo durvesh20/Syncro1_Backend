@@ -54,34 +54,56 @@ async function runSanityCheck() {
   const jobStatusRevenue = {};
 
   let computedTotalVacancies = 0;
-  let computedTotalPotentialRevenue = 0;
   let computedActiveVacancies = 0;
-  let computedActivePotentialRevenue = 0;
+  let sumTotalMaxCTC = 0;
+  let validTotalSalaryCount = 0;
+  let sumActiveMaxCTC = 0;
+  let validActiveSalaryCount = 0;
+  let computedActiveRequirements = 0;
 
   for (const job of allJobs) {
     const status = job.status || 'UNKNOWN';
     const vac = Math.max(1, Number(job.vacancies) || 1);
 
     let salaryMax = job.salary?.max ?? (typeof job.salary === 'number' ? job.salary : null);
-    let maxLPA = Number(salaryMax) || 0;
-    if (maxLPA >= 100000) {
-      maxLPA = maxLPA / 100000;
+    let maxSalary = Number(salaryMax) || 0;
+    let maxCTCInRupees = 0;
+    if (maxSalary > 0) {
+      maxCTCInRupees = maxSalary < 100000 ? maxSalary * 100000 : maxSalary;
     }
-    const earningPerPlacement = maxLPA * 5000;
-    const jobPotential = vac * earningPerPlacement;
+
+    if (maxCTCInRupees > 0) {
+      sumTotalMaxCTC += maxCTCInRupees;
+      validTotalSalaryCount += 1;
+    }
+
+    const fivePercentCTC = maxCTCInRupees * 0.05;
+    const jobPotential = vac * fivePercentCTC;
 
     jobStatusCounts[status] = (jobStatusCounts[status] || 0) + 1;
     jobStatusVacancies[status] = (jobStatusVacancies[status] || 0) + vac;
     jobStatusRevenue[status] = (jobStatusRevenue[status] || 0) + jobPotential;
 
     computedTotalVacancies += vac;
-    computedTotalPotentialRevenue += jobPotential;
 
     if (status === 'ACTIVE') {
       computedActiveVacancies += vac;
-      computedActivePotentialRevenue += jobPotential;
+      computedActiveRequirements += 1;
+      if (maxCTCInRupees > 0) {
+        sumActiveMaxCTC += maxCTCInRupees;
+        validActiveSalaryCount += 1;
+      }
     }
   }
+
+  // Formula: (Avg Max CTC of requirements) * 5% * vacancies
+  const divisorTotal = validTotalSalaryCount > 0 ? validTotalSalaryCount : (allJobs.length || 1);
+  const avgTotalMaxCTC = allJobs.length > 0 ? (sumTotalMaxCTC / divisorTotal) : 0;
+  const computedTotalPotentialRevenue = Math.round((avgTotalMaxCTC * 0.05) * computedTotalVacancies);
+
+  const divisorActive = validActiveSalaryCount > 0 ? validActiveSalaryCount : (computedActiveRequirements || 1);
+  const avgActiveMaxCTC = computedActiveRequirements > 0 ? (sumActiveMaxCTC / divisorActive) : 0;
+  const computedActivePotentialRevenue = Math.round((avgActiveMaxCTC * 0.05) * computedActiveVacancies);
 
   console.log('\n--- Jobs Breakdown by Status ---');
   console.table(

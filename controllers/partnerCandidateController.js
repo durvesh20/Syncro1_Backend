@@ -92,7 +92,7 @@ exports.createPoolCandidate = async (req, res) => {
     if (!partner) return res.status(404).json({ success: false, message: 'Partner profile not found' });
 
     const {
-      firstName, middleName, lastName,
+      firstName, middleName, lastName, dob,
       email, mobile,
       location, willingToRelocate, totalExperience, relevantExperience,
       noticePeriod, currentSalary, expectedSalary,
@@ -159,6 +159,7 @@ exports.createPoolCandidate = async (req, res) => {
       firstName: firstName.trim(),
       middleName: middleName?.trim() || '',
       lastName: lastName.trim(),
+      dob: dob ? new Date(dob) : null,
       email: normalizedEmail,
       mobile: normalizedMobile,
       location: location?.trim(),
@@ -264,7 +265,7 @@ exports.updatePoolCandidate = async (req, res) => {
     if (!candidate) return res.status(404).json({ success: false, message: 'Candidate not found in your pool' });
 
     const {
-      firstName, middleName, lastName,
+      firstName, middleName, lastName, dob,
       email, mobile,
       location, willingToRelocate, totalExperience, relevantExperience,
       noticePeriod, currentSalary, expectedSalary,
@@ -311,6 +312,7 @@ exports.updatePoolCandidate = async (req, res) => {
     if (firstName) candidate.firstName = firstName.trim();
     if (middleName !== undefined) candidate.middleName = middleName.trim();
     if (lastName) candidate.lastName = lastName.trim();
+    if (dob !== undefined) candidate.dob = dob ? new Date(dob) : null;
     if (email) candidate.email = email.toLowerCase().trim();
     if (mobile) candidate.mobile = mobile.replace(/\D/g, '');
     if (location !== undefined) candidate.location = location.trim();
@@ -599,6 +601,7 @@ exports.applyFromPool = async (req, res) => {
       firstName: poolCandidate.firstName,
       middleName: poolCandidate.middleName,
       lastName: poolCandidate.lastName,
+      dob: poolCandidate.dob || null,
       email: poolCandidate.email,
       mobile: poolCandidate.mobile,
 
@@ -611,6 +614,7 @@ exports.applyFromPool = async (req, res) => {
 
       // Professional — copied by value
       profile: {
+        dob: poolCandidate.dob || null,
         location: poolCandidate.location,
         currentLocation: poolCandidate.location,
         willingToRelocate: poolCandidate.willingToRelocate,

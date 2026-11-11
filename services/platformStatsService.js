@@ -7,7 +7,7 @@ const PLACED_STATUSES = ['JOINED', 'PLACED', 'HIRED'];
 
 /**
  * Helper to compute placement revenue for a closed candidate.
- * If candidate has commission or billingAmount, use it; otherwise fallback to maxLPA * 5000.
+ * If candidate has commission or billingAmount, use it; otherwise fallback to 5% of max CTC.
  */
 function calculatePlacementRevenue(candidate, job) {
   if (candidate && candidate.commission && Number(candidate.commission) > 0) {
@@ -18,11 +18,13 @@ function calculatePlacementRevenue(candidate, job) {
   }
   if (!job) return 0;
   let salaryMax = job.salary?.max ?? (typeof job.salary === 'number' ? job.salary : null);
-  let maxLPA = Number(salaryMax) || 0;
-  if (maxLPA >= 100000) {
-    maxLPA = maxLPA / 100000;
+  let maxSalary = Number(salaryMax) || 0;
+  let maxCTCInRupees = 0;
+  if (maxSalary > 0) {
+    maxCTCInRupees = maxSalary < 100000 ? maxSalary * 100000 : maxSalary;
   }
-  return Math.round(maxLPA * 5000);
+  // 5% per candidate joined
+  return Math.round(maxCTCInRupees * 0.05);
 }
 
 /**
@@ -30,54 +32,81 @@ function calculatePlacementRevenue(candidate, job) {
  * 
  * Row 1 (Platform Historic Totals - All-time Data):
  * 1. totalVacancies: sum of all vacancies across all jobs in the database
- * 2. totalPotentialRevenue: sum of potential revenue across all jobs in the database
- *    Formula: jobVacancies * (salaryMaxInLPA * 5000)
+ * 2. totalPotentialRevenue: 
+ *    Formula: (Average Max CTC of all requirements) * 5% * totalVacancies
  * 3. totalCandidatesUploaded: total count of all candidates in the database
  * 
  * Row 2 (Platform Active Operations):
  * 4. totalActiveVacancies: sum of vacancies for jobs where status === 'ACTIVE'
- * 5. activeVacanciesPotentialRevenue: sum of potential revenue for active jobs
+ * 5. activeVacanciesPotentialRevenue: 
+ *    Formula: (Average Max CTC of active requirements) * 5% * totalActiveVacancies
  * 6. totalActiveCandidates: count of candidates with status NOT IN REJECTED_CANDIDATE_STATUSES
  * 
  * Platform Highlights (Real-Time Live Data):
  * 7. liveVacanciesClosed: count of candidates with status IN ['JOINED', 'PLACED', 'HIRED']
- * 8. liveRevenueEarned: sum of placement revenue for placed candidates
+ * 8. liveRevenueEarned: sum of placement revenue for placed candidates (5% of candidate CTC)
  */
 async function computeLivePlatformStats() {
   const allJobs = await Job.find({}, 'vacancies salary status title');
   
   let totalVacancies = 0;
-  let totalPotentialRevenue = 0;
   let totalActiveVacancies = 0;
-  let activeVacanciesPotentialRevenue = 0;
   let totalActiveRequirements = 0;
+
+  let sumTotalMaxCTC = 0;
+  let validTotalSalaryCount = 0;
+
+  let sumActiveMaxCTC = 0;
+  let validActiveSalaryCount = 0;
 
   for (const job of allJobs) {
     const vac = Math.max(1, Number(job.vacancies) || 1);
-    
-    // Extract max salary in LPA (Lakhs Per Annum)
-    let salaryMax = job.salary?.max ?? (typeof job.salary === 'number' ? job.salary : null);
-    let maxLPA = Number(salaryMax) || 0;
-    if (maxLPA >= 100000) {
-      maxLPA = maxLPA / 100000;
-    }
-    
-    // Max earning per placement = maxLPA * 5000
-    // Total potential for this job = vac * earningPerPlacement
-    const earningPerPlacement = maxLPA * 5000;
-    const jobPotential = vac * earningPerPlacement;
-
     totalVacancies += vac;
-    totalPotentialRevenue += jobPotential;
+
+    // Extract max salary in INR (Full CTC)
+    let salaryMax = job.salary?.max ?? (typeof job.salary === 'number' ? job.salary : null);
+    let maxSalary = Number(salaryMax) || 0;
+    let maxCTCInRupees = 0;
+    if (maxSalary > 0) {
+      if (maxSalary < 100000) {
+        // Stored in LPA, convert to full INR CTC (e.g. 12 LPA -> 12,00,000 INR)
+        maxCTCInRupees = maxSalary * 100000;
+      } else {
+        maxCTCInRupees = maxSalary;
+      }
+    }
+
+    if (maxCTCInRupees > 0) {
+      sumTotalMaxCTC += maxCTCInRupees;
+      validTotalSalaryCount += 1;
+    }
 
     if (job.status === 'ACTIVE') {
       totalActiveVacancies += vac;
-      activeVacanciesPotentialRevenue += jobPotential;
       totalActiveRequirements += 1;
+      if (maxCTCInRupees > 0) {
+        sumActiveMaxCTC += maxCTCInRupees;
+        validActiveSalaryCount += 1;
+      }
     }
   }
 
   const totalRequirements = allJobs.length;
+
+  // 1. Total Potential Revenue calculation:
+  // (Avg of total max CTC of the requirements) * 5% * total vacancies
+  const divisorTotal = validTotalSalaryCount > 0 ? validTotalSalaryCount : (totalRequirements || 1);
+  const avgTotalMaxCTC = totalRequirements > 0 ? (sumTotalMaxCTC / divisorTotal) : 0;
+  const avgTotalCommission = avgTotalMaxCTC * 0.05; // 5% per candidate joined
+  const totalPotentialRevenue = Math.round(avgTotalCommission * totalVacancies);
+
+  // 2. Active Vacancies Potential Revenue calculation:
+  // (Avg of active max CTC of active requirements) * 5% * total active vacancies
+  const divisorActive = validActiveSalaryCount > 0 ? validActiveSalaryCount : (totalActiveRequirements || 1);
+  const avgActiveMaxCTC = totalActiveRequirements > 0 ? (sumActiveMaxCTC / divisorActive) : 0;
+  const avgActiveCommission = avgActiveMaxCTC * 0.05; // 5% per candidate joined
+  const activeVacanciesPotentialRevenue = Math.round(avgActiveCommission * totalActiveVacancies);
+
   const totalCandidatesUploaded = await Candidate.countDocuments();
   const totalActiveCandidates = await Candidate.countDocuments({
     status: { $nin: slotService.REJECTED_CANDIDATE_STATUSES }
@@ -104,7 +133,9 @@ async function computeLivePlatformStats() {
     totalRequirements,
     totalActiveRequirements,
     liveVacanciesClosed,
-    liveRevenueEarned
+    liveRevenueEarned,
+    avgMaxCTC: Math.round(avgTotalMaxCTC),
+    avgActiveMaxCTC: Math.round(avgActiveMaxCTC)
   };
 }
 
@@ -154,6 +185,8 @@ async function getEffectivePlatformStats() {
     totalActiveCandidates: liveStats.totalActiveCandidates,
     totalRequirements: liveStats.totalRequirements,
     totalActiveRequirements: liveStats.totalActiveRequirements,
+    avgMaxCTC: liveStats.avgMaxCTC,
+    avgActiveMaxCTC: liveStats.avgActiveMaxCTC,
 
     // Real-time live + backend mock configured for Highlight Cards:
     totalVacanciesClosed: effectiveVacanciesClosed,

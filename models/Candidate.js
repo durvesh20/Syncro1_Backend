@@ -46,6 +46,10 @@ const candidateSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  dob: {
+    type: Date,
+    default: null
+  },
   email: {
     type: String,
     required: true,
@@ -91,6 +95,10 @@ const candidateSchema = new mongoose.Schema({
   // Profile
   profile: {
     // ✅ NEW FIELDS from submission form
+    dob: {
+      type: Date,
+      default: null
+    },
     middleName: String,
     location: String,               // current location / city
     totalExperience: Number,        // total years of experience
@@ -164,7 +172,6 @@ const candidateSchema = new mongoose.Schema({
         'COMPANY_REVIEW': 'SENT_TO_CLIENT',
         'CLIENT_REVIEW': 'SENT_TO_CLIENT',
         'SUBMITTED': 'SENT_TO_CLIENT',
-        'SENT_TO_COMPANY': 'SENT_TO_CLIENT',
         'PENDING_ADMIN_APPROVAL': 'S1_REVIEW'
       };
       return adapt[val] || val;
@@ -974,9 +981,11 @@ candidateSchema.pre('validate', function (next) {
   const adapt = {
     'ADMIN_REVIEW': 'S1_REVIEW',
     'ADMIN_REJECTED': 'S1_REJECTED',
-    'UNDER_REVIEW': 'CLIENT_REVIEW',
-    'REVIEWING': 'CLIENT_REVIEW',
-    'COMPANY_REVIEW': 'CLIENT_REVIEW',
+    'UNDER_REVIEW': 'SENT_TO_CLIENT',
+    'REVIEWING': 'SENT_TO_CLIENT',
+    'COMPANY_REVIEW': 'SENT_TO_CLIENT',
+    'CLIENT_REVIEW': 'SENT_TO_CLIENT',
+    'SUBMITTED': 'SENT_TO_CLIENT',
     'PENDING_ADMIN_APPROVAL': 'S1_REVIEW'
   };
   if (this.status && adapt[this.status]) {

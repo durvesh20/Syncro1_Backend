@@ -127,10 +127,10 @@ exports.pipelineShortlist = async (req, res) => {
         order: r.order ?? i + 1
       }));
       candidate.pipelineTemplate = normalized;
-      candidate.rounds = normalized.map(r => ({
+      candidate.rounds = normalized.map((r, idx) => ({
         roundType: r.roundType,
         order: r.order,
-        status: getInitialRoundState(r.roundType),
+        status: idx === 0 ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
         slots: [],
         rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
       }));
@@ -542,10 +542,10 @@ exports.pipelineReShortlist = async (req, res) => {
         order: r.order ?? i + 1
       }));
       candidate.pipelineTemplate = normalized;
-      candidate.rounds = normalized.map(r => ({
+      candidate.rounds = normalized.map((r, idx) => ({
         roundType: r.roundType,
         order: r.order,
-        status: getInitialRoundState(r.roundType),
+        status: idx === 0 ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
         slots: [],
         rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
       }));
@@ -702,10 +702,11 @@ exports.defineJobPipelineTemplate = async (req, res) => {
       const hasOutcome = cand.rounds?.some(r => r.outcome && r.outcome.decision);
       if (!hasOutcome) {
         cand.pipelineTemplate = normalized;
-        cand.rounds = normalized.map(r => ({
+        const isPreReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW'].includes(cand.status);
+        cand.rounds = normalized.map((r, idx) => ({
           roundType: r.roundType,
           order: r.order,
-          status: getInitialRoundState(r.roundType),
+          status: (!isPreReview && idx === 0) ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
           slots: [],
           rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
         }));
@@ -937,110 +938,79 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
     order: r.order ?? i + 1
   }));
 
-  // Self-healing: If candidate is currently in an initial round state (SLOTS_NOT_PUBLISHED, SLOTS_PUBLISHED, ASSESSMENT_PENDING)
+  // Self-healing: If candidate is currently in an interview round state (SLOTS_NOT_PUBLISHED, SLOTS_PUBLISHED, ASSESSMENT_PENDING, ROUND_SELECTED_NEXT)
   // but was never actually shortlisted by the company (company has not reviewed or shortlisted them)
-  const isPostShortlistState = ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING'].includes(candidate.status);
+  const isPostShortlistState = ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING', 'ROUND_SELECTED_NEXT'].includes(candidate.status);
   if (isPostShortlistState) {
     const hasCompanyShortlist = 
-      (candidate.auditTrail && candidate.auditTrail.some(a => a.action === 'SHORTLIST')) ||
+      (candidate.auditTrail && candidate.auditTrail.some(a => a.action === 'SHORTLIST' || a.action === 'CLIENT_SCREEN_SELECT')) ||
       (candidate.statusHistory && candidate.statusHistory.some(h => 
-        (h.status === 'SHORTLISTED' || (h.notes && /shortlist/i.test(h.notes) && h.status !== 'SUBMITTED'))
+        (h.status === 'SHORTLISTED' || (h.notes && /company.*shortlist|client.*shortlist/i.test(h.notes) && !/SUBMITTED|SENT_TO_CLIENT|S1_SCREEN/i.test(h.status)))
       ));
 
-    const wasSubmitted = candidate.statusHistory && candidate.statusHistory.some(h => h.status === 'SUBMITTED');
+    const wasDispatchedToCompany = candidate.statusHistory && candidate.statusHistory.some(h => 
+      ['SUBMITTED', 'SENT_TO_CLIENT', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'S1_SCREEN_SELECT'].includes(h.status)
+    );
 
-    if (!hasCompanyShortlist && wasSubmitted) {
-      candidate.status = 'SUBMITTED';
-      if (candidate.rounds && candidate.rounds.length > 0) {
-        candidate.rounds.forEach(r => {
-          if (r.status === 'SLOTS_NOT_PUBLISHED' || r.status === 'SLOTS_PUBLISHED' || r.status === 'ASSESSMENT_PENDING') {
-            r.status = 'NOT_STARTED';
-          }
-        });
-      }
+    if (!hasCompanyShortlist && wasDispatchedToCompany) {
+      candidate.status = 'SENT_TO_CLIENT';
+      candidate.assignedSlot = null;
+      candidate.interviewConfig = null;
+      candidate.pipelineTemplate = normalizedJobTemplate;
+      candidate.rounds = normalizedJobTemplate.map((r, i) => ({
+        roundType: r.roundType,
+        order: r.order ?? i + 1,
+        status: 'NOT_STARTED',
+        slots: [],
+        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+      }));
       await candidate.save();
       return;
     }
   }
 
+  // Pre-pipeline review states: candidates who have not been shortlisted by the company
+  const isPrePipelineReview = [
+    'SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW',
+    'DRAFT', 'CONSENT_PENDING', 'CONSENT_SENT', 'CONSENT_CONFIRMED', 'CONSENT_DENIED',
+    'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED',
+    'REJECTED', 'ADMIN_REJECTED', 'WITHDRAWN'
+  ].includes(candidate.status);
+
+  // STRICT GUARD: Pre-pipeline review candidates are strictly awaiting company review.
+  // Under NO circumstance can they have cleared Round 1 or advanced to Round 2 (L2 Interview).
+  // All rounds must be initialized to strictly NOT_STARTED.
+  if (isPrePipelineReview) {
+    candidate.pipelineTemplate = normalizedJobTemplate;
+    candidate.rounds = normalizedJobTemplate.map((r, i) => ({
+      roundType: r.roundType,
+      order: r.order ?? i + 1,
+      status: 'NOT_STARTED',
+      slots: [],
+      rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+    }));
+    candidate.assignedSlot = null;
+    candidate.interviewConfig = null;
+    if (['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW'].includes(candidate.status)) {
+      candidate.status = 'SENT_TO_CLIENT';
+    }
+    await candidate.save();
+    return;
+  }
+
   // Case 1: Candidate has NO rounds initialized yet (empty array or undefined)
   if (!candidate.rounds || candidate.rounds.length === 0) {
     candidate.pipelineTemplate = normalizedJobTemplate;
-
-    // Check if candidate has already completed / passed Round 1:
-    const targetRound = options.advanceToRound !== undefined ? parseInt(options.advanceToRound, 10) : null;
-    const isRound1Completed = targetRound !== null 
-      ? targetRound >= 2 
-      : (
-          candidate.status === 'ROUND_SELECTED_NEXT' ||
-          candidate.status === 'INTERVIEW_CONDUCTED' ||
-          candidate.status === 'INTERVIEWED' ||
-          (candidate.statusHistory && candidate.statusHistory.some(h => 
-            h.status === 'ROUND_SELECTED_NEXT' || 
-            h.status === 'INTERVIEW_CONDUCTED' ||
-            (h.notes && /next round|cleared|passed|completed/i.test(h.notes))
-          )) ||
-          (candidate.interviews && candidate.interviews.some(i => i.result === 'PASSED'))
-        );
-
-    if (isRound1Completed && normalizedJobTemplate.length >= 2) {
-      // Round 1 is CLEARED -> Activate Round 2 (e.g. Client Round) with SLOTS_NOT_PUBLISHED
-      candidate.rounds = normalizedJobTemplate.map((r, idx) => {
-        if (idx === 0) {
-          return {
-            roundType: r.roundType,
-            order: r.order,
-            status: 'ROUND_SELECTED_NEXT',
-            outcome: {
-              decision: 'SELECTED_NEXT_ROUND',
-              reason: 'Round 1 cleared',
-              decidedAt: new Date()
-            },
-            slots: [],
-            rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
-          };
-        } else if (idx === 1) {
-          return {
-            roundType: r.roundType,
-            order: r.order,
-            status: getInitialRoundState(r.roundType), // 'SLOTS_NOT_PUBLISHED'
-            slots: [],
-            rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
-          };
-        } else {
-          return {
-            roundType: r.roundType,
-            order: r.order,
-            status: 'NOT_STARTED',
-            slots: [],
-            rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
-          };
-        }
-      });
-
-      candidate.status = candidate.rounds[1].status;
-      candidate.assignedSlot = null; // Decouple legacy slot from Round 1
-      candidate.interviewConfig = null;
-      candidate.statusHistory.push({
-        status: candidate.status,
-        changedAt: new Date(),
-        notes: `Pipeline auto-synced: Round 1 cleared, advanced to ${candidate.rounds[1].roundType}`
-      });
-    } else {
-      // Initialize from beginning
-      const isPrePipelineReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT'].includes(candidate.status);
-      candidate.rounds = normalizedJobTemplate.map((r, idx) => ({
-        roundType: r.roundType,
-        order: r.order,
-        status: (idx === 0 && !isPrePipelineReview) ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
-        slots: [],
-        rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
-      }));
-      if (candidate.rounds.length > 0 && ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING', 'SLOTS_PUBLISHED'].includes(candidate.status)) {
-        candidate.status = candidate.rounds[0].status;
-      }
+    candidate.rounds = normalizedJobTemplate.map((r, idx) => ({
+      roundType: r.roundType,
+      order: r.order,
+      status: idx === 0 ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
+      slots: [],
+      rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+    }));
+    if (candidate.rounds.length > 0 && ['SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'ASSESSMENT_PENDING', 'SLOTS_PUBLISHED'].includes(candidate.status)) {
+      candidate.status = candidate.rounds[0].status;
     }
-
     await candidate.save();
     return;
   }
@@ -1073,7 +1043,7 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
 
   // Case 3: Auto-sync template changes if candidate is in initial state
   const hasOutcome = candidate.rounds.some(r => r.outcome && r.outcome.decision);
-  const isInitialState = ['SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'].includes(candidate.status);
+  const isInitialState = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'SHORTLISTED', 'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'].includes(candidate.status);
 
   if (!hasOutcome && isInitialState) {
     const jobTemplateStr = JSON.stringify(normalizedJobTemplate.map(r => r.roundType));

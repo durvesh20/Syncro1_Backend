@@ -467,7 +467,7 @@ class CandidateQueueService {
             status: 'S1_SCREEN_SELECT',
             changedBy: adminUserId,
             changedAt: new Date(),
-            notes: `S1 Screen Select: Pre-screening cleared. ${notes || ''}`.trim()
+            notes: `S1 Screen Select: Pre-screening approved. ${notes || ''}`.trim()
         });
 
         await candidate.save();
@@ -482,7 +482,7 @@ class CandidateQueueService {
      */
     async sendToClientCandidate(candidateId, adminUserId, notes = '') {
         const candidate = await Candidate.findById(candidateId)
-            .populate('job', 'title')
+            .populate('job', 'title pipelineTemplate')
             .populate('company', 'companyName user')
             .populate('submittedBy', 'firmName user firstName lastName');
 
@@ -497,6 +497,9 @@ class CandidateQueueService {
         }
 
         candidate.status = 'SENT_TO_CLIENT';
+        candidate.assignedSlot = null;
+        candidate.interviewConfig = null;
+        candidate.hrRound = undefined;
         candidate.adminQueue.dispatchedBy = adminUserId;
         candidate.adminQueue.dispatchedAt = new Date();
         candidate.adminQueue.action = 'SENT_TO_CLIENT';
@@ -508,6 +511,38 @@ class CandidateQueueService {
             changedAt: new Date(),
             notes: `Sent to Client. ${notes || ''} Profile forwarded to client for review.`.trim()
         });
+
+        // Initialize / reset candidate rounds with strictly NOT_STARTED so it cannot be auto-advanced
+        const Job = require('../models/Job');
+        let jobTemplate = candidate.job?.pipelineTemplate;
+        if (!Array.isArray(jobTemplate) || jobTemplate.length === 0) {
+            const rawJob = await Job.findById(candidate.job?._id || candidate.job).select('pipelineTemplate');
+            if (rawJob && Array.isArray(rawJob.pipelineTemplate) && rawJob.pipelineTemplate.length > 0) {
+                jobTemplate = rawJob.pipelineTemplate;
+            }
+        }
+
+        if (Array.isArray(jobTemplate) && jobTemplate.length > 0) {
+            const normalized = jobTemplate.map((r, i) => ({
+                roundType: r.roundType,
+                order: r.order ?? i + 1
+            }));
+            candidate.pipelineTemplate = normalized;
+            candidate.rounds = normalized.map(r => ({
+                roundType: r.roundType,
+                order: r.order,
+                status: 'NOT_STARTED',
+                slots: [],
+                rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
+            }));
+        } else if (Array.isArray(candidate.rounds) && candidate.rounds.length > 0) {
+            candidate.rounds.forEach(r => {
+                r.status = 'NOT_STARTED';
+                r.outcome = undefined;
+                r.slots = [];
+                r.rescheduleCount = { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 };
+            });
+        }
 
         await candidate.save();
         await candidate.populate([

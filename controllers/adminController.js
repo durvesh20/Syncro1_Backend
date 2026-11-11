@@ -3004,10 +3004,11 @@ exports.approveEditRequest = async (req, res) => {
           const hasOutcome = cand.rounds?.some(r => r.outcome && r.outcome.decision);
           if (!hasOutcome) {
             cand.pipelineTemplate = normalized;
-            cand.rounds = normalized.map(r => ({
+            const isPreReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW'].includes(cand.status);
+            cand.rounds = normalized.map((r, idx) => ({
               roundType: r.roundType,
               order: r.order,
-              status: getInitialRoundState(r.roundType),
+              status: (!isPreReview && idx === 0) ? getInitialRoundState(r.roundType) : 'NOT_STARTED',
               slots: [],
               rescheduleCount: { candidateInitiated: 0, clientInitiated: 0, partnerInitiated: 0 }
             }));
@@ -3962,9 +3963,7 @@ const resolveAdminStatusQuery = (rawStatus) => {
   // 6. Sent to Client / Company Review
   if (
     s === 'SENT_TO_CLIENT' ||
-    s === 'SENT_TO_COMPANY' ||
     s === 'SUBMITTED' ||
-    s === 'SUBMITTED_TO_COMPANY' ||
     s === 'SUBMITTED_TO_CLIENT' ||
     s === 'COMPANY_REVIEW' ||
     s === 'CLIENT_REVIEW' ||
@@ -3973,9 +3972,7 @@ const resolveAdminStatusQuery = (rawStatus) => {
   ) {
     return [
       'SENT_TO_CLIENT',
-      'SENT_TO_COMPANY',
       'SUBMITTED',
-      'SUBMITTED_TO_COMPANY',
       'SUBMITTED_TO_CLIENT',
       'COMPANY_REVIEW',
       'CLIENT_REVIEW',
@@ -4485,9 +4482,7 @@ exports.getAllCandidates = async (req, res) => {
 
     const sentToClientCount =
       (sMap.SENT_TO_CLIENT || 0) +
-      (sMap.SENT_TO_COMPANY || 0) +
       (sMap.SUBMITTED || 0) +
-      (sMap.SUBMITTED_TO_COMPANY || 0) +
       (sMap.SUBMITTED_TO_CLIENT || 0) +
       (sMap.COMPANY_REVIEW || 0) +
       (sMap.CLIENT_REVIEW || 0) +
@@ -4974,8 +4969,67 @@ exports.getAllJobsWithCandidates = async (req, res) => {
       needsAdminReview,
       stage,
       hasCandidates,
-      assignedTo
+      assignedTo,
+      sortBy,
+      sortOrder
     } = req.query;
+
+    let sortStage = { createdAt: -1 };
+
+    if (sortBy) {
+      const sortFields = Array.isArray(sortBy)
+        ? sortBy
+        : String(sortBy).split(',').map(s => s.trim()).filter(Boolean);
+
+      const sortOrders = Array.isArray(sortOrder)
+        ? sortOrder
+        : String(sortOrder || '').split(',').map(s => s.trim().toLowerCase());
+
+      const computedSort = {};
+
+      sortFields.forEach((field, index) => {
+        const orderStr = sortOrders[index] || sortOrders[0] || 'desc';
+        const orderVal = orderStr === 'asc' ? 1 : -1;
+        switch (field) {
+          case 'job':
+          case 'title':
+            computedSort.title = orderVal;
+            break;
+          case 'company':
+            computedSort['companyInfo.companyName'] = orderVal;
+            break;
+          case 'status':
+            computedSort.status = orderVal;
+            break;
+          case 'assignee':
+            computedSort['assignedToInfo.email'] = orderVal;
+            break;
+          case 'candidates':
+          case 'totalCandidates':
+            computedSort.totalCandidates = orderVal;
+            break;
+          case 'slotUsage':
+          case 'slotsUsed':
+            computedSort.slotsUsed = orderVal;
+            break;
+          case 'partners':
+          case 'interestedPartnersCount':
+            computedSort.interestedPartnersCount = orderVal;
+            break;
+          case 'posted':
+          case 'createdAt':
+            computedSort.createdAt = orderVal;
+            break;
+        }
+      });
+
+      if (Object.keys(computedSort).length > 0) {
+        if (!computedSort.createdAt) {
+          computedSort.createdAt = -1;
+        }
+        sortStage = computedSort;
+      }
+    }
 
     const query = {};
     if (status) {
@@ -5201,6 +5255,9 @@ exports.getAllJobsWithCandidates = async (req, res) => {
       ...(stage === 'hr_round' ? [{ $match: { 'candidateStatusBreakdown.hrRounds': { $gt: 0 } } }] : []),
       ...(hasCandidates === 'true' || hasCandidates === 'yes' ? [{ $match: { totalCandidates: { $gt: 0 } } }] : []),
       ...(hasCandidates === 'false' || hasCandidates === 'no' ? [{ $match: { totalCandidates: 0 } }] : []),
+
+      // Sorting
+      { $sort: sortStage },
 
       // Pagination
       { $skip: skip },

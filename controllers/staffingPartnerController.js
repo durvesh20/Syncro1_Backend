@@ -1251,6 +1251,7 @@ exports.submitCandidate = async (req, res) => {
       firstName,
       middleName,
       lastName,
+      dob,
       email,
       mobile,
       location,
@@ -1551,6 +1552,7 @@ exports.submitCandidate = async (req, res) => {
       firstName: firstName.trim(),
       middleName: middleName?.trim() || '',
       lastName: lastName.trim(),
+      dob: dob ? new Date(dob) : (parsedProfile?.dob ? new Date(parsedProfile.dob) : null),
       email: normalizedEmail,
       mobile: normalizedMobile,
 
@@ -1563,6 +1565,7 @@ exports.submitCandidate = async (req, res) => {
 
       // Build profile from individual form fields
       profile: {
+        dob: dob ? new Date(dob) : (parsedProfile?.dob ? new Date(parsedProfile.dob) : null),
         middleName: middleName?.trim() || '',
         location: location.trim(),           // ✅ trimmed
         currentLocation: location.trim(),    // ✅ trimmed
@@ -2971,19 +2974,13 @@ const resolveTalentStatusQuery = (rawStatus, rawTab) => {
     // Sent to Client / Client Review
     if (
       s === 'SENT_TO_CLIENT' ||
-      s === 'SENT_TO_COMPANY' ||
-      s === 'SUBMITTED' ||
-      s === 'SUBMITTED_TO_COMPANY' ||
-      s === 'SUBMITTED_TO_CLIENT' ||
       s === 'COMPANY_REVIEW' ||
       s === 'CLIENT_REVIEW' ||
-      s === 'UNDER_REVIEW' ||
-      s === 'REVIEWING' ||
       s.includes('SENT_TO') ||
       s.includes('CLIENT_REVIEW') ||
       s.includes('COMPANY_REVIEW')
     ) {
-      return ['SENT_TO_CLIENT', 'SENT_TO_COMPANY', 'SUBMITTED', 'SUBMITTED_TO_COMPANY', 'SUBMITTED_TO_CLIENT', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'UNDER_REVIEW', 'REVIEWING'];
+      return ['SENT_TO_CLIENT', 'SUBMITTED', 'SUBMITTED_TO_CLIENT', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'UNDER_REVIEW', 'REVIEWING'];
     }
 
     // Shortlisted
@@ -3409,6 +3406,7 @@ exports.updateSubmission = async (req, res) => {
       firstName,
       middleName,
       lastName,
+      dob,
       email,
       mobile,
       location,
