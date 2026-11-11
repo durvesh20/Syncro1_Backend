@@ -18,4 +18,9 @@ router.get('/', protect, authorize('admin', 'sub_admin'), demoController.getDemo
 // @access  Private (Admin / Sub-Admin)
 router.patch('/:id/status', protect, authorize('admin', 'sub_admin'), demoController.updateDemoStatus);
 
+// @route   DELETE /api/demo/:id
+// @desc    Delete a demo request
+// @access  Private (Admin / Sub-Admin)
+router.delete('/:id', protect, authorize('admin', 'sub_admin'), demoController.deleteDemoRequest);
+
 module.exports = router;

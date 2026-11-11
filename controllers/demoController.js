@@ -110,19 +110,56 @@ exports.submitDemoRequest = async (req, res) => {
  */
 exports.getDemoRequests = async (req, res) => {
   try {
-    const { stakeholder, status, page = 1, limit = 50 } = req.query;
+    const { stakeholder, status, search, page = 1, limit = 50 } = req.query;
     const query = {};
 
-    if (stakeholder) query.stakeholder = stakeholder;
-    if (status) query.status = status;
+    if (stakeholder && stakeholder !== 'all') {
+      if (stakeholder === 'company' || stakeholder === 'client') {
+        query.stakeholder = 'client';
+      } else if (stakeholder === 'partner' || stakeholder === 'talent_partner') {
+        query.stakeholder = 'partner';
+      } else {
+        query.stakeholder = stakeholder;
+      }
+    }
+
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    if (search && search.trim()) {
+      const rx = new RegExp(search.trim(), 'i');
+      query.$or = [
+        { name: rx },
+        { email: rx },
+        { phone: rx },
+        { organization: rx },
+        { referenceCode: rx },
+        { notes: rx },
+        { partnerDomain: rx }
+      ];
+    }
 
     const pageNum = parseInt(page, 10) || 1;
     const limitNum = parseInt(limit, 10) || 50;
     const skip = (pageNum - 1) * limitNum;
 
-    const [requests, total] = await Promise.all([
+    const [
+      requests,
+      total,
+      totalAll,
+      companyCount,
+      partnerCount,
+      pendingCount,
+      scheduledCount
+    ] = await Promise.all([
       DemoRequest.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
-      DemoRequest.countDocuments(query)
+      DemoRequest.countDocuments(query),
+      DemoRequest.countDocuments(),
+      DemoRequest.countDocuments({ stakeholder: 'client' }),
+      DemoRequest.countDocuments({ stakeholder: 'partner' }),
+      DemoRequest.countDocuments({ status: 'pending' }),
+      DemoRequest.countDocuments({ status: 'scheduled' })
     ]);
 
     return res.status(200).json({
@@ -131,6 +168,13 @@ exports.getDemoRequests = async (req, res) => {
       total,
       page: pageNum,
       totalPages: Math.ceil(total / limitNum),
+      counts: {
+        all: totalAll,
+        company: companyCount,
+        partner: partnerCount,
+        pending: pendingCount,
+        scheduled: scheduledCount
+      },
       data: requests
     });
   } catch (error) {
@@ -183,6 +227,34 @@ exports.updateDemoStatus = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Server error while updating demo status',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Delete a demo request
+ * @route   DELETE /api/demo/:id
+ * @access  Private (Admin / Sub-Admin)
+ */
+exports.deleteDemoRequest = async (req, res) => {
+  try {
+    const demoDoc = await DemoRequest.findByIdAndDelete(req.params.id);
+    if (!demoDoc) {
+      return res.status(404).json({
+        success: false,
+        message: 'Demo request not found'
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      message: 'Demo request deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting demo request:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while deleting demo request',
       error: error.message
     });
   }

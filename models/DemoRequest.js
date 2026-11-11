@@ -71,7 +71,6 @@ const demoRequestSchema = new mongoose.Schema(
   }
 );
 
-demoRequestSchema.index({ referenceCode: 1 });
 demoRequestSchema.index({ email: 1 });
 demoRequestSchema.index({ createdAt: -1 });
 
