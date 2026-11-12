@@ -1,14 +1,30 @@
 // backend/services/slotService.js
 const JobInterest = require('../models/JobInterest');
 
+// STRICT RULES: Vendor (Talent Partner) submission slots for a vacancy are ONLY
+// made available on these 7 specific rejection/drop statuses:
+// 1. S1 Screening Reject
+// 2. Client Screening Reject
+// 3. Global Reject
+// 4. Round Reject
+// 5. Client Portal Duplicate
+// 6. Candidate Drop
+// 7. Consent Denied
 const REJECTED_CANDIDATE_STATUSES = [
-  'REJECTED',
+  // 1. S1 Screening Reject
   'S1_SCREEN_REJECT',
   'S1_REJECTED',
-  'ADMIN_REJECTED',
+
+  // 2. Client Screening Reject
   'CLIENT_SCREEN_REJECT',
   'CLIENT_REJECTED',
   'COMPANY_REJECTED',
+
+  // 3. Global Reject
+  'GLOBAL_REJECT',
+  'REJECTED',
+
+  // 4. Round Reject
   'ROUND_REJECTED',
   'HR_REJECTED',
   'ASSESSMENT_FAILED',
@@ -16,10 +32,12 @@ const REJECTED_CANDIDATE_STATUSES = [
   'OFFER_DECLINED',
   'CLIENT_PORTAL_DUPLICATE',
   'COMPANY_PORTAL_DUPLICATE',
+
+  // 6. Candidate Drop
   'CANDIDATE_DROP',
-  'NOT_JOINED',
+
+  // 7. Consent Denied
   'CONSENT_DENIED',
-  'WITHDRAWN'
 ];
 
 /**

@@ -440,7 +440,7 @@ const reportFieldRegistry = {
   // ===================== TALENT PARTNER =====================
   JOB_LIST_WITH_SUBMITTED_CANDIDATES: {
     label: 'Job List with Submitted Candidates',
-    description: 'Jobs you have access to, and the candidates you personally submitted for each.',
+    description: 'Jobs you have worked on (uploaded at least 1 candidate), and the candidates you personally submitted for each.',
     allowedRoles: ['talent_partner'],
     base: 'candidates',
     scope: { collection: 'staffingpartners', userField: 'user', field: 'submittedBy' },

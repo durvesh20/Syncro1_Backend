@@ -4559,20 +4559,7 @@ exports.getReportJobs = async (req, res) => {
 
     const partnerIds = [partner._id, req.user._id].filter(Boolean);
 
-    // 1. Shortlisted jobs (Active JobInterests for this partner)
-    const shortlistedInterests = await JobInterest.find({
-      $or: [
-        { partner: { $in: partnerIds } },
-        { user: req.user._id }
-      ],
-      status: 'ACTIVE'
-    }).select('job').lean();
-
-    const shortlistedJobIds = shortlistedInterests
-      .map(i => i.job)
-      .filter(Boolean);
-
-    // 2. Worked jobs (Jobs with candidate submissions by this partner)
+    // Worked jobs: Only jobs where this partner has submitted at least 1 candidate
     const workedJobIds = await Candidate.distinct('job', {
       $or: [
         { submittedBy: { $in: partnerIds } },
@@ -4580,12 +4567,8 @@ exports.getReportJobs = async (req, res) => {
       ]
     });
 
-    // 3. Deduplicate IDs
     const uniqueJobIds = Array.from(
-      new Set([
-        ...shortlistedJobIds.map(id => String(id)),
-        ...workedJobIds.map(id => String(id))
-      ])
+      new Set(workedJobIds.map(id => String(id)))
     ).filter(Boolean);
 
     if (uniqueJobIds.length === 0) {
