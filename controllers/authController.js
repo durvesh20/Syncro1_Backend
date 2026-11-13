@@ -9,6 +9,7 @@ const whatsappService = require('../services/whatsappService');
 const otpService = require('../services/otpService');
 const sendTokenResponse = require('../utils/sendTokenResponse');
 const notifyCRM = require('../utils/notifyCRM')
+const { trackWapiRegistration } = require('../utils/wapiTracking')
 const { validateEmail, validateMobile, isWorkEmail } = require('../utils/validators');
 
 // Check if we should skip mobile OTP (for development)
@@ -126,8 +127,13 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       designation,
       linkedinProfile,
       city,
-      state
+      state,
+      utm_campaign,
+      wapi_recipient,
+      visitorId
     } = req.body;
+    const trackingAttribution = { utm_campaign, wapi_recipient, visitorId };
+    trackWapiRegistration('REGISTRATION_STARTED', trackingAttribution);
 
     if (!firstName || !lastName || !email || !mobile || !password || !firmName || !designation || !city || !state) {
       return res.status(400).json({
@@ -228,6 +234,7 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       state,
       profileCompletion: { basicInfo: true }
     });
+    trackWapiRegistration('REGISTRATION_COMPLETED', trackingAttribution);
 
     // ── CRM: Partner Registered ───────────────────────────────
     notifyCRM({
@@ -241,6 +248,11 @@ exports.initStaffingPartnerRegistration = async (req, res) => {
       state,
       type: 'STAFFING_PARTNER',
       channel: 'PLATFORM_REGISTRATION',
+      utm_campaign: trackingAttribution.utm_campaign,
+      utm_source: trackingAttribution.utm_campaign ? 'whatsapp' : undefined,
+      utm_medium: trackingAttribution.utm_campaign ? 'campaign' : undefined,
+      wapi_recipient: trackingAttribution.wapi_recipient,
+      visitorId: trackingAttribution.visitorId,
       crmStatus: 'NEW',
       crmSubStatus: 'JUST_REGISTERED',
       profileCompletion: {
@@ -329,8 +341,13 @@ exports.initCompanyRegistration = async (req, res) => {
       department,
       linkedinProfile,
       city,
-      state
+      state,
+      utm_campaign,
+      wapi_recipient,
+      visitorId
     } = req.body;
+    const trackingAttribution = { utm_campaign, wapi_recipient, visitorId };
+    trackWapiRegistration('REGISTRATION_STARTED', trackingAttribution);
 
     if (!firstName || !lastName || !email || !mobile || !password || !companyName || !designation || !department || !city || !state) {
       return res.status(400).json({
@@ -418,6 +435,7 @@ exports.initCompanyRegistration = async (req, res) => {
       state,
       profileCompletion: { basicInfo: true }
     });
+    trackWapiRegistration('REGISTRATION_COMPLETED', trackingAttribution);
 
     // ── CRM: Company Registered ───────────────────────────────
     notifyCRM({
