@@ -141,6 +141,13 @@ app.options('*', cors(corsOptions));
    STATIC FILES
 ========================================================= */
 
+app.use('/tracking', express.static(path.join(__dirname, 'public/tracking'), {
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+}));
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
   setHeaders: (res) => {
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
