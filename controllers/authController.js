@@ -449,6 +449,11 @@ exports.initCompanyRegistration = async (req, res) => {
       state,
       type: 'COMPANY',
       channel: 'PLATFORM_REGISTRATION',
+      utm_campaign: trackingAttribution.utm_campaign,
+      utm_source: trackingAttribution.utm_campaign ? 'whatsapp' : undefined,
+      utm_medium: trackingAttribution.utm_campaign ? 'campaign' : undefined,
+      wapi_recipient: trackingAttribution.wapi_recipient,
+      visitorId: trackingAttribution.visitorId,
       crmStatus: 'NEW',
       crmSubStatus: 'JUST_REGISTERED',
       profileCompletion: {
