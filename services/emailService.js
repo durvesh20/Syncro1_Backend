@@ -704,12 +704,12 @@ class EmailService {
     });
   }
 
-  async sendSubAdminWelcome(email, firstName, lastName, password, permissions = []) {
+  async sendSubAdminWelcome(email, firstName, lastName, password, permissions = [], roleName = "Sub-Admin") {
     const name = `${firstName} ${lastName}`.trim() || email;
     const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:9696'}/login`;
 
     console.log('=================================================');
-    console.log('🎉 Sub-Admin Welcome Email');
+    console.log(`🎉 ${roleName} Welcome Email`);
     console.log(`   To: ${email}`);
     console.log(`   Name: ${name}`);
     console.log(`   Temp Password: ${password}`);
@@ -747,7 +747,7 @@ class EmailService {
                   <td style="padding:36px 40px;">
                     <p style="margin:0 0 20px; font-size:16px; color:#374151;">Hi <strong>${name}</strong>,</p>
                     <p style="margin:0 0 24px; font-size:15px; color:#6b7280; line-height:1.6;">
-                      You've been added as a <strong>Sub-Admin</strong> on the Syncro1 platform. Below are your login credentials to get started.
+                      You've been added as an <strong>${roleName}</strong> on the Syncro1 platform. Below are your login credentials to get started.
                     </p>
 
                     <!-- Credentials Box -->

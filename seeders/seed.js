@@ -43,8 +43,30 @@ const seedDatabase = async () => {
     log("ℹ️", "Skipping plan seeding (Managed dynamically)");
 
     // ══════════════════════════════════════════
-    // 2. ADMIN USER
+    // 2. SUPER ADMIN USERS
     // ══════════════════════════════════════════
+
+    let yogeshAdmin = await User.findOne({ email: "yogesh@syncro1.com" });
+    if (!yogeshAdmin) {
+      yogeshAdmin = await User.create({
+        email: "yogesh@syncro1.com",
+        mobile: "9999999997",
+        password: "Admin@123",
+        role: "super_admin",
+        status: "ACTIVE",
+        emailVerified: true,
+        mobileVerified: true,
+        isPasswordChanged: true,
+      });
+      log("✅", "Super Admin user created → yogesh@syncro1.com / Admin@123");
+    } else {
+      if (yogeshAdmin.role !== "super_admin") {
+        yogeshAdmin.role = "super_admin";
+        await yogeshAdmin.save();
+        log("🔄", "Updated yogesh@syncro1.com role to super_admin");
+      }
+      skip("Super Admin user (yogesh@syncro1.com)");
+    }
 
     let adminUser = await User.findOne({ email: "admin@syncro1.com" });
     if (!adminUser) {
@@ -60,6 +82,11 @@ const seedDatabase = async () => {
       });
       log("✅", "Admin user created → admin@syncro1.com / Admin@123");
     } else {
+      if (adminUser.role !== "admin") {
+        adminUser.role = "admin";
+        await adminUser.save();
+        log("🔄", "Updated admin@syncro1.com role to admin");
+      }
       skip("Admin user (admin@syncro1.com)");
     }
 
@@ -1135,7 +1162,8 @@ const seedDatabase = async () => {
     console.log("");
     console.log("  CREDENTIALS:");
     console.log("  ─────────────────────────────────────────────────");
-    console.log("  👑 Admin:       admin@syncro1.com       / Admin@123");
+    console.log("  👑 Super Admin: yogesh@syncro1.com      / Admin@123");
+    console.log("  🛡️  Admin:       admin@syncro1.com       / Admin@123");
     console.log("  🛡️  Sub-Admin:   subadmin@syncro1.com    / SubAdmin@123");
     console.log("  🤝 Partner:     partner@test.com        / Partner@123  [APPROVED]");
     console.log("  🤝 Partner2:    partner2@test.com       / Partner@123  [PENDING]");

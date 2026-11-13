@@ -1,5 +1,3 @@
-const DemoRequest = require('../models/DemoRequest');
-
 /**
  * @desc    Submit a Walkthrough / Demo request (Client or Talent Partner)
  * @route   POST /api/demo

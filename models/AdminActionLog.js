@@ -11,7 +11,7 @@ const adminActionLogSchema = new mongoose.Schema({
     },
     actorRole: {
         type: String,
-        enum: ['admin', 'sub_admin', 'company', 'talent_partner'],
+        enum: ['admin', 'sub_admin', 'company', 'talent_partner', 'user', 'system'],
         required: true
     },
     actorEmail: {
@@ -24,6 +24,18 @@ const adminActionLogSchema = new mongoose.Schema({
         type: String,
         required: true,
         enum: [
+            // Lead, Onboarding & User status actions
+            'TEMP_PASSWORD_SENT',
+            'PASSWORD_CHANGED',
+            'ONBOARDING_UNDERPROGRESS',
+            'PROFILE_SUBMITTED',
+            'LEAD_VALIDITY_UPDATED',
+            'EMAIL_VERIFIED',
+            'MOBILE_VERIFIED',
+            'USER_REGISTERED',
+            'USER_LOGIN',
+            'STATUS_UPDATED',
+
             // Partner actions
             'PARTNER_APPROVED',
             'PARTNER_REJECTED',

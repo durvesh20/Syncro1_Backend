@@ -1,5 +1,6 @@
 // backend/controllers/authController.js
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const StaffingPartner = require('../models/StaffingPartner');
 const Company = require('../models/Company');
@@ -9,6 +10,7 @@ const whatsappService = require('../services/whatsappService');
 const otpService = require('../services/otpService');
 const sendTokenResponse = require('../utils/sendTokenResponse');
 const notifyCRM = require('../utils/notifyCRM')
+const auditService = require('../services/auditService');
 const { validateEmail, validateMobile, isWorkEmail } = require('../utils/validators');
 
 // Check if we should skip mobile OTP (for development)
@@ -40,6 +42,10 @@ const getVerificationState = (user) => {
  * Helper: set user status based on verification state
  */
 const syncUserStatusAfterVerification = (user) => {
+  // For talent_partner and company, keep their onboarding lifecycle status
+  if (user.role === 'talent_partner' || user.role === 'company') {
+    return;
+  }
   if (user.emailVerified) {
     user.status = 'ACTIVE';
   } else {
@@ -51,6 +57,18 @@ const syncUserStatusAfterVerification = (user) => {
  * Helper: get onboarding next step after successful login
  */
 const getPostLoginNextStep = async (user) => {
+  // If user has not changed their temporary password, password change is mandatory first
+  if (user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT') {
+    return {
+      profile: null,
+      profileMeta: {
+        completionPercentage: 0,
+        verificationStatus: 'PENDING'
+      },
+      nextStep: 'CHANGE_PASSWORD'
+    };
+  }
+
   // Admin and sub_admin go straight to dashboard
   if (user.role === 'admin' || user.role === 'sub_admin') {
     return {
@@ -98,7 +116,7 @@ const getPostLoginNextStep = async (user) => {
     nextStep = 'WAITING_APPROVAL';
   } else if (profile.verificationStatus === 'REJECTED') {
     nextStep = 'PROFILE_REJECTED';
-  } else if (profile.verificationStatus === 'APPROVED') {
+  } else if (profile.verificationStatus === 'APPROVED' || profile.verificationStatus === 'ACTIVE') {
     nextStep = 'GO_TO_DASHBOARD';
   }
 
@@ -145,7 +163,7 @@ exports.initTalentPartnerRegistration = async (req, res) => {
       });
     }
 
-    if (!firstName || !lastName || !email || !mobile || !password || !firmName || !designation || !city || !state) {
+    if (!firstName || !lastName || !email || !mobile || !firmName) {
       return res.status(400).json({
         success: false,
         message: 'Please provide all required fields'
@@ -166,12 +184,7 @@ exports.initTalentPartnerRegistration = async (req, res) => {
       });
     }
 
-    if (password.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password must be at least 8 characters'
-      });
-    }
+    const passwordToUse = password && password.length >= 8 ? password : crypto.randomBytes(16).toString('hex');
 
     const normalizedEmail = email.toLowerCase().trim();
     const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
@@ -226,16 +239,18 @@ exports.initTalentPartnerRegistration = async (req, res) => {
     const emailToken = crypto.randomBytes(32).toString('hex');
 
     const user = await User.create({
+      firstName,
+      lastName,
       email: normalizedEmail,
       mobile: normalizedMobile,
-      password,
+      password: passwordToUse,
       role: 'talent_partner',
-      status: 'PENDING_EMAIL_VERIFICATION',
+      status: 'REGISTERED',
       emailVerified: false,
       emailVerificationToken: emailToken,
       emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
       mobileVerified: false,
-      isPasswordChanged: true
+      isPasswordChanged: false
     });
 
     const partner = await StaffingPartner.create({
@@ -243,11 +258,19 @@ exports.initTalentPartnerRegistration = async (req, res) => {
       firstName,
       lastName,
       firmName,
-      designation,
+      designation: designation || '',
       linkedinProfile: linkedinProfile || '',
-      city,
-      state,
-      profileCompletion: { basicInfo: true }
+      city: city || '',
+      state: state || '',
+      profileCompletion: {
+        basicInfo: false,
+        firmDetails: false,
+        Syncro1Competency: false,
+        geographicReach: false,
+        compliance: false,
+        commercialDetails: false,
+        documents: false
+      }
     });
 
     // ── CRM: Partner Registered ───────────────────────────────
@@ -257,15 +280,15 @@ exports.initTalentPartnerRegistration = async (req, res) => {
       phone: normalizedMobile,
       whatsapp: normalizedMobile,
       company: firmName,
-      designation,
-      city,
-      state,
+      designation: designation || '',
+      city: city || '',
+      state: state || '',
       type: 'TALENT_PARTNER',
       channel: 'PLATFORM_REGISTRATION',
       crmStatus: 'NEW',
       crmSubStatus: 'JUST_REGISTERED',
       profileCompletion: {
-        basicInfo: true,
+        basicInfo: false,
         firmDetails: false,
         Syncro1Competency: false,
         geographicReach: false,
@@ -273,7 +296,7 @@ exports.initTalentPartnerRegistration = async (req, res) => {
         commercialDetails: false,
         documents: false
       },
-      profilePercent: 14,
+      profilePercent: 0,
       journeyEvent: {
         type: 'PLATFORM_REGISTERED',
         channel: 'PLATFORM_REGISTRATION',
@@ -294,35 +317,16 @@ exports.initTalentPartnerRegistration = async (req, res) => {
     });
     // ─────────────────────────────────────────────────────────
 
-    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
-    await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
-    const verificationState = getVerificationState(user);
-
     res.status(201).json({
       success: true,
-      message: 'Registration successful. Please verify your email.',
+      message: 'Thank you for reaching out to us! We’re glad to connect with you. Our team will get in touch within 24–48 hours to understand your needs and guide you through the next steps.',
       data: {
         userId: user._id,
         role: user.role,
         email: user.email,
         mobile: user.mobile,
-        verification: {
-          emailRequired: true,
-          mobileRequired: false,
-          emailVerified: user.emailVerified,
-          mobileVerified: user.mobileVerified
-        },
-        canLogin: verificationState.canLogin,
-        nextStep: verificationState.nextStep,
-        allowedActions: verificationState.allowedActions,
-        skipMobileOTP,
-        ...(process.env.NODE_ENV === 'development' && {
-          devInfo: {
-            emailToken,
-            verifyUrl,
-            note: 'Tokens shown only in development mode'
-          }
-        })
+        firmName,
+        name: `${firstName} ${lastName}`
       }
     });
   } catch (error) {
@@ -371,22 +375,10 @@ exports.initCompanyRegistration = async (req, res) => {
       });
     }
 
-    if (!firstName || !lastName || !email || !mobile || !password || !companyName || !designation || !department || !city || !state) {
+    if (!firstName || !lastName || !email || !mobile || !companyName) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide all required fields',
-        required: {
-          firstName: !firstName ? 'missing' : 'ok',
-          lastName: !lastName ? 'missing' : 'ok',
-          email: !email ? 'missing' : 'ok',
-          mobile: !mobile ? 'missing' : 'ok',
-          password: !password ? 'missing' : 'ok',
-          companyName: !companyName ? 'missing' : 'ok',
-          designation: !designation ? 'missing' : 'ok',
-          department: !department ? 'missing' : 'ok',
-          city: !city ? 'missing' : 'ok',
-          state: !state ? 'missing' : 'ok'
-        }
+        message: 'Please provide all required fields'
       });
     }
 
@@ -410,13 +402,7 @@ exports.initCompanyRegistration = async (req, res) => {
         message: 'Invalid mobile number. Please provide 10-digit number'
       });
     }
-
-    if (password.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password must be at least 8 characters'
-      });
-    }
+    const passwordToUse = password && password.length >= 8 ? password : crypto.randomBytes(16).toString('hex');
 
     const normalizedEmail = email.toLowerCase().trim();
     const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
@@ -440,27 +426,36 @@ exports.initCompanyRegistration = async (req, res) => {
     const emailToken = crypto.randomBytes(32).toString('hex');
 
     const user = await User.create({
+      firstName,
+      lastName,
       email: normalizedEmail,
       mobile: normalizedMobile,
-      password,
+      password: passwordToUse,
       role: 'company',
-      status: 'PENDING_EMAIL_VERIFICATION',
+      status: 'REGISTERED',
       emailVerified: false,
       emailVerificationToken: emailToken,
       emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
       mobileVerified: false,
-      isPasswordChanged: true
+      isPasswordChanged: false
     });
     const company = await Company.create({
       user: user._id,
       companyName,
       decisionMakerName: `${firstName} ${lastName}`,
-      designation,
-      department,
+      designation: designation || '',
+      department: department || '',
       linkedinProfile: linkedinProfile || '',
-      city,
-      state,
-      profileCompletion: { basicInfo: true }
+      city: city || '',
+      state: state || '',
+      profileCompletion: {
+        basicInfo: false,
+        kyc: false,
+        hiringPreferences: false,
+        billing: false,
+        legalConsents: false,
+        documents: false
+      }
     });
 
     // ── CRM: Company Registered ───────────────────────────────
@@ -470,22 +465,22 @@ exports.initCompanyRegistration = async (req, res) => {
       phone: normalizedMobile,
       whatsapp: normalizedMobile,
       company: companyName,
-      designation,
-      city,
-      state,
+      designation: designation || '',
+      city: city || '',
+      state: state || '',
       type: 'COMPANY',
       channel: 'PLATFORM_REGISTRATION',
       crmStatus: 'NEW',
       crmSubStatus: 'JUST_REGISTERED',
       profileCompletion: {
-        basicInfo: true,
+        basicInfo: false,
         kyc: false,
         hiringPreferences: false,
         billing: false,
         legalConsents: false,
         documents: false
       },
-      profilePercent: 17,
+      profilePercent: 0,
       journeyEvent: {
         type: 'PLATFORM_REGISTERED',
         channel: 'PLATFORM_REGISTRATION',
@@ -505,36 +500,16 @@ exports.initCompanyRegistration = async (req, res) => {
     });
     // ─────────────────────────────────────────────────────────
 
-    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${emailToken}`;
-    await emailService.sendVerificationLink(normalizedEmail, verifyUrl);
-
-    const verificationState = getVerificationState(user);
-
     res.status(201).json({
       success: true,
-      message: 'Registration successful. Please verify your email.',
+      message: 'Thank you for reaching out to us! We’re glad to connect with you. Our team will get in touch within 24–48 hours to understand your needs and guide you through the next steps.',
       data: {
         userId: user._id,
         role: user.role,
         email: user.email,
         mobile: user.mobile,
-        verification: {
-          emailRequired: true,
-          mobileRequired: false,
-          emailVerified: user.emailVerified,
-          mobileVerified: user.mobileVerified
-        },
-        canLogin: verificationState.canLogin,
-        nextStep: verificationState.nextStep,
-        allowedActions: verificationState.allowedActions,
-        skipMobileOTP,
-        ...(process.env.NODE_ENV === 'development' && {
-          devInfo: {
-            emailToken,
-            verifyUrl,
-            note: 'Tokens shown only in development mode'
-          }
-        })
+        companyName,
+        name: `${firstName} ${lastName}`
       }
     });
   } catch (error) {
@@ -574,6 +549,7 @@ exports.verifyEmailByToken = async (req, res) => {
     }
 
     user.emailVerified = true;
+    user.emailVerifiedAt = new Date();
     user.emailVerificationToken = undefined;
     user.emailVerificationExpires = undefined;
 
@@ -643,6 +619,7 @@ exports.verifyEmail = async (req, res) => {
     }
 
     user.emailVerified = true;
+    user.emailVerifiedAt = new Date();
     user.emailVerificationToken = undefined;
     user.emailVerificationExpires = undefined;
 
@@ -752,6 +729,7 @@ exports.verifyMobileOTP = async (req, res) => {
 
     if (skipMobileOTP) {
       user.mobileVerified = true;
+      user.mobileVerifiedAt = new Date();
       user.mobileOTP = undefined;
       syncUserStatusAfterVerification(user);
       await user.save();
@@ -819,6 +797,7 @@ exports.verifyMobileOTP = async (req, res) => {
     user.otpAttempts = user.otpAttempts || { email: 0, mobile: 0 };
     user.otpAttempts.mobile = 0;
     user.mobileVerified = true;
+    user.mobileVerifiedAt = new Date();
     user.mobileOTP = undefined;
 
     syncUserStatusAfterVerification(user);
@@ -884,7 +863,24 @@ exports.login = async (req, res) => {
       });
     }
 
-    const isMatch = await user.comparePassword(password);
+    let isMatch = false;
+    try {
+      isMatch = await user.comparePassword(password);
+      if (!isMatch && typeof password === 'string' && password.trim() !== password) {
+        isMatch = await user.comparePassword(password.trim());
+      }
+    } catch (e) {
+      isMatch = false;
+    }
+
+    // Self-healing fallback: If user.password in DB was saved as plain text from previous hook issue
+    if (!isMatch && user.password && (user.password === password || user.password === (typeof password === 'string' ? password.trim() : password))) {
+      isMatch = true;
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(typeof password === 'string' ? password.trim() : password, salt);
+      await user.save();
+    }
+
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -893,7 +889,10 @@ exports.login = async (req, res) => {
       });
     }
 
-    if (!user.emailVerified) {
+    const isInitialFlow = user.isPasswordChanged === false ||
+      ['TEMP_PASS_SENT', 'PASS_CHANGED', 'ONBOARDING_UNDERPROGRESS'].includes(user.status);
+
+    if (!user.emailVerified && !isInitialFlow) {
       return res.status(403).json({
         success: false,
         message: 'Please verify your email before logging in.',
@@ -930,7 +929,26 @@ exports.login = async (req, res) => {
     user.lastLogin = new Date();
     await user.save();
 
+    const isTempPassword = user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT';
     const { profile, profileMeta, nextStep } = await getPostLoginNextStep(user);
+
+    // Self-healing: if in pre-onboarding / Step 1 and email was never legitimately verified via token, keep emailVerified false
+    // Self-heal: If user is talent_partner or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
+    if (['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE') {
+      const isApproved = profile && ['APPROVED', 'VERIFIED'].includes(profile.verificationStatus);
+      if (!isApproved) {
+        user.status = 'ONBOARDING_UNDERPROGRESS';
+        await User.updateOne({ _id: user._id }, { $set: { status: 'ONBOARDING_UNDERPROGRESS' } });
+      }
+    }
+
+    const isPreOnboarding = ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED'].includes(user.status) ||
+      (!profile?.profileCompletion?.basicInfo && user.status === 'ONBOARDING_UNDERPROGRESS');
+
+    if (isPreOnboarding && !user.emailVerifiedAt && user.emailVerified) {
+      user.emailVerified = false;
+      await User.updateOne({ _id: user._id }, { $set: { emailVerified: false } });
+    }
 
     const token = generateToken(user._id, user.role);
 
@@ -951,8 +969,9 @@ exports.login = async (req, res) => {
     return sendTokenResponse(res, token, userPayload, {
       profile,
       profileMeta,
-      canLogin: true,
-      nextStep
+      requirePasswordChange: isTempPassword,
+      canLogin: !isTempPassword,
+      nextStep: isTempPassword ? 'CHANGE_PASSWORD' : nextStep
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -970,10 +989,23 @@ exports.changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword, confirmPassword } = req.body;
 
-    if (!currentPassword || !newPassword || !confirmPassword) {
+    const user = await User.findById(req.user._id).select('+password');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const isFirstTimeTempPassword = user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT';
+
+    if (!newPassword || !confirmPassword || (!currentPassword && !isFirstTimeTempPassword)) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide current password, new password, and confirm password'
+        message: isFirstTimeTempPassword
+          ? 'Please provide new password and confirm password'
+          : 'Please provide current password, new password, and confirm password'
       });
     }
 
@@ -991,21 +1023,14 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user._id).select('+password');
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    const isMatch = await user.comparePassword(currentPassword);
-    if (!isMatch) {
-      return res.status(400).json({
-        success: false,
-        message: 'Current password is incorrect'
-      });
+    if (currentPassword) {
+      const isMatch = await user.comparePassword(currentPassword);
+      if (!isMatch) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is incorrect'
+        });
+      }
     }
 
     const isSamePassword = await user.comparePassword(newPassword);
@@ -1016,9 +1041,31 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    user.password = newPassword;
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
     user.isPasswordChanged = true;
+    user.passwordChangedAt = new Date();
+    user.status = 'PASS_CHANGED';
+
+    // On password change during onboarding, ensure email is not auto-marked as verified unless verified via token
+    if (isFirstTimeTempPassword && !user.emailVerifiedAt) {
+      user.emailVerified = false;
+    }
+
     await user.save();
+
+    await auditService.log({
+      actor: user._id,
+      actorRole: user.role || 'user',
+      actorEmail: user.email,
+      action: 'PASSWORD_CHANGED',
+      entityType: 'User',
+      entityId: user._id,
+      description: `User successfully changed password, status transitioned to PASS_CHANGED`,
+      after: { status: 'PASS_CHANGED', isPasswordChanged: true },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
 
     const token = generateToken(user._id, user.role);
 
@@ -1030,11 +1077,33 @@ exports.changePassword = async (req, res) => {
       path: '/'
     });
 
+    const { profile, profileMeta, nextStep } = await getPostLoginNextStep(user);
+
+    const userPayload = {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+      status: user.status,
+      permissions: user.permissions || [],
+      emailVerified: user.emailVerified,
+      mobileVerified: user.mobileVerified,
+      isPasswordChanged: true,
+      createdBy: user.createdBy,
+      firstName: user.firstName,
+      lastName: user.lastName
+    };
+
     res.json({
       success: true,
       message: 'Password changed successfully',
       data: {
-        status: user.status
+        token,
+        user: userPayload,
+        profile,
+        profileMeta,
+        nextStep,
+        status: user.status,
+        isPasswordChanged: true
       }
     });
   } catch (error) {
@@ -1069,11 +1138,15 @@ exports.resendOTP = async (req, res) => {
     }
 
     if (type === 'email') {
-      if (user.emailVerified) {
+      if (user.emailVerified && user.emailVerifiedAt) {
         return res.status(400).json({
           success: false,
           message: 'Email already verified'
         });
+      }
+
+      if (user.emailVerified && !user.emailVerifiedAt) {
+        user.emailVerified = false;
       }
 
       const emailToken = crypto.randomBytes(32).toString('hex');
@@ -1166,11 +1239,15 @@ exports.resendEmailVerification = async (req, res) => {
       });
     }
 
-    if (user.emailVerified) {
+    if (user.emailVerified && user.emailVerifiedAt) {
       return res.status(400).json({
         success: false,
         message: 'Email already verified'
       });
+    }
+
+    if (user.emailVerified && !user.emailVerifiedAt) {
+      user.emailVerified = false;
     }
 
     const emailToken = crypto.randomBytes(32).toString('hex');
@@ -1281,6 +1358,24 @@ exports.getMe = async (req, res) => {
     }
 
     const { profileMeta, nextStep } = await getPostLoginNextStep(user);
+
+    // Self-healing: if in pre-onboarding / Step 1 and email was never legitimately verified via token, ensure emailVerified is false
+    // Self-heal: If user is talent_partner or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
+    if (['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE') {
+      const isApproved = profile && ['APPROVED', 'VERIFIED'].includes(profile.verificationStatus);
+      if (!isApproved) {
+        user.status = 'ONBOARDING_UNDERPROGRESS';
+        await User.updateOne({ _id: user._id }, { $set: { status: 'ONBOARDING_UNDERPROGRESS' } });
+      }
+    }
+
+    const isPreOnboarding = ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED'].includes(user.status) ||
+      (!profile?.profileCompletion?.basicInfo && user.status === 'ONBOARDING_UNDERPROGRESS');
+
+    if (isPreOnboarding && !user.emailVerifiedAt && user.emailVerified) {
+      user.emailVerified = false;
+      await User.updateOne({ _id: user._id }, { $set: { emailVerified: false } });
+    }
 
     res.json({
       success: true,
@@ -1459,4 +1554,26 @@ exports.logout = async (req, res) => {
     success: true,
     message: 'Logged out successfully'
   });
+};
+
+// @desc Register Lead (Talent Partner or Company)
+// @route POST /api/auth/register-lead
+exports.registerLead = async (req, res, next) => {
+  try {
+    const { type, workEmail, email, phoneNumber, mobile } = req.body;
+    if (workEmail && !email) req.body.email = workEmail;
+    if (phoneNumber && !mobile) req.body.mobile = phoneNumber;
+
+    if (type === 'talent-partner' || type === 'talent_partner') {
+      return exports.initTalentPartnerRegistration(req, res, next);
+    }
+    return exports.initCompanyRegistration(req, res, next);
+  } catch (error) {
+    console.error('Register lead error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Registration failed',
+      error: error.message
+    });
+  }
 };

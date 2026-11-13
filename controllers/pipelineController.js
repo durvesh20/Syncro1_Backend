@@ -937,6 +937,8 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
     order: r.order ?? i + 1
   }));
 
+  const isPrePipelineReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT'].includes(candidate.status);
+
   // Self-healing: If candidate is currently in an initial round state (SLOTS_NOT_PUBLISHED, SLOTS_PUBLISHED, ASSESSMENT_PENDING)
   // but was never actually shortlisted by the company (company has not reviewed or shortlisted them)
   const isPostShortlistState = ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'ASSESSMENT_PENDING'].includes(candidate.status);
@@ -969,19 +971,19 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
 
     // Check if candidate has already completed / passed Round 1:
     const targetRound = options.advanceToRound !== undefined ? parseInt(options.advanceToRound, 10) : null;
-    const isRound1Completed = targetRound !== null 
+    const isRound1Completed = !isPrePipelineReview && (targetRound !== null 
       ? targetRound >= 2 
       : (
           candidate.status === 'ROUND_SELECTED_NEXT' ||
           candidate.status === 'INTERVIEW_CONDUCTED' ||
           candidate.status === 'INTERVIEWED' ||
           (candidate.statusHistory && candidate.statusHistory.some(h => 
-            h.status === 'ROUND_SELECTED_NEXT' || 
-            h.status === 'INTERVIEW_CONDUCTED' ||
-            (h.notes && /next round|cleared|passed|completed/i.test(h.notes))
+            (h.status === 'ROUND_SELECTED_NEXT' || 
+             h.status === 'INTERVIEW_CONDUCTED' ||
+             (h.notes && !/pre-screening|s1 screen|pipeline auto-synced/i.test(h.notes) && /round\s*1.*(?:cleared|passed)|interview.*cleared|cleared.*round\s*1|next round/i.test(h.notes)))
           )) ||
           (candidate.interviews && candidate.interviews.some(i => i.result === 'PASSED'))
-        );
+        ));
 
     if (isRound1Completed && normalizedJobTemplate.length >= 2) {
       // Round 1 is CLEARED -> Activate Round 2 (e.g. Client Round) with SLOTS_NOT_PUBLISHED
@@ -1028,7 +1030,6 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
       });
     } else {
       // Initialize from beginning
-      const isPrePipelineReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT'].includes(candidate.status);
       candidate.rounds = normalizedJobTemplate.map((r, idx) => ({
         roundType: r.roundType,
         order: r.order,
@@ -1080,7 +1081,6 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
     const candTemplateStr = JSON.stringify((candidate.pipelineTemplate || []).map(r => r.roundType));
 
     if (jobTemplateStr !== candTemplateStr) {
-      const isPrePipelineReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT'].includes(candidate.status);
       candidate.pipelineTemplate = normalizedJobTemplate;
       candidate.rounds = normalizedJobTemplate.map((r, i) => ({
         roundType: r.roundType,

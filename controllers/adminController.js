@@ -12,7 +12,7 @@ const auditService = require('../services/auditService');
 const notifyCRM = require('../utils/notifyCRM');
 const hasPermission = (user, permission) => {
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (['admin', 'super_admin'].includes(user.role)) return true;
   if (user.role !== 'sub_admin') return false;
 
   const permissions = user.permissions || [];
@@ -569,6 +569,12 @@ exports.verifyCompany = async (req, res) => {
         success: false,
         message: 'Company not found'
       });
+    }
+
+    // Self-heal: unapproved company must not have user.status === 'ACTIVE'
+    if (company.user && String(company.user.status || '').toUpperCase() === 'ACTIVE' && !['APPROVED', 'VERIFIED'].includes(company.verificationStatus)) {
+      company.user.status = 'ONBOARDING_UNDERPROGRESS';
+      await User.updateOne({ _id: company.user._id }, { $set: { status: 'ONBOARDING_UNDERPROGRESS' } });
     }
 
     // Sub-admins can process any company
@@ -1894,7 +1900,7 @@ exports.checkPayoutEligibility = async (req, res) => {
 // @route   GET /api/admin/users
 exports.getUsers = async (req, res) => {
   try {
-    const { role, status, emailVerified, mobileVerified, verified, page = 1, limit = 20, search } = req.query;
+    const { role, status, emailVerified, mobileVerified, verified, page = 1, limit = 20, search, leadValidity } = req.query;
 
     let roleQuery = undefined;
     if (role === 'talent_partner') {
@@ -2014,6 +2020,18 @@ exports.getUsers = async (req, res) => {
       ...suspendedUserIds
     ];
 
+    const allowedUserStatuses = [
+      'ONBOARDING_UNDERPROGRESS',
+      'ACTIVE',
+      'UNDER_VERIFICATION',
+      'UNDER_REVIEW',
+      'PROFILE_SUBMITTED',
+      'VERIFIED',
+      'APPROVED',
+      'REJECTED',
+      'SUSPENDED'
+    ];
+
     if (verified === 'true') {
       query._id = { $in: approvedUserIds };
     } else if (status === 'UNDER_VERIFICATION' || status === 'UNDER_REVIEW') {
@@ -2024,13 +2042,51 @@ exports.getUsers = async (req, res) => {
       query._id = { $in: suspendedUserIds };
     } else if (status === 'ACTIVE') {
       query._id = { $nin: nonActiveUserIds };
+      query.status = { $in: ['ONBOARDING_UNDERPROGRESS', 'ACTIVE'] };
       if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
       if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
     } else if (status) {
-      query.status = status;
-    } else {
+      if (Array.isArray(status)) {
+        query.status = { $in: status };
+      } else if (typeof status === 'string' && status.includes(',')) {
+        query.status = { $in: status.split(',').map(s => s.trim()) };
+      } else if (status === 'REGISTERED' || status === 'LEADS') {
+        query.status = { $in: ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED', 'ONBOARDING_UNDERPROGRESS'] };
+      } else {
+        query.status = status;
+      }
       if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
       if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
+    } else {
+      // Default view of talent partners or companies user list (AdminUsersList)
+      // Exclude leads that have not reached ONBOARDING_UNDERPROGRESS yet
+      if (role === 'talent_partner' || role === 'company') {
+        query.status = { $in: allowedUserStatuses };
+      }
+      if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
+      if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
+    }
+
+    // Self-heal legacy leads: remove default 'VALID' for any leads where admin never explicitly set leadValidity
+    try {
+      await User.updateMany(
+        { leadValidity: 'VALID', $or: [{ leadValidityUpdatedAt: { $exists: false } }, { leadValidityUpdatedAt: null }] },
+        { $set: { leadValidity: null } }
+      );
+    } catch (e) {
+      /* ignore migration error */
+    }
+
+    if (leadValidity === 'VALID') {
+      query.leadValidity = 'VALID';
+    } else if (leadValidity === 'INVALID') {
+      query.leadValidity = 'INVALID';
+    } else if (leadValidity === 'NOT_SELECTED' || leadValidity === 'PENDING' || leadValidity === 'UNREVIEWED') {
+      query.$or = [
+        { leadValidity: null },
+        { leadValidity: { $exists: false } },
+        { leadValidity: '' }
+      ];
     }
 
     if (search) {
@@ -2101,7 +2157,7 @@ exports.getUsers = async (req, res) => {
       });
     }
 
-    let enrichedUsers = users.map(u => {
+    let enrichedUsers = await Promise.all(users.map(async u => {
       const uObj = u.toObject();
       const uIdStr = u._id.toString();
 
@@ -2110,37 +2166,61 @@ exports.getUsers = async (req, res) => {
         !!u.suspendedAt ||
         u.isSuspended === true;
 
-      let vStatus = 'ACTIVE';
+      const isApproved = approvedUserIds.includes(uIdStr) || String(u.status || '').toUpperCase() === 'VERIFIED' || String(u.status || '').toUpperCase() === 'APPROVED';
+      const isUnderReview = underReviewUserIds.includes(uIdStr) || ['UNDER_VERIFICATION', 'PROFILE_SUBMITTED', 'UNDER_REVIEW'].includes(String(u.status || '').toUpperCase());
+      const isRejected = rejectedUserIds.includes(uIdStr) || String(u.status || '').toUpperCase() === 'REJECTED';
+
+      let vStatus = 'ONBOARDING_UNDERPROGRESS';
+      let resolvedStatus = u.status;
+
       if (isSuspended) {
         vStatus = 'SUSPENDED';
-      } else if (approvedUserIds.includes(uIdStr) || String(u.status || '').toUpperCase() === 'VERIFIED' || String(u.status || '').toUpperCase() === 'APPROVED') {
+        resolvedStatus = 'SUSPENDED';
+      } else if (isApproved) {
         vStatus = 'APPROVED';
-      } else if (underReviewUserIds.includes(uIdStr) || ['UNDER_VERIFICATION', 'PROFILE_SUBMITTED', 'UNDER_REVIEW'].includes(String(u.status || '').toUpperCase())) {
+        resolvedStatus = 'APPROVED';
+      } else if (isUnderReview) {
         vStatus = 'UNDER_REVIEW';
-      } else if (rejectedUserIds.includes(uIdStr) || String(u.status || '').toUpperCase() === 'REJECTED') {
+        resolvedStatus = 'PROFILE_SUBMITTED';
+      } else if (isRejected) {
         vStatus = 'REJECTED';
+        resolvedStatus = 'REJECTED';
+      } else if (['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED'].includes(String(u.status || '').toUpperCase())) {
+        vStatus = String(u.status).toUpperCase();
+        resolvedStatus = String(u.status).toUpperCase();
+      } else {
+        // Not approved, not submitted, not rejected, not suspended, not in lead status -> user is in onboarding
+        vStatus = 'ONBOARDING_UNDERPROGRESS';
+        resolvedStatus = 'ONBOARDING_UNDERPROGRESS';
+
+        // Self-heal in MongoDB if user document had status === 'ACTIVE'
+        if (String(u.status || '').toUpperCase() === 'ACTIVE') {
+          await User.updateOne({ _id: u._id }, { $set: { status: 'ONBOARDING_UNDERPROGRESS' } });
+        }
       }
 
       let subStatus = null;
-      if (vStatus === 'ACTIVE') {
+      if (vStatus === 'ONBOARDING_UNDERPROGRESS') {
         if (!u.emailVerified) {
           subStatus = 'PENDING_EMAIL';
         } else if (!u.mobileVerified) {
           subStatus = 'PENDING_MOBILE';
         } else {
-          subStatus = 'ACTIVE';
+          subStatus = 'ONBOARDING_UNDERPROGRESS';
         }
       }
 
       return {
         ...uObj,
-        status: isSuspended ? 'SUSPENDED' : u.status,
+        status: resolvedStatus,
         verificationStatus: vStatus,
         subStatus,
+        leadValidity: (u.leadValidity && u.leadValidityUpdatedAt) ? u.leadValidity : (u.leadValidity === 'INVALID' ? 'INVALID' : null),
+        tempPasswordSentAt: u.tempPasswordSentAt || null,
         ...(role === 'company' ? { companyName: companyMap[uIdStr] || null } : {}),
         ...((role === 'talent_partner') ? { firmName: partnerMap[uIdStr] || null } : {})
       };
-    });
+    }));
 
     const total = await User.countDocuments(query);
 
@@ -2149,25 +2229,39 @@ exports.getUsers = async (req, res) => {
     if (role) {
       const activeStageQuery = {
         role: roleQuery,
-        _id: { $nin: nonActiveUserIds }
+        _id: { $nin: nonActiveUserIds },
+        status: { $in: ['ONBOARDING_UNDERPROGRESS', 'ACTIVE'] }
+      };
+
+      const registeredQuery = {
+        role: roleQuery,
+        status: { $in: ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED', 'ONBOARDING_UNDERPROGRESS'] }
       };
 
       const [
-        totalCount,
+        totalInUserList,
         activeTotalCount,
         emailPendingCount,
         mobilePendingCount,
-        activeCompletedOtpCount
+        activeCompletedOtpCount,
+        registeredTotalCount,
+        registeredEmailPendingCount,
+        registeredMobilePendingCount,
+        registeredCompletedOtpCount
       ] = await Promise.all([
-        User.countDocuments({ role: roleQuery }),
+        User.countDocuments({ role: roleQuery, status: { $in: allowedUserStatuses } }),
         User.countDocuments(activeStageQuery),
         User.countDocuments({ ...activeStageQuery, emailVerified: false }),
         User.countDocuments({ ...activeStageQuery, emailVerified: true, mobileVerified: false }),
-        User.countDocuments({ ...activeStageQuery, emailVerified: true, mobileVerified: true })
+        User.countDocuments({ ...activeStageQuery, emailVerified: true, mobileVerified: true }),
+        User.countDocuments(registeredQuery),
+        User.countDocuments({ ...registeredQuery, emailVerified: false }),
+        User.countDocuments({ ...registeredQuery, emailVerified: true, mobileVerified: false }),
+        User.countDocuments({ ...registeredQuery, emailVerified: true, mobileVerified: true })
       ]);
 
       stats = {
-        total: totalCount,
+        total: totalInUserList,
         verified: approvedUserIds.length,
         underVerification: underReviewUserIds.length,
         rejected: rejectedUserIds.length,
@@ -2175,7 +2269,11 @@ exports.getUsers = async (req, res) => {
         active: activeTotalCount,
         emailPending: emailPendingCount,
         mobilePending: mobilePendingCount,
-        activeCompleted: activeCompletedOtpCount
+        activeCompleted: activeCompletedOtpCount,
+        registered: registeredTotalCount,
+        registeredEmailPending: registeredEmailPendingCount,
+        registeredMobilePending: registeredMobilePendingCount,
+        registeredCompletedOtp: registeredCompletedOtpCount
       };
     }
 
@@ -2248,6 +2346,158 @@ exports.updateUserStatus = async (req, res) => {
       success: false,
       message: 'Status update failed',
       error: error.message
+    });
+  }
+};
+
+// @desc    Update lead validity (VALID / INVALID / null to deselect)
+// @route   PUT /api/admin/users/:id/lead-validity
+exports.updateLeadValidity = async (req, res) => {
+  try {
+    const { leadValidity } = req.body;
+
+    if (leadValidity !== null && leadValidity !== undefined && !['VALID', 'INVALID', 'NOT_SELECTED', ''].includes(leadValidity)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid lead validity. Must be VALID, INVALID, or null'
+      });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lead user not found'
+      });
+    }
+
+    const targetValidity = (leadValidity === 'VALID' || leadValidity === 'INVALID') ? leadValidity : null;
+    user.leadValidity = targetValidity;
+    user.leadValidityUpdatedAt = new Date();
+    user.leadValidityUpdatedBy = req.user._id;
+    await user.save();
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'LEAD_VALIDITY_UPDATED',
+      entityType: 'User',
+      entityId: user._id,
+      description: targetValidity
+        ? `Marked lead ${user.email} (${user.role}) as ${targetValidity === 'VALID' ? 'Valid Lead' : 'Invalid Lead'}`
+        : `Cleared lead validity selection for ${user.email} (${user.role})`,
+      after: { leadValidity: targetValidity },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.json({
+      success: true,
+      message: targetValidity
+        ? `Lead marked as ${targetValidity === 'VALID' ? 'Valid Lead' : 'Invalid Lead'}`
+        : 'Lead validity selection cleared',
+      data: {
+        _id: user._id,
+        email: user.email,
+        leadValidity: user.leadValidity,
+        leadValidityUpdatedAt: user.leadValidityUpdatedAt
+      }
+    });
+  } catch (error) {
+    console.error('[ADMIN] Update lead validity error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update lead validity'
+    });
+  }
+};
+
+// @desc    Generate and send temporary password email to user
+// @route   POST /api/admin/users/:id/send-temp-password
+exports.sendUserTempPassword = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Lead user not found'
+      });
+    }
+
+    if (!user.email) {
+      return res.status(400).json({
+        success: false,
+        message: 'User does not have a registered email address'
+      });
+    }
+
+    // Generate secure temporary password
+    const crypto = require('crypto');
+    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower = 'abcdefghjkmnpqrstuvwxyz';
+    const digits = '23456789';
+    const special = '@#$!';
+    const all = upper + lower + digits + special;
+    const rand = (str) => str[crypto.randomInt(str.length)];
+    const tempPassword = rand(upper) + rand(lower) + rand(digits) + rand(special) +
+      Array.from({ length: 6 }, () => rand(all)).join('');
+
+    // Assign plain password to user model and mark isPasswordChanged: false, and update status to TEMP_PASS_SENT
+    user.password = tempPassword;
+    user.isPasswordChanged = false;
+    user.status = 'TEMP_PASS_SENT';
+    user.tempPasswordSentAt = new Date();
+    user.tempPasswordSentBy = req.user._id;
+
+    // Explicitly ensure emailVerified is false for onboarding flow unless legitimately verified via token
+    if (!user.emailVerifiedAt) {
+      user.emailVerified = false;
+    }
+    if (!user.emailVerificationToken) {
+      user.emailVerificationToken = crypto.randomBytes(32).toString('hex');
+      user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+    }
+
+    // Save user — pre('save') hook hashes user.password
+    await user.save();
+
+    // Determine display name
+    const displayName = [user.firstName, user.lastName].filter(Boolean).join(' ').trim() ||
+      user.email.split('@')[0];
+
+    // Send email using emailService.sendTempPassword
+    await emailService.sendTempPassword(user.email, tempPassword, displayName);
+
+    // Audit log
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role,
+      actorEmail: req.user.email,
+      action: 'TEMP_PASSWORD_SENT',
+      entityType: 'User',
+      entityId: user._id,
+      description: `Sent temporary password email to ${user.email} (${user.role}) for onboarding completion, status changed to TEMP_PASS_SENT`,
+      after: { email: user.email, status: user.status, tempPasswordSentAt: user.tempPasswordSentAt },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
+    res.json({
+      success: true,
+      message: `Temporary password email sent to ${user.email} successfully!`,
+      data: {
+        userId: user._id,
+        email: user.email,
+        status: user.status,
+        tempPasswordSentAt: user.tempPasswordSentAt
+      }
+    });
+  } catch (error) {
+    console.error('[ADMIN] Send temp password error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to send temporary password email'
     });
   }
 };
@@ -4717,13 +4967,13 @@ exports.getAllPartners = async (req, res) => {
 exports.getPartnerDetail = async (req, res) => {
   try {
     let partner = await StaffingPartner.findById(req.params.id)
-      .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
+      .populate('user', 'email mobile status lastLogin createdAt updatedAt emailVerified emailVerifiedAt mobileVerified mobileVerifiedAt isPasswordChanged passwordChangedAt tempPasswordSentAt leadValidity leadValidityUpdatedAt suspendedAt')
       .populate('verifiedBy', 'email role')
       .populate('assignedTo', 'email role');
 
     if (!partner) {
       partner = await StaffingPartner.findOne({ user: req.params.id })
-        .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
+        .populate('user', 'email mobile status lastLogin createdAt updatedAt emailVerified emailVerifiedAt mobileVerified mobileVerifiedAt isPasswordChanged passwordChangedAt tempPasswordSentAt leadValidity leadValidityUpdatedAt suspendedAt')
         .populate('verifiedBy', 'email role')
         .populate('assignedTo', 'email role');
     }
@@ -4733,6 +4983,12 @@ exports.getPartnerDetail = async (req, res) => {
         success: false,
         message: 'Partner not found'
       });
+    }
+
+    // Self-heal: unapproved partner must not have user.status === 'ACTIVE'
+    if (partner.user && String(partner.user.status || '').toUpperCase() === 'ACTIVE' && !['APPROVED', 'VERIFIED'].includes(partner.verificationStatus)) {
+      partner.user.status = 'ONBOARDING_UNDERPROGRESS';
+      await User.updateOne({ _id: partner.user._id }, { $set: { status: 'ONBOARDING_UNDERPROGRESS' } });
     }
 
     // Sub-admins can view any partner details
@@ -4886,13 +5142,13 @@ exports.getAllCompanies = async (req, res) => {
 exports.getCompanyDetail = async (req, res) => {
   try {
     let company = await Company.findById(req.params.id)
-      .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
+      .populate('user', 'email mobile status lastLogin createdAt updatedAt emailVerified emailVerifiedAt mobileVerified mobileVerifiedAt isPasswordChanged passwordChangedAt tempPasswordSentAt leadValidity leadValidityUpdatedAt suspendedAt')
       .populate('verifiedBy', 'email role')
       .populate('assignedTo', 'email role');
 
     if (!company) {
       company = await Company.findOne({ user: req.params.id })
-        .populate('user', 'email mobile status lastLogin createdAt emailVerified mobileVerified')
+        .populate('user', 'email mobile status lastLogin createdAt updatedAt emailVerified emailVerifiedAt mobileVerified mobileVerifiedAt isPasswordChanged passwordChangedAt tempPasswordSentAt leadValidity leadValidityUpdatedAt suspendedAt')
         .populate('verifiedBy', 'email role')
         .populate('assignedTo', 'email role');
     }
@@ -4902,6 +5158,12 @@ exports.getCompanyDetail = async (req, res) => {
         success: false,
         message: 'Company not found'
       });
+    }
+
+    // Self-heal: unapproved company must not have user.status === 'ACTIVE'
+    if (company.user && String(company.user.status || '').toUpperCase() === 'ACTIVE' && !['APPROVED', 'VERIFIED'].includes(company.verificationStatus)) {
+      company.user.status = 'ONBOARDING_UNDERPROGRESS';
+      await User.updateOne({ _id: company.user._id }, { $set: { status: 'ONBOARDING_UNDERPROGRESS' } });
     }
 
     // Sub-admins can view any company details
@@ -5891,7 +6153,7 @@ exports.assignJob = async (req, res) => {
     const { subAdminId } = req.body;
 
     // Only main admin can assign
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Only main admin can assign job posts'
@@ -5981,7 +6243,7 @@ exports.assignJob = async (req, res) => {
 exports.revokeJobAssignment = async (req, res) => {
   try {
     // Only main admin can revoke
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Only main admin can revoke job assignments'
@@ -6041,7 +6303,7 @@ exports.bulkAssignJobs = async (req, res) => {
     const { jobIds, subAdminId } = req.body;
 
     // Only main admin can assign
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Only main admin can assign job posts'
@@ -6138,7 +6400,7 @@ exports.bulkRevokeJobs = async (req, res) => {
     const { jobIds } = req.body;
 
     // Only main admin can revoke
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Only main admin can revoke job assignments'
@@ -6204,7 +6466,7 @@ exports.assignVerification = async (req, res) => {
     const { subAdminId } = req.body;
 
     // Only main admin can assign
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Only main admin can assign user applications'
@@ -6313,7 +6575,7 @@ exports.revokeVerificationAssignment = async (req, res) => {
     const { type, id } = req.params;
 
     // Only main admin can revoke
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Only main admin can revoke assignments'
@@ -6389,7 +6651,7 @@ exports.bulkAssignVerification = async (req, res) => {
     const { subAdminId, assignments } = req.body; // assignments is an array of { id, type }
 
     // Only main admin can bulk assign
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Only main admin can bulk assign applications'
@@ -6513,7 +6775,7 @@ exports.bulkRevokeVerificationAssignment = async (req, res) => {
     const { assignments } = req.body; // assignments is an array of { id, type }
 
     // Only main admin can bulk revoke
-    if (req.user.role !== 'admin') {
+    if (!['admin', 'super_admin'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
         message: 'Only main admin can bulk revoke assignments'

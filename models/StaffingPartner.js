@@ -36,21 +36,25 @@ const staffingPartnerSchema = new mongoose.Schema({
   },
   designation: {
     type: String,
-    required: [true, 'Designation is required'],
+    required: false,
+    default: '',
     trim: true
   },
   linkedinProfile: {
     type: String,
+    default: '',
     trim: true
   },
   city: {
     type: String,
-    required: [true, 'City is required'],
+    required: false,
+    default: '',
     trim: true
   },
   state: {
     type: String,
-    required: [true, 'State is required'],
+    required: false,
+    default: '',
     trim: true
   },
 
@@ -298,6 +302,7 @@ const staffingPartnerSchema = new mongoose.Schema({
     commercialDetails: { type: Boolean, default: false },
     documents: { type: Boolean, default: false }
   },
+  basicInfoCompletedAt: Date,
 
   // ==================== AGREEMENT ====================
   agreement: {

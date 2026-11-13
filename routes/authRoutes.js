@@ -6,6 +6,7 @@ const {
   initTalentPartnerRegistration,
   initStaffingPartnerRegistration,
   initCompanyRegistration,
+  registerLead,
   verifyEmailByToken,     // Legacy GET support
   verifyEmail,            // Recommended POST
   getVerificationStatus,
@@ -27,6 +28,7 @@ const { protect } = require('../middleware/auth');
 router.post('/register/talent-partner/init', initTalentPartnerRegistration);
 router.post('/register/staffing-partner/init', initTalentPartnerRegistration);
 router.post('/register/company/init', initCompanyRegistration);
+router.post('/register-lead', registerLead);
 
 // ==================== VERIFICATION ====================
 

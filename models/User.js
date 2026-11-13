@@ -40,7 +40,7 @@ const userSchema = new mongoose.Schema({
 
   role: {
     type: String,
-    enum: ['talent_partner', 'talent', 'company', 'admin', 'sub_admin', 'candidate'],
+    enum: ['talent_partner', 'talent', 'company', 'admin', 'sub_admin', 'super_admin'],
     required: true
   },
 
@@ -50,7 +50,10 @@ const userSchema = new mongoose.Schema({
       'PENDING_EMAIL_VERIFICATION',
       'PENDING_MOBILE_VERIFICATION',
       'REGISTERED',
+      'TEMP_PASS_SENT',
+      'PASS_CHANGED',
       'PASSWORD_CHANGED',
+      'ONBOARDING_UNDERPROGRESS',
       'PROFILE_INCOMPLETE',
       'PROFILE_SUBMITTED',
       'UNDER_VERIFICATION',
@@ -67,6 +70,23 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true
   }],
+
+  // Lead validity status (for Talent Partner and Client/Company leads - no default selection)
+  leadValidity: {
+    type: String,
+    enum: ['VALID', 'INVALID', null],
+    default: null
+  },
+  leadValidityUpdatedAt: Date,
+  leadValidityUpdatedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  tempPasswordSentAt: Date,
+  tempPasswordSentBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
 
   // Who created this user (mainly useful for sub-admin creation audit)
   createdBy: {
@@ -87,14 +107,17 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  emailVerifiedAt: Date,
   mobileVerified: {
     type: Boolean,
     default: false
   },
+  mobileVerifiedAt: Date,
   isPasswordChanged: {
     type: Boolean,
     default: false
   },
+  passwordChangedAt: Date,
 
   emailOTP: {
     code: String,
@@ -150,19 +173,28 @@ const userSchema = new mongoose.Schema({
 });
 
 // Hash password before saving
-userSchema.pre('save', async function (next) {
+userSchema.pre('save', async function () {
   if (!this.isModified('password')) {
-    return next();
+    return;
+  }
+
+  // Prevent double hashing if password is already a bcrypt hash
+  if (typeof this.password === 'string' && /^\$2[abxy]\$\d+\$/.test(this.password)) {
+    return;
   }
 
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
-  next();
 });
 
 // Compare password method
 userSchema.methods.comparePassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
+  if (!enteredPassword || !this.password) return false;
+  try {
+    return await bcrypt.compare(enteredPassword, this.password);
+  } catch (err) {
+    return false;
+  }
 };
 
 // Generate OTP

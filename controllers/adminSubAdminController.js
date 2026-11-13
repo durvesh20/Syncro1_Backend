@@ -43,8 +43,23 @@ exports.createSubAdmin = async (req, res) => {
             mobile,
             permissions = [],
             bundle,
-            status = 'ACTIVE'
+            status = 'ACTIVE',
+            role = 'sub_admin'
         } = req.body;
+
+        if (role === 'admin') {
+            if (req.user.role !== 'super_admin') {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Only Super Admin can create Admin accounts'
+                });
+            }
+        } else if (role !== 'sub_admin') {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid role. Must be sub_admin or admin'
+            });
+        }
 
         if (!email || !mobile) {
             return res.status(400).json({
@@ -95,15 +110,18 @@ exports.createSubAdmin = async (req, res) => {
         // Auto-generate a secure password
         const autoPassword = generatePassword();
 
+        const finalRole = role;
+        const assignedPermissions = finalRole === 'admin' ? ALL_PERMISSIONS : [...new Set(finalPermissions)];
+
         const subAdmin = await User.create({
             firstName: firstName.trim(),
             lastName: lastName.trim(),
             email: normalizedEmail,
             mobile: normalizedMobile,
             password: autoPassword,
-            role: 'sub_admin',
+            role: finalRole,
             status,
-            permissions: [...new Set(finalPermissions)],
+            permissions: assignedPermissions,
             createdBy: req.user._id,
             emailVerified: true,
             mobileVerified: true,
@@ -113,7 +131,8 @@ exports.createSubAdmin = async (req, res) => {
                 actor: req.user._id,
                 timestamp: new Date(),
                 details: {
-                    newPermissions: [...new Set(finalPermissions)],
+                    role: finalRole,
+                    newPermissions: assignedPermissions,
                     newStatus: status
                 }
             }]
@@ -125,14 +144,15 @@ exports.createSubAdmin = async (req, res) => {
             firstName.trim(),
             lastName.trim(),
             autoPassword,
-            [...new Set(finalPermissions)]
-        ).catch(e => console.error('[SUB-ADMIN] Welcome email failed:', e.message));
+            assignedPermissions,
+            finalRole === 'admin' ? 'Admin' : 'Sub-Admin'
+        ).catch(e => console.error('[ADMIN-MGMT] Welcome email failed:', e.message));
 
         const responseUser = await User.findById(subAdmin._id).select('-password');
 
         res.status(201).json({
             success: true,
-            message: `Sub-admin created! Welcome email sent to ${normalizedEmail}`,
+            message: `${finalRole === 'admin' ? 'Admin' : 'Sub-admin'} created! Welcome email sent to ${normalizedEmail}`,
             data: responseUser
         });
     } catch (error) {
@@ -151,9 +171,20 @@ exports.createSubAdmin = async (req, res) => {
 exports.getSubAdmins = async (req, res) => {
     try {
         const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
-        const { status, search } = req.query;
+        const { status, search, role: filterRole } = req.query;
 
-        const query = { role: 'sub_admin' };
+        let query = {};
+        if (req.user.role === 'super_admin') {
+            if (filterRole === 'admin') {
+                query.role = 'admin';
+            } else if (filterRole === 'sub_admin') {
+                query.role = 'sub_admin';
+            } else {
+                query.role = { $in: ['sub_admin', 'admin'] };
+            }
+        } else {
+            query.role = 'sub_admin';
+        }
 
         if (status) {
             query.status = status;
@@ -206,9 +237,10 @@ exports.getSubAdmins = async (req, res) => {
 // @access  Admin
 exports.getSubAdminById = async (req, res) => {
     try {
+        const allowedRoles = req.user.role === 'super_admin' ? ['sub_admin', 'admin'] : ['sub_admin'];
         const subAdmin = await User.findOne({
             _id: req.params.id,
-            role: 'sub_admin'
+            role: { $in: allowedRoles }
         })
             .select('-password')
             .populate('createdBy', 'email role')
@@ -249,9 +281,10 @@ exports.updateSubAdmin = async (req, res) => {
             status
         } = req.body;
 
+        const allowedRoles = req.user.role === 'super_admin' ? ['sub_admin', 'admin'] : ['sub_admin'];
         const subAdmin = await User.findOne({
             _id: req.params.id,
-            role: 'sub_admin'
+            role: { $in: allowedRoles }
         });
 
         if (!subAdmin) {
@@ -379,9 +412,10 @@ exports.updateSubAdminStatus = async (req, res) => {
             });
         }
 
+        const allowedRoles = req.user.role === 'super_admin' ? ['sub_admin', 'admin'] : ['sub_admin'];
         const subAdmin = await User.findOne({
             _id: req.params.id,
-            role: 'sub_admin'
+            role: { $in: allowedRoles }
         });
 
         if (!subAdmin) {

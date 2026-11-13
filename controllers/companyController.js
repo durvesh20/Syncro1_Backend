@@ -9,6 +9,7 @@ const candidateLifecycleService = require("../services/candidateLifecycleService
 const InterviewSlot = require("../models/InterviewSlot");
 const whatsappService = require("../services/whatsappService");
 const notifyCRM = require('../utils/notifyCRM');
+const auditService = require('../services/auditService');
 const {
   COMPANY_ALL_PERMISSIONS,
   COMPANY_PERMISSION_GROUPS,
@@ -162,12 +163,48 @@ exports.updateBasicInfo = async (req, res) => {
 
     if (designation) company.designation = designation;
     if (department) company.department = department;
-    if (linkedinProfile) company.linkedinProfile = linkedinProfile;
+    if (linkedinProfile !== undefined) company.linkedinProfile = linkedinProfile;
     if (city) company.city = city;
     if (state) company.state = state;
 
-    company.profileCompletion.basicInfo = true;
+    const isBasicInfoComplete = Boolean(
+      company.companyName &&
+      company.decisionMakerName &&
+      company.decisionMakerName.trim().length > 0 &&
+      company.designation &&
+      company.department &&
+      company.city &&
+      company.state &&
+      user.emailVerified &&
+      user.mobileVerified
+    );
+
+    company.profileCompletion.basicInfo = isBasicInfoComplete;
     await company.save();
+
+    if (isBasicInfoComplete) {
+      if (!company.basicInfoCompletedAt) {
+        company.basicInfoCompletedAt = new Date();
+        await company.save();
+      }
+      if (['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED', 'PROFILE_INCOMPLETE', 'ACTIVE'].includes(user.status)) {
+        user.status = 'ONBOARDING_UNDERPROGRESS';
+        await user.save();
+
+        await auditService.log({
+          actor: user._id,
+          actorRole: user.role || 'company',
+          actorEmail: user.email,
+          action: 'ONBOARDING_UNDERPROGRESS',
+          entityType: 'Company',
+          entityId: company._id,
+          description: `Basic Information completed, onboarding started with status ONBOARDING_UNDERPROGRESS`,
+          after: { status: 'ONBOARDING_UNDERPROGRESS' },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      }
+    }
 
     // ── CRM: Company Profile Step ───────────────────────────────────
     try { notifyCRM.companyProfileStep(req.user, company) } catch (e) { /* non-critical */ }
@@ -736,7 +773,7 @@ exports.getProfile = async (req, res) => {
   try {
     const company = await Company.findOne({ user: req.user._id }).populate(
       "user",
-      "email mobile status emailVerified mobileVerified",
+      "email mobile status emailVerified emailVerifiedAt mobileVerified",
     );
 
     if (!company) {
@@ -744,6 +781,16 @@ exports.getProfile = async (req, res) => {
         success: false,
         message: "Profile not found",
       });
+    }
+
+    // Self-healing migration for existing test accounts:
+    // If user is in pre-onboarding / Step 1 and has not legitimately verified email via token, ensure emailVerified is false
+    const isPreOnboarding = ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED'].includes(company.user?.status) ||
+      (!company.profileCompletion?.basicInfo && company.user?.status === 'ONBOARDING_UNDERPROGRESS');
+
+    if (company.user && isPreOnboarding && !company.user.emailVerifiedAt && company.user.emailVerified) {
+      company.user.emailVerified = false;
+      await User.updateOne({ _id: company.user._id }, { $set: { emailVerified: false } });
     }
 
     const [firstName, ...lastNameParts] = company.decisionMakerName.split(" ");
@@ -865,10 +912,24 @@ exports.submitProfile = async (req, res) => {
     }
 
     company.verificationStatus = "UNDER_REVIEW";
+    company.submittedAt = new Date();
     user.status = "UNDER_VERIFICATION";
 
     await company.save();
     await user.save();
+
+    await auditService.log({
+      actor: req.user._id,
+      actorRole: req.user.role || 'company',
+      actorEmail: req.user.email,
+      action: 'PROFILE_SUBMITTED',
+      entityType: 'Company',
+      entityId: company._id,
+      description: `Company profile submitted for verification, status changed to UNDER_REVIEW`,
+      after: { verificationStatus: company.verificationStatus, status: user.status },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
 
     // ── CRM: Company Profile Submitted ─────────────────────────────
     try { notifyCRM.companyProfileSubmitted(req.user, company) } catch (e) { /* non-critical */ }

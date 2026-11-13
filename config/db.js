@@ -57,6 +57,15 @@ const connectDB = async () => {
 
         // Migrate any legacy staffing / staffing_partner role users to talent_partner
         const User = mongoose.models.User || require('../models/User');
+        // Ensure yogesh@syncro1.com is super_admin, and admin@syncro1.com is regular admin
+        await User.updateOne(
+          { email: 'yogesh@syncro1.com', role: { $ne: 'super_admin' } },
+          { $set: { role: 'super_admin' } }
+        );
+        await User.updateOne(
+          { email: 'admin@syncro1.com', role: { $ne: 'admin' } },
+          { $set: { role: 'admin' } }
+        );
         const updatedUsers = await User.updateMany(
           { role: { $in: ['staffing_partner', 'staffing'] } },
           { $set: { role: 'talent_partner' } }

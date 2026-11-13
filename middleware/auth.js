@@ -44,6 +44,18 @@ exports.protect = async (req, res, next) => {
       });
     }
 
+    // Force mandatory password change if user is on temporary password
+    if ((req.user.isPasswordChanged === false || req.user.status === 'TEMP_PASS_SENT') &&
+        !req.originalUrl.includes('/change-password') &&
+        !req.originalUrl.includes('/logout') &&
+        !req.originalUrl.includes('/auth/me')) {
+      return res.status(403).json({
+        success: false,
+        code: 'PASSWORD_CHANGE_REQUIRED',
+        message: 'You must change your temporary password before accessing platform features.'
+      });
+    }
+
     next();
   } catch (error) {
     return res.status(401).json({
@@ -64,7 +76,8 @@ exports.authorize = (...roles) => {
     const userRole = req.user?.role;
     const isAuthorized = userRole && (
       requestedRoles.has(userRole) ||
-      (hasPartnerRequested && partnerRoles.has(userRole))
+      (hasPartnerRequested && partnerRoles.has(userRole)) ||
+      (requestedRoles.has('admin') && userRole === 'super_admin')
     );
 
     if (!req.user || !isAuthorized) {
@@ -92,7 +105,7 @@ exports.checkStatus = (...statuses) => {
 
 // Allow admin and sub-admin into admin CMS area
 exports.authorizeAdminAccess = (req, res, next) => {
-  if (!req.user || !['admin', 'sub_admin'].includes(req.user.role)) {
+  if (!req.user || !['admin', 'sub_admin', 'super_admin'].includes(req.user.role)) {
     return res.status(403).json({
       success: false,
       message: 'Only admin or sub-admin can access this route'
@@ -113,7 +126,7 @@ exports.checkPermission = (permission) => {
     }
 
     // Admin bypasses all permission checks
-    if (req.user.role === 'admin') {
+    if (['admin', 'super_admin'].includes(req.user.role)) {
       return next();
     }
 
@@ -180,7 +193,7 @@ exports.checkAnyPermission = (permissions = []) => {
     }
 
     // Admin bypasses all permission checks
-    if (req.user.role === 'admin') {
+    if (['admin', 'super_admin'].includes(req.user.role)) {
       return next();
     }
 
@@ -218,7 +231,7 @@ exports.checkAllPermissions = (permissions = []) => {
       });
     }
 
-    if (req.user.role === 'admin') {
+    if (['admin', 'super_admin'].includes(req.user.role)) {
       return next();
     }
 

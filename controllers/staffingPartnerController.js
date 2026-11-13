@@ -14,6 +14,7 @@ const InterviewSlot = require('../models/InterviewSlot');
 const candidateQueueService = require('../services/candidateQueueService');
 const whatsappService = require('../services/whatsappService');
 const notifyCRM = require('../utils/notifyCRM');
+const auditService = require('../services/auditService');
 const { transition, ACTIONS, PIPELINE_STATES } = require('../services/pipelineStateMachine');
 
 // ============================================================
@@ -26,13 +27,23 @@ exports.getProfile = async (req, res) => {
   try {
     const partner = await StaffingPartner.findOne({
       user: req.user._id
-    }).populate('user', 'email mobile status emailVerified mobileVerified');
+    }).populate('user', 'email mobile status emailVerified emailVerifiedAt mobileVerified');
 
     if (!partner) {
       return res.status(404).json({
         success: false,
         message: 'Profile not found'
       });
+    }
+
+    // Self-healing migration for existing test accounts:
+    // If user is in pre-onboarding / Step 1 and has not legitimately verified email via token, ensure emailVerified is false
+    const isPreOnboarding = ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED'].includes(partner.user?.status) ||
+      (!partner.profileCompletion?.basicInfo && partner.user?.status === 'ONBOARDING_UNDERPROGRESS');
+
+    if (partner.user && isPreOnboarding && !partner.user.emailVerifiedAt && partner.user.emailVerified) {
+      partner.user.emailVerified = false;
+      await User.updateOne({ _id: partner.user._id }, { $set: { emailVerified: false } });
     }
 
     res.json({
@@ -139,12 +150,47 @@ exports.updateBasicInfo = async (req, res) => {
     if (lastName) partner.lastName = lastName;
     if (firmName) partner.firmName = firmName;
     if (designation) partner.designation = designation;
-    if (linkedinProfile) partner.linkedinProfile = linkedinProfile;
+    if (linkedinProfile !== undefined) partner.linkedinProfile = linkedinProfile;
     if (city) partner.city = city;
     if (state) partner.state = state;
 
-    partner.profileCompletion.basicInfo = true;
+    const isBasicInfoComplete = Boolean(
+      partner.firstName &&
+      partner.lastName &&
+      partner.firmName &&
+      partner.designation &&
+      partner.city &&
+      partner.state &&
+      user.emailVerified &&
+      user.mobileVerified
+    );
+
+    partner.profileCompletion.basicInfo = isBasicInfoComplete;
     await partner.save();
+
+    if (isBasicInfoComplete) {
+      if (!partner.basicInfoCompletedAt) {
+        partner.basicInfoCompletedAt = new Date();
+        await partner.save();
+      }
+      if (['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED', 'PROFILE_INCOMPLETE', 'ACTIVE'].includes(user.status)) {
+        user.status = 'ONBOARDING_UNDERPROGRESS';
+        await user.save();
+
+        await auditService.log({
+          actor: user._id,
+          actorRole: user.role || 'talent_partner',
+          actorEmail: user.email,
+          action: 'ONBOARDING_UNDERPROGRESS',
+          entityType: 'StaffingPartner',
+          entityId: partner._id,
+          description: `Basic Information completed, onboarding started with status ONBOARDING_UNDERPROGRESS`,
+          after: { status: 'ONBOARDING_UNDERPROGRESS' },
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+      }
+    }
 
     res.json({
       success: true,
@@ -850,6 +896,19 @@ exports.submitProfile = async (req, res) => {
     await partner.save();
     user.status = 'UNDER_VERIFICATION';
     await user.save();
+
+    await auditService.log({
+      actor: user._id,
+      actorRole: user.role || 'talent_partner',
+      actorEmail: user.email,
+      action: 'PROFILE_SUBMITTED',
+      entityType: 'StaffingPartner',
+      entityId: partner._id,
+      description: `Application and signed agreement submitted for review, status changed to UNDER_REVIEW`,
+      after: { verificationStatus: partner.verificationStatus, status: user.status },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent']
+    });
 
     // ── CRM: Partner Profile Submitted ─────────────────────────────
     try {
