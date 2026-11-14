@@ -69,7 +69,7 @@ const staffingPartnerSchema = new mongoose.Schema({
     tradeName: String,
     entityType: {
       type: String,
-      enum: ['Proprietor', 'Partnership', 'LLP', 'Private Limited', 'Agency']
+      enum: ['Proprietor', 'Partnership', 'LLP', 'Private Limited', 'Agency', 'Individual']
     },
     yearEstablished: Number,
     website: String,

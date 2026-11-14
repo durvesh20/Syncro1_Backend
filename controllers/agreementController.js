@@ -19,6 +19,8 @@ const buildPartnerData = (partner, user, ip, timestamp) => {
         city: partner.city,
         state: partner.state,
         documents: partner.documents,
+        authorizedSignatoryProof: partner.documents?.authorizedSignatoryProof,
+        digitalSignature: partner.compliance?.digitalSignature,
         agreementDate: timestamp || new Date(),
         agreedAt: timestamp || new Date(),
         agreedIp: ip || 'N/A',

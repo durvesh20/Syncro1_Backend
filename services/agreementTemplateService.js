@@ -1,6 +1,21 @@
 // backend/services/agreementTemplateService.js
+const fs = require('fs');
+const path = require('path');
 
 class AgreementTemplateService {
+
+  _getAbhiSignature() {
+    try {
+      const sigPath = path.join(__dirname, '../assets/Abhi-signature.jpeg');
+      if (fs.existsSync(sigPath)) {
+        const buf = fs.readFileSync(sigPath);
+        return `data:image/jpeg;base64,${buf.toString('base64')}`;
+      }
+    } catch (e) {
+      console.error('[AGREEMENT] Error reading Abhi signature from assets:', e);
+    }
+    return '';
+  }
 
   generatePartnerAgreement(partnerData) {
     const {
@@ -18,8 +33,44 @@ class AgreementTemplateService {
       agreedAt,
       agreedIp,
       city,
-      state
+      state,
+      documents,
+      authorizedSignatoryProof,
+      digitalSignature,
+      signatureUrl,
+      signature
     } = partnerData;
+
+    const abhiSignatureImg = this._getAbhiSignature();
+
+    // Use authorizedSignatoryProof (the photo uploaded during onboarding) as the partner's signature image
+    // Fall back to digitalSignature if no proof is uploaded
+    const rawPartnerSig = authorizedSignatoryProof || digitalSignature || signatureUrl || signature;
+    let partnerSigImg = '';
+    if (rawPartnerSig && typeof rawPartnerSig === 'string') {
+      const isImg = rawPartnerSig.startsWith('data:image/') ||
+        /\.(jpe?g|png|webp|svg)(\?.*)?$/i.test(rawPartnerSig) ||
+        rawPartnerSig.includes('/image/upload/') ||
+        rawPartnerSig.includes('cloudinary');
+      if (isImg && !rawPartnerSig.toLowerCase().endsWith('.pdf')) {
+        partnerSigImg = rawPartnerSig;
+      }
+    }
+
+    let partnerPlace = '';
+    if (city && state) {
+      partnerPlace = `${city}, ${state}`;
+    } else if (city) {
+      partnerPlace = city;
+    } else if (typeof registeredAddress === 'object' && registeredAddress?.city) {
+      partnerPlace = `${registeredAddress.city}${registeredAddress.state ? `, ${registeredAddress.state}` : ''}`;
+    } else if (typeof registeredAddress === 'string' && registeredAddress.trim()) {
+      partnerPlace = registeredAddress.trim();
+    } else if (state) {
+      partnerPlace = state;
+    } else {
+      partnerPlace = 'India';
+    }
 
     const formattedDate = new Date(agreementDate || Date.now()).toLocaleDateString('en-IN', {
       day: 'numeric', month: 'long', year: 'numeric'
@@ -30,16 +81,17 @@ class AgreementTemplateService {
       hour: '2-digit', minute: '2-digit'
     });
 
-    const partnerLegalName = registeredName || firmName || '[TALENT PARTNER LEGAL NAME]';
+    const partnerLegalName = registeredName || firmName || '[Full Legal Name of Talent Partner]';
     const partnerType = this._mapEntityType(entityType);
     const partnerAddress = this._formatAddress(registeredAddress);
-    const signatoryName = `${firstName || ''} ${lastName || ''}`.trim() || '[AUTHORISED SIGNATORY]';
+    const signatoryName = `${firstName || ''} ${lastName || ''}`.trim() || '[Authorised Signatory]';
+    const partnerDesignation = designation || 'Authorised Signatory';
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MSA - Syncro1 x ${partnerLegalName}</title>
+<title>Master Talent Partner Agreement - Syncro1 x ${partnerLegalName}</title>
 <style>
   @page {
     size: A4;
@@ -56,7 +108,7 @@ class AgreementTemplateService {
     font-family: 'Times New Roman', Times, serif;
     font-size: 10pt;
     line-height: 1.5;
-    color: #000;
+    color: #111;
     background: #fff;
     padding: 0;
     margin: 0;
@@ -69,30 +121,46 @@ class AgreementTemplateService {
   /* ---- HEADER ---- */
   .doc-header {
     text-align: center;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
     padding-bottom: 8px;
-    border-bottom: 2.5px double #000;
+    border-bottom: 2px solid #000;
   }
   .doc-header .t1 {
     font-size: 13pt;
     font-weight: bold;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
     margin-bottom: 2px;
   }
   .doc-header .t2 {
     font-size: 11pt;
     font-weight: bold;
-    margin-bottom: 2px;
+    letter-spacing: 0.3px;
+    margin-bottom: 3px;
   }
   .doc-header .t3 {
     font-size: 8.5pt;
     font-style: italic;
-    letter-spacing: 0.8px;
+    color: #444;
+    letter-spacing: 0.5px;
     margin-bottom: 4px;
   }
-  .doc-header .t4 {
-    font-size: 10pt;
-    margin-top: 5px;
+
+  /* ---- DRAFTING CALLOUT BOX ---- */
+  .callout-box {
+    border: 1px solid #777;
+    background: #fafafa;
+    padding: 8px 12px;
+    margin: 10px 0 14px 0;
+    font-size: 8.5pt;
+    line-height: 1.4;
+  }
+  .callout-title {
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 8.5pt;
+    margin-bottom: 3px;
+    color: #b91c1c;
   }
 
   /* ---- SECTION TITLES ---- */
@@ -100,7 +168,7 @@ class AgreementTemplateService {
     font-size: 10pt;
     font-weight: bold;
     text-transform: uppercase;
-    margin-top: 13px;
+    margin-top: 14px;
     margin-bottom: 5px;
     border-bottom: 1px solid #000;
     padding-bottom: 2px;
@@ -108,10 +176,10 @@ class AgreementTemplateService {
   }
 
   .sart {
-    font-size: 10pt;
+    font-size: 9.5pt;
     font-weight: bold;
     margin-top: 8px;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
     page-break-after: avoid;
   }
 
@@ -130,61 +198,64 @@ class AgreementTemplateService {
     widows: 3;
   }
 
-  .it { font-style: italic; }
   .bd { font-weight: bold; }
-  .hl { font-weight: bold; }
-  .uc { text-transform: uppercase; font-weight: bold; }
+  .it { font-style: italic; }
 
-  .hr1 { border: none; border-top: 1px solid #000; margin: 8px 0; }
-  .hr2 { border: none; border-top: 0.5px solid #666; margin: 6px 0; }
-
-  /* ---- BULLETS ---- */
+  /* ---- BULLETS & LISTS ---- */
   ul.bul {
-    margin: 3px 0 5px 22px;
+    margin: 4px 0 6px 20px;
     padding: 0;
   }
   ul.bul li {
     margin-bottom: 3px;
     text-align: justify;
     list-style: disc;
-    orphans: 2;
-    widows: 2;
+  }
+
+  ol.num {
+    margin: 4px 0 6px 20px;
+    padding: 0;
+  }
+  ol.num li {
+    margin-bottom: 4px;
+    text-align: justify;
   }
 
   /* ---- TABLES ---- */
   table {
     width: 100%;
     border-collapse: collapse;
-    margin: 6px 0;
+    margin: 8px 0;
     font-size: 9pt;
   }
   table th {
-    background: #c8c8c8;
-    border: 0.8px solid #000;
-    padding: 5px 7px;
+    background: #e5e5e5;
+    border: 1px solid #333;
+    padding: 5px 8px;
     font-weight: bold;
     text-align: left;
   }
   table td {
-    border: 0.8px solid #000;
-    padding: 4px 7px;
+    border: 1px solid #333;
+    padding: 5px 8px;
     vertical-align: top;
   }
   tr { page-break-inside: avoid; }
 
-  /* ---- SIGNATURE ---- */
+  /* ---- SIGNATURES ---- */
   .sig-wrap {
-    margin-top: 12px;
+    margin-top: 14px;
     page-break-inside: avoid;
   }
   .sig-grid {
     width: 100%;
     border-collapse: collapse;
     border: 1px solid #000;
+    margin-top: 6px;
   }
   .sig-grid td {
     width: 50%;
-    padding: 12px 16px;
+    padding: 10px 14px;
     vertical-align: top;
     border: none;
   }
@@ -199,118 +270,90 @@ class AgreementTemplateService {
     margin-bottom: 2px;
   }
   .sig-name {
-    font-size: 10pt;
+    font-size: 9.5pt;
     font-weight: bold;
     text-transform: uppercase;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
     line-height: 1.3;
   }
   .sig-blank {
-    border: 0.8px solid #000;
-    height: 50px;
-    margin-bottom: 8px;
-    background: #fafafa;
+    border: 1px dashed #94a3b8;
+    padding: 8px 10px;
+    margin-top: 8px;
+    background: #f8fafc;
+    border-radius: 4px;
+    text-align: center;
+    color: #64748b;
+    font-size: 8pt;
+    font-style: italic;
   }
   .sig-accepted {
-    border: 0.8px solid #000;
-    padding: 6px 8px;
-    margin-bottom: 8px;
-    background: #f0f4ff;
-    min-height: 50px;
+    border: 1px solid #bfdbfe;
+    border-left: 3px solid #1e40af;
+    padding: 6px 10px;
+    margin-top: 8px;
+    background: #f8faff;
+    border-radius: 4px;
   }
   .sig-accepted .sa-text {
-    font-size: 9pt;
+    font-size: 8pt;
     font-weight: bold;
-    color: #1a1a8c;
-    margin-bottom: 4px;
+    color: #1e40af;
+    margin-bottom: 3px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   }
   .sig-accepted .sa-meta {
     font-size: 7.5pt;
-    color: #555;
-    border-top: 0.5px dotted #aaa;
+    color: #475569;
+    border-top: 1px solid #e2e8f0;
     padding-top: 3px;
     margin-top: 2px;
-    line-height: 1.5;
+    line-height: 1.4;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   }
   .sf {
-    font-size: 9.5pt;
-    margin-bottom: 4px;
-  }
-  .sf-ul {
-    display: inline-block;
-    min-width: 110px;
-    border-bottom: 0.8px solid #000;
-    margin-left: 3px;
-  }
-
-  .auth-note {
-    margin-top: 8px;
-    padding: 6px 10px;
-    border: 0.5px solid #888;
-    background: #f7f7f7;
-    font-size: 8.5pt;
-    font-style: italic;
-    text-align: center;
-  }
-
-  /* ---- SCHEDULE TITLES ---- */
-  .sch-title {
-    font-size: 11pt;
-    font-weight: bold;
-    text-transform: uppercase;
-    text-align: center;
-    margin-top: 14px;
-    margin-bottom: 4px;
-    border-bottom: 1px solid #000;
-    padding-bottom: 3px;
-    page-break-after: avoid;
-  }
-  .sch-note {
     font-size: 9pt;
-    font-style: italic;
-    text-align: center;
-    margin-bottom: 6px;
+    margin-bottom: 3px;
+    line-height: 1.4;
   }
 
-  /* ---- TALENT PARTNER RECORD ---- */
+  /* ---- AUDIT RECORD ---- */
   .vr {
-    border: 0.8px solid #000;
-    margin: 8px 0;
+    border: 1px solid #444;
+    margin: 10px 0;
   }
   .vr-title {
-    background: #d0d0d0;
+    background: #e2e8f0;
     padding: 4px 8px;
     font-weight: bold;
-    font-size: 9pt;
+    font-size: 8.5pt;
     text-transform: uppercase;
-    border-bottom: 0.8px solid #000;
+    border-bottom: 1px solid #444;
   }
   .vr-row {
     display: flex;
-    border-bottom: 0.5px solid #ccc;
-    font-size: 9pt;
+    border-bottom: 0.5px solid #cbd5e1;
+    font-size: 8.5pt;
   }
   .vr-row:last-child { border-bottom: none; }
   .vr-lbl {
-    width: 158px;
-    min-width: 158px;
-    padding: 4px 8px;
+    width: 160px;
+    min-width: 160px;
+    padding: 3px 8px;
     font-weight: bold;
-    background: #f5f5f5;
-    border-right: 0.5px solid #ccc;
-    font-size: 8.8pt;
+    background: #f8fafc;
+    border-right: 0.5px solid #cbd5e1;
   }
   .vr-val {
-    padding: 4px 8px;
+    padding: 3px 8px;
     flex: 1;
-    font-size: 8.8pt;
   }
 
   /* ---- FOOTER ---- */
   .doc-footer {
-    margin-top: 12px;
+    margin-top: 14px;
     padding-top: 6px;
-    border-top: 0.5px solid #999;
+    border-top: 0.5px solid #aaa;
     font-size: 7.5pt;
     color: #666;
     text-align: center;
@@ -323,389 +366,382 @@ class AgreementTemplateService {
 
 <!-- HEADER -->
 <div class="doc-header">
-  <div class="t1">SYNCRO1 PRIVATE LIMITED</div>
-  <div class="t2">MASTER TALENT PARTNER AGREEMENT</div>
-  <div class="t3">STRICTLY CONFIDENTIAL &mdash;&mdash;&mdash; LEGALLY BINDING DOCUMENT</div>
-  <hr class="hr2">
-  <div class="t4">Dated: <strong>${formattedDate}</strong></div>
+  <div class="t1">MASTER TALENT PARTNER AGREEMENT</div>
+  <div class="t2">SYNCRO1 PVT LTD</div>
+  <div class="t3">Balanced commercial terms &bull; Clear candidate attribution &bull; Targeted platform protections</div>
 </div>
 
-<!-- PARTIES -->
-<p><strong>BETWEEN:</strong></p>
+<!-- DRAFTING STATUS -->
+<div class="art">DRAFTING STATUS &mdash; PLEASE READ</div>
+<p class="cl">This is a comprehensive working draft for review by qualified Indian counsel. It is not a legal opinion, stamp-duty determination, or certification of enforceability. Complete all bracketed fields, confirm the commercial schedule, check current law and Maharashtra stamp duty, and obtain legal approval before signature.</p>
+<p class="cl"><strong>Drafting assumption:</strong> Syncro1 is the platform/business operated by the contracting entity identified below. The legal entity name, registered office, PAN/GSTIN and signatory authority must be inserted accurately. &ldquo;Talent Partner&rdquo; is used consistently as the commercial term; it does not itself determine the legal status of the party.</p>
 
-<p style="margin-top:6px;">(1) <strong>SYNCRO1 PRIVATE LIMITED</strong>, a company incorporated under the Companies Act, 2013, bearing CIN U78100PN2026PTC251070, and having its registered office at H801 Tiana Bldg Bellacasa, Sr No.42(P),43(P) 44(P), Sus, Haveli, Pune- 411021, Maharashtra, India (hereinafter referred to as <strong>&ldquo;Syncro1&rdquo;</strong>, which expression shall, unless repugnant to the context, include its successors and permitted assigns);</p>
+<!-- PARTIES AND EFFECTIVE DATE -->
+<div class="art">PARTIES AND EFFECTIVE DATE</div>
+<p class="cl">This Master Talent Partner Agreement (&ldquo;Agreement&rdquo;) is made on <strong>${formattedDate}</strong> (&ldquo;Effective Date&rdquo;) by and between:</p>
 
-<p style="margin:6px 0 6px 0; text-align:center;"><strong>AND</strong></p>
+<p class="cl"><strong>(A) Syncro1 Private Limited</strong>, a Private Limited Company, incorporated/registered under the laws of India, having its registered office at H801 Tiana Bldg Bellacasa, Sr No.42(P),43(P) 44(P), Sus, Haveli, Pune- 411021, Maharashtra [address], CIN: U78100PN2026PTC251070 , PAN ABSCS5163N and GSTIN 27ABSCS5163N1ZF (&ldquo;Syncro1&rdquo;); and</p>
 
-<p>(2) <strong>${partnerLegalName}</strong>, a <strong>${partnerType}</strong> incorporated / registered under [applicable law], having its principal place of business / registered office at <strong>${partnerAddress}</strong> (hereinafter referred to as the <strong>&ldquo;Talent Partner&rdquo;</strong>, which expression shall, unless repugnant to the context, include its successors and permitted assigns).</p>
+<p class="cl"><strong>(B) ${partnerLegalName}</strong>, a ${partnerType} organised or residing under the laws of India, having its principal address at <strong>${partnerAddress}</strong>, PAN <strong>${panNumber || '[●]'}</strong>, GSTIN (if applicable) <strong>${gstNumber || '[●]'}</strong>, registration number (if applicable) <strong>${cinNumber || '[●]'}</strong> (&ldquo;Talent Partner&rdquo;).</p>
 
-<p style="margin-top:5px;">Syncro1 and the Talent Partner are hereinafter individually referred to as a <strong>&ldquo;Party&rdquo;</strong> and collectively as the <strong>&ldquo;Parties.&rdquo;</strong></p>
+<p class="cl">Syncro1 and the Talent Partner are each a &ldquo;Party&rdquo; and together the &ldquo;Parties&rdquo;.</p>
 
-<hr class="hr1">
+<!-- 1. DEFINITIONS AND INTERPRETATION -->
+<div class="art">1. DEFINITIONS AND INTERPRETATION</div>
+<div class="sart">1. Definitions</div>
+<p class="cl"><strong>1.1 &ldquo;Candidate&rdquo;</strong> means an individual whose profile or information is submitted or processed for a role through the Platform or in accordance with this Agreement.</p>
+<p class="cl"><strong>1.2 &ldquo;Client&rdquo;</strong> means an organization for which Syncro1 has authorized a hiring mandate, role or opportunity to be worked on by the Talent Partner.</p>
+<p class="cl"><strong>1.3 &ldquo;Platform&rdquo;</strong> means Syncro1&rsquo;s online platform, tools, workflows and related systems made available to the Talent Partner.</p>
+<p class="cl"><strong>1.4 &ldquo;Protected Opportunity&rdquo;</strong> means a specific Client and role/requisition that Syncro1 has identified to the Talent Partner in writing or through an auditable Platform record, and for which the Talent Partner has accepted or actively worked the mandate through Syncro1.</p>
+<p class="cl"><strong>1.5 &ldquo;Placement&rdquo;</strong> means a Candidate introduced by the Talent Partner who is hired or engaged by a Client in connection with a Protected Opportunity, as evidenced by a written offer, joining confirmation or other reliable record.</p>
+<p class="cl"><strong>1.6 &ldquo;Fixed Annual CTC&rdquo;</strong> means the annual fixed compensation stated in the Candidate&rsquo;s final offer letter, excluding variable pay, bonus, equity, benefits and employer contributions unless Schedule A expressly states otherwise.</p>
+<p class="cl"><strong>1.7 &ldquo;Business Day&rdquo;</strong> means a day other than Saturday, Sunday or a public/bank holiday in Pune, Maharashtra.</p>
+<p class="cl"><strong>1.8</strong> Headings are for convenience only. &ldquo;Including&rdquo; means &ldquo;including without limitation.&rdquo; In case of conflict, the main body governs unless a Schedule expressly states that it overrides a specified clause.</p>
 
-<!-- RECITALS -->
-<div class="art">RECITALS</div>
-<p class="cl it"><strong>WHEREAS:</strong></p>
-<p class="cl it"><strong>A.</strong> Syncro1 operates a proprietary AI-driven digital talent platform (the <strong>&ldquo;Platform&rdquo;</strong>) that connects client-employers with verified talent partners for the purpose of recruitment and placement of professional candidates on an outcome-based, success-fee model.</p>
-<p class="cl it"><strong>B.</strong> The Talent Partner is engaged in the business of recruitment, talent placement, and sourcing of candidates, and desires to participate on the Platform as an approved Talent Partner to access Client Job Postings, submit Candidate profiles, and earn Commissions on Successful Placements.</p>
-<p class="cl it"><strong>C.</strong> The Parties intend that this Agreement shall exclusively govern the terms and conditions upon which the Talent Partner accesses and uses the Platform and participates in the recruitment ecosystem operated by Syncro1.</p>
-<p class="cl it"><strong>D.</strong> In consideration of the mutual covenants, representations, warranties, and obligations set forth herein, and for other good and valuable consideration, the sufficiency and receipt of which are hereby acknowledged, the Parties agree as follows.</p>
+<!-- 2. APPOINTMENT AND RELATIONSHIP -->
+<div class="art">2. APPOINTMENT AND RELATIONSHIP</div>
+<div class="sart">2. Appointment</div>
+<p class="cl"><strong>2.1</strong> Syncro1 appoints the Talent Partner on a non-exclusive basis to identify and submit suitable Candidates for Protected Opportunities made available to it. The Talent Partner may accept or decline any opportunity.</p>
+<p class="cl"><strong>2.2</strong> This Agreement does not guarantee any minimum number of roles, submissions, interviews, Placements, revenue or work to either Party. Syncro1 may work with other Talent Partners and the Talent Partner may work with other clients and platforms, subject to the specific Protected Opportunity protections in Clause 7.</p>
+<p class="cl"><strong>2.3</strong> The Talent Partner acts as an independent business and not as an employee, agent, legal representative, joint venture partner or franchisee of Syncro1. Neither Party may bind the other, make commitments on the other&rsquo;s behalf, or represent that it has authority to do so.</p>
+<p class="cl"><strong>2.4</strong> The Talent Partner is responsible for its own personnel, business expenses, tax filings, registrations, insurance and statutory obligations applicable to its business and personnel. Nothing in this clause excludes any mandatory legal obligation that cannot lawfully be contracted out of.</p>
+<p class="cl"><strong>2.5</strong> The Talent Partner shall not charge a Candidate any fee for access to a role or for being submitted to a Client, unless such charge is expressly permitted by applicable law and approved in writing by Syncro1; Syncro1&rsquo;s default policy is that Candidates are not charged.</p>
 
-<!-- ARTICLE 1 -->
-<div class="art">ARTICLE 1 &mdash;&mdash;&mdash; DEFINITIONS</div>
-<p style="margin-bottom:5px;">In this Agreement, unless the context otherwise requires, the following terms shall have the meanings ascribed to them. Defined terms used in the Schedules have the same meaning unless otherwise specified therein.</p>
-<p class="cl"><strong>1.1</strong> <strong>&ldquo;Agreement&rdquo;</strong> means this Master Talent Partner Agreement together with all Schedules, Annexures, and any amendments executed by the Parties in writing from time to time, each of which is incorporated herein by reference.</p>
-<p class="cl"><strong>1.2</strong> <strong>&ldquo;Applicable Law&rdquo;</strong> means all statutes, regulations, rules, orders, directives, guidelines, and judicial or governmental decisions in force from time to time, including the Information Technology Act 2000, the Digital Personal Data Protection Act 2023, the Indian Contract Act 1872, the Arbitration and Conciliation Act 1996, the Companies Act 2013, and all applicable tax laws.</p>
-<p class="cl"><strong>1.3</strong> <strong>&ldquo;Candidate&rdquo;</strong> means any individual whose profile or resume is submitted by the Talent Partner through the Platform in response to a Job Posting, whether or not such individual is ultimately placed with a Client.</p>
-<p class="cl"><strong>1.4</strong> <strong>&ldquo;Client&rdquo;</strong> means any employer, company, or organisation registered on and approved by Syncro1 to post Job Postings and hire Candidates through the Platform. A Client is deemed &ldquo;introduced&rdquo; to the Talent Partner as soon as the Talent Partner views the relevant Client&rsquo;s Job Posting through the Platform.</p>
-<p class="cl"><strong>1.5</strong> <strong>&ldquo;Commission&rdquo;</strong> means the fee payable by Syncro1 to the Talent Partner upon each Successful Placement, calculated as five percent (5%) of the Candidate&rsquo;s fixed annual Cost to Company (CTC) as confirmed in the Candidate&rsquo;s offer letter, without any deduction or reference to any commission payable by the Client to Syncro1.</p>
-<p class="cl"><strong>1.6</strong> <strong>&ldquo;Confidential Information&rdquo;</strong> means any information disclosed by one Party to the other, whether orally, in writing, or electronically, that is designated as confidential or that reasonably should be understood to be confidential given the nature of the information and the circumstances of disclosure, including Platform architecture, algorithms, AI models, source code, Client lists, Candidate data, financial data, commission structures, and pricing.</p>
-<p class="cl"><strong>1.7</strong> <strong>&ldquo;CTC&rdquo;</strong> means Cost to Company, being the total fixed annual compensation package offered by the Client to a Candidate, as confirmed in the Candidate&rsquo;s offer letter. Variable pay, bonuses, and non-cash benefits shall not be included in the fixed annual CTC.</p>
-<p class="cl"><strong>1.8</strong> <strong>&ldquo;Dispute&rdquo;</strong> means any disagreement, controversy, or claim arising out of, relating to, or in connection with this Agreement, including questions as to its existence, validity, interpretation, performance, breach, or termination.</p>
-<p class="cl"><strong>1.9</strong> <strong>&ldquo;Effective Date&rdquo;</strong> means the date on which the Talent Partner: (a) completes the online registration process; (b) successfully submits all KYC documents listed in Schedule E; and (c) receives written approval from Syncro1&rsquo;s Super Admin granting access to the Platform, as recorded in the Platform system log.</p>
-<p class="cl"><strong>1.10</strong> <strong>&ldquo;Force Majeure Event&rdquo;</strong> means any event beyond the reasonable control of the affected Party, including acts of God, natural disasters, war, terrorism, civil unrest, epidemic or pandemic declared by a governmental authority, fires, floods, governmental actions, or extended internet infrastructure failures not caused by the affected Party&rsquo;s own service providers.</p>
-<p class="cl"><strong>1.11</strong> <strong>&ldquo;Guarantee Period&rdquo;</strong> means the period of ninety (90) days from the Joining Date. During this period, if the Candidate&rsquo;s employment with the Client terminates for any reason (including resignation, termination by Client, or any other separation), the Talent Partner shall be obliged to provide a replacement Candidate as set out in Article 5.</p>
-<p class="cl"><strong>1.12</strong> <strong>&ldquo;Intellectual Property Rights&rdquo;</strong> means all intellectual property rights worldwide, including patents, trademarks, service marks, copyrights, design rights, database rights, trade secrets, know-how, and all applications for and renewals of such rights, whether registered or unregistered.</p>
-<p class="cl"><strong>1.13</strong> <strong>&ldquo;Job Posting&rdquo;</strong> means a validated and approved job opening created by a Client on the Platform and made visible to the Talent Partner, setting out the job description, screening questions, CTC range, and other relevant details.</p>
-<p class="cl"><strong>1.14</strong> <strong>&ldquo;Joining Date&rdquo;</strong> means the date on which a Candidate actually reports for duty and commences employment with the Client, as confirmed through the Platform by the Client or as deemed confirmed in accordance with Clause 5.8.</p>
-<p class="cl"><strong>1.15</strong> <strong>&ldquo;Platform&rdquo;</strong> means Syncro1&rsquo;s proprietary digital talent technology platform, accessible via website, mobile applications, and APIs, including all software, AI tools, databases, workflows, analytics modules, communication channels, and all updates and modifications thereto.</p>
-<p class="cl"><strong>1.16</strong> <strong>&ldquo;Quality Check&rdquo; or &ldquo;QC&rdquo;</strong> means the multi-layered validation process performed by Syncro1&rsquo;s automated systems and Sub Admin team to assess Candidate submissions for completeness, authenticity, duplication, and alignment with Job Posting requirements before publication to the Client.</p>
-<p class="cl"><strong>1.17</strong> <strong>&ldquo;Service Level Agreement&rdquo; or &ldquo;SLA&rdquo;</strong> means the time-bound operational obligations of the Talent Partner as enumerated in Schedule B, non-compliance with which may result in consequences specified therein.</p>
-<p class="cl"><strong>1.18</strong> <strong>&ldquo;Sub Admin&rdquo;</strong> means Syncro1&rsquo;s internal operations team authorised to manage day-to-day Platform operations, perform QC, and coordinate between Clients, Talent Partners, and Candidates, but without authority over financial modules or MSA terms.</p>
-<p class="cl"><strong>1.19</strong> <strong>&ldquo;Successful Placement&rdquo;</strong> means the event in which: (a) a Candidate submitted by the Talent Partner through the Platform receives and accepts an offer of employment from a Client; (b) the Candidate reports for duty on the Joining Date; and (c) either the Client confirms the Candidate&rsquo;s joining through the Platform, or the Candidate completes seven (7) consecutive calendar days of employment with the Client without any objection raised by the Client through the Platform&rsquo;s dispute channel. If the Client fails to confirm or deny joining within seven (7) calendar days and no dispute is raised, the Candidate shall be deemed Successfully Placed by operation of this Agreement.</p>
-<p class="cl"><strong>1.20</strong> <strong>&ldquo;Super Admin&rdquo;</strong> means Syncro1&rsquo;s authorised executive-level administrator with full system authority including financial control, MSA management, dispute resolution, and suspension or termination of Platform users.</p>
-<p class="cl"><strong>1.21</strong> <strong>&ldquo;User Credentials&rdquo;</strong> means the unique login identification, password, two-factor authentication tokens, and all other access credentials issued to or created by the Talent Partner for accessing the Platform.</p>
-<p class="cl"><strong>1.22</strong> <strong>&ldquo;Talent Partner Content&rdquo;</strong> means all data, documents, resumes, messages, and materials uploaded or transmitted by the Talent Partner through the Platform, including Candidate profiles and communications.</p>
+<!-- 3. PLATFORM ACCESS AND OPERATIONAL CONTROLS -->
+<div class="art">3. PLATFORM ACCESS AND OPERATIONAL CONTROLS</div>
+<div class="sart">3. Platform use</div>
+<p class="cl"><strong>3.1</strong> Syncro1 may provide Platform access, role information and workflow instructions. Access is limited, revocable and non-transferable. The Talent Partner shall keep credentials secure and promptly notify Syncro1 of suspected unauthorised access.</p>
+<p class="cl"><strong>3.2</strong> The Talent Partner shall use the Platform only for legitimate recruitment activity under this Agreement, shall not scrape, reverse engineer, interfere with, test or misuse the Platform, and shall not upload malware or unlawfully obtained data.</p>
+<p class="cl"><strong>3.3</strong> Syncro1 may reasonably update workflows, security controls and Platform features. Any material change to agreed commercial terms must be made in writing and shall not retrospectively reduce commission already earned.</p>
+<p class="cl"><strong>3.4</strong> Syncro1 may suspend or restrict the Talent Partner&rsquo;s access to the Platform where reasonably necessary due to suspected fraud, misconduct, breach of this Agreement, security concerns, inaccurate submissions or other legitimate compliance or operational reasons. Such suspension shall not, by itself, constitute a cancellation of any payment obligation that has become due and payable under this Agreement. However, Syncro1 shall be entitled to verify any commission claim, dispute any amount reasonably believed to be incorrect, unsupported, fraudulent or otherwise not payable under this Agreement, and withhold the disputed amount pending investigation and resolution. Syncro1 may also exercise any right of set-off, recovery or adjustment available under this Agreement or applicable law. Any undisputed amount that is properly due shall be processed in accordance with the payment terms of this Agreement. Nothing in this clause shall require Syncro1 to pay any commission that has not been earned or that is otherwise not payable under this Agreement.</p>
 
-<!-- ARTICLE 2 -->
-<div class="art">ARTICLE 2 &mdash;&mdash;&mdash; APPOINTMENT AND SCOPE OF ENGAGEMENT</div>
-<p class="cl"><strong>2.1 Non-Exclusive Appointment.</strong> Syncro1 hereby appoints the Talent Partner as a non-exclusive, independent talent partner for the limited purpose of sourcing and submitting Candidates through the Platform in response to Job Postings. Nothing herein prevents Syncro1 from engaging other talent partners or sourcing Candidates through any other means at any time.</p>
-<p class="cl"><strong>2.2 No Authority to Bind.</strong> The Talent Partner has no authority, express or implied, to make any representation or commitment on behalf of Syncro1, to enter into any agreement binding on Syncro1, or to act as agent for Syncro1 in any capacity. Any purported act by the Talent Partner to bind Syncro1 shall be void.</p>
-<p class="cl"><strong>2.3 Independent Contractor.</strong> The Talent Partner is an independent contractor. Nothing herein creates a partnership, joint venture, agency, franchise, employment, or fiduciary relationship. The Talent Partner is solely responsible for its own employees, contractors, taxes, benefits, and operational expenses.</p>
-<p class="cl"><strong>2.4 Platform Access Licence.</strong> Subject to the Talent Partner&rsquo;s compliance with this Agreement, Syncro1 grants the Talent Partner a limited, non-exclusive, non-transferable, non-sublicensable, revocable licence to access and use the Platform solely for the purpose of performing its obligations under this Agreement during the Term.</p>
-<p class="cl"><strong>2.5 Platform Availability.</strong> Syncro1 shall use commercially reasonable efforts to maintain Platform availability of not less than 99% per calendar month, excluding scheduled maintenance windows notified at least 24 hours in advance and Force Majeure Events. Syncro1 does not warrant that the Platform will be error-free or uninterrupted.</p>
-<p class="cl"><strong>2.6 Platform Changes.</strong> Syncro1 reserves the right to modify or update any feature of the Platform at any time. Material changes that adversely affect the Talent Partner&rsquo;s ability to submit Candidates or receive Commission shall be communicated with at least 15 days&rsquo; prior written notice.</p>
+<!-- 4. TALENT PARTNER OBLIGATIONS -->
+<div class="art">4. TALENT PARTNER OBLIGATIONS</div>
+<div class="sart">4. Professional conduct and submissions</div>
+<p class="cl"><strong>4.1</strong> The Talent Partner shall use skill, care and diligence; submit Candidates who match the stated role requirements; and communicate accurately, respectfully and without discrimination.</p>
+<p class="cl"><strong>4.2</strong> Before submitting a Candidate, the Talent Partner shall obtain the Candidate&rsquo;s informed authorisation to share their profile and relevant personal data with Syncro1 and the identified Client for the stated recruitment purpose. The Talent Partner shall retain a record of authorisation and provide it on reasonable request.</p>
+<p class="cl"><strong>4.3</strong> The Talent Partner shall not fabricate, materially alter or knowingly misrepresent a CV, qualification, employment history, compensation, notice period, identity, consent or reference. Any verification shall be proportionate, lawful and consistent with Candidate notice and consent where required.</p>
+<p class="cl"><strong>4.4</strong> The Talent Partner shall promptly correct material inaccuracies, disclose any known conflict of interest and notify Syncro1 of a Candidate withdrawal, change in availability or other material development.</p>
+<p class="cl"><strong>4.5</strong> The Talent Partner shall not promise an offer, compensation, joining date, visa, relocation, client decision or outcome unless expressly authorised in writing by the relevant Client or Syncro1.</p>
+<p class="cl"><strong>4.6</strong> The Talent Partner shall comply with applicable anti-bribery, anti-discrimination, employment, tax, privacy and information-security laws and shall not offer or accept an improper payment, kickback or benefit in connection with a Protected Opportunity.</p>
+<p class="cl"><strong>4.7</strong> The Talent Partner shall not submit the same Candidate to a Client for the same role through multiple channels without disclosing the prior submission and obtaining Syncro1&rsquo;s written direction.</p>
 
-<!-- ARTICLE 3 -->
-<div class="art">ARTICLE 3 &mdash;&mdash;&mdash; TALENT PARTNER OBLIGATIONS</div>
-<div class="sart">3A. Registration, Onboarding, and KYC</div>
-<p class="cl"><strong>3.1</strong> The Talent Partner shall complete the online registration process by providing accurate, current, and complete information including: full legal entity name; type and jurisdiction of incorporation; company registration number; GST registration number and certificate; registered office address; names and contact details of at least two authorised representatives; bank account details verified via penny-drop mechanism; and an escalation matrix.</p>
-<p class="cl"><strong>3.2</strong> The Talent Partner shall upload all documents specified in Schedule E for KYC verification. Registration is subject to Sub Admin review and final Super Admin approval. Syncro1 reserves the right, in its absolute discretion, to reject any application or revoke approval at any time.</p>
-<p class="cl"><strong>3.3</strong> The Talent Partner shall promptly update all changes to its registration information, including changes to authorised representatives, bank account, address, or regulatory status, within five (5) business days of such change. Failure to do so constitutes a material breach.</p>
-<p class="cl"><strong>3.4</strong> The Talent Partner shall keep its User Credentials strictly confidential and not share them with any unauthorised person. The Talent Partner is solely responsible for all activities conducted through its account. The Talent Partner shall immediately notify Syncro1 in writing of any actual or suspected unauthorised access.</p>
-<div class="sart">3B. Job Selection and Candidate Submission</div>
-<p class="cl"><strong>3.5</strong> The Talent Partner shall only select Job Postings for which it has genuine capacity and expertise. The Talent Partner shall not select a Job Posting and leave it inactive for more than five (5) calendar days without submitting at least one Candidate, failing which the Talent Partner shall be automatically removed from that Job Posting and the inactivity recorded in its performance record.</p>
-<p class="cl"><strong>3.6</strong> All Candidate submissions must be made exclusively through the Platform using the prescribed format and must include: full name; contact details (phone and email, hashed for duplication check); current CTC with supporting proof; expected CTC; notice period; resume; responses to all Client screening questions; and Candidate consent confirmation.</p>
-<p class="cl"><strong>3.7</strong> The Talent Partner warrants that all information in a Candidate submission is, to the best of its knowledge, true, complete, and accurate. Prior to submission, the Talent Partner shall at minimum: (a) review the Candidate&rsquo;s LinkedIn profile and relevant online professional presence; (b) contact at least one previous employer listed on the Candidate&rsquo;s resume (with the Candidate&rsquo;s consent); and (c) review copies of educational certificates or verify qualifications through available online databases. The Talent Partner shall not be liable for Candidate misrepresentation if it has taken these minimum steps in good faith, unless it had actual knowledge of the misrepresentation.</p>
-<p class="cl"><strong>3.8 Candidate Consent.</strong> Prior to submission, the Talent Partner shall obtain the Candidate&rsquo;s explicit, informed, and freely given consent to: (a) submit the Candidate&rsquo;s profile to specific Clients through the Platform; (b) share the Candidate&rsquo;s personal data with Syncro1 and the relevant Client for recruitment purposes; and (c) receive communications via email and WhatsApp. Consent must be obtained through the Platform&rsquo;s designated consent mechanism. If that mechanism is temporarily unavailable, the Talent Partner shall obtain written consent (by email or signed form) and upload evidence within 24 hours of submission. Consent records shall be retained for a minimum of three (3) years and produced to Syncro1 upon request within five (5) business days.</p>
-<p class="cl"><strong>3.9 Duplicate Submissions.</strong> Syncro1 uses cryptographic hashing to detect duplicate Candidate submissions. The first chronologically valid submission of a Candidate for a specific Job Posting (that passes initial QC) shall be deemed the priority submission; all subsequent submissions of the same Candidate for the same Job Posting shall be automatically rejected. This determination is final except in cases of documented technical error in the Platform&rsquo;s hashing system, reported within 48 hours.</p>
-<p class="cl"><strong>3.10 Prohibited Conduct.</strong> The Talent Partner shall not: (a) submit Candidates without valid consent; (b) fabricate, alter, or misrepresent any Candidate data or credentials; (c) submit Candidates currently placed by Syncro1 with any Client without the Candidate&rsquo;s express written consent; or (d) share Job Posting details or Client information with any third party.</p>
-<div class="sart">3C. Communication and Quality</div>
-<p class="cl"><strong>3.11 PROHIBITION ON TALENT PARTNER-CLIENT COMMUNICATION.</strong> The Talent Partner shall not, under any circumstances, directly or indirectly communicate with, contact, meet, correspond, or otherwise interact with any Client of Syncro1 for any purpose whatsoever, whether through the Platform, by email, telephone, in person, or through any other medium. All communications with Clients regarding Candidates, Job Postings, interview scheduling, feedback, updates, or any other matter shall be conducted exclusively by Syncro1. The Talent Partner shall not attempt to identify, locate, or establish any form of contact with any Client. Any breach of this Clause shall be deemed a material breach of this Agreement and a violation of Article 9.</p>
-<p class="cl"><strong>3.12</strong> The Talent Partner shall respond to QC queries within four (4) business hours and shall keep Candidates informed of their application status in a timely manner. Failure to meet these SLAs shall be recorded and may adversely affect the Talent Partner&rsquo;s standing on the Platform.</p>
-<p class="cl"><strong>3.13</strong> The Talent Partner shall comply with all Applicable Laws in its recruitment activities, including data protection laws, anti-discrimination laws, labour laws, and relevant employment agency regulations.</p>
+<!-- 5. CANDIDATE ATTRIBUTION AND PLACEMENT CONFIRMATION -->
+<div class="art">5. CANDIDATE ATTRIBUTION AND PLACEMENT CONFIRMATION</div>
+<div class="sart">5. Attribution</div>
+<p class="cl"><strong>5.1</strong> Candidate attribution will ordinarily be determined by reliable, time-stamped Platform records showing the first complete and authorised submission for the relevant role. A submission is complete when it identifies the Candidate, role and required profile information and records the Candidate&rsquo;s authorisation.</p>
+<p class="cl"><strong>5.2</strong> A Client&rsquo;s documented prior receipt of the Candidate&rsquo;s profile or an active process for the same role before the Talent Partner&rsquo;s submission may defeat attribution for that role. A mere database entry or undocumented assertion will not, by itself, conclusively defeat attribution.</p>
+<p class="cl"><strong>5.3</strong> If a duplicate or attribution dispute arises, Syncro1 shall notify the Talent Partner of the issue and consider relevant evidence from both Parties. The Parties shall attempt in good faith to resolve the dispute within ten (10) Business Days. Syncro1&rsquo;s Platform records are evidence, but are not conclusive where credible contrary evidence exists.</p>
+<p class="cl"><strong>5.4</strong> Where a Candidate is hired by the Client for a different role or through a materially different process, the Parties shall assess attribution based on the evidence, the applicable Client terms and whether the hire arose from the Talent Partner&rsquo;s introduction. Any commission determination must be reasonable and documented.</p>
+<p class="cl"><strong>5.5</strong> The Talent Partner shall reasonably assist in confirming interview, offer and joining status. Syncro1 shall use reasonable efforts to confirm a Placement with the Client and shall not unreasonably withhold confirmation where reliable evidence of joining is available.</p>
 
-<!-- ARTICLE 4 -->
-<div class="art">ARTICLE 4 &mdash;&mdash;&mdash; REPRESENTATIONS AND WARRANTIES</div>
-<div class="sart">4A. Talent Partner Representations and Warranties</div>
-<p style="margin-bottom:5px;">The Talent Partner represents and warrants to Syncro1, on the Effective Date and on a continuing basis throughout the Term, that:</p>
-<p class="cl"><strong>4.1</strong> It is duly organised, validly existing, and in good standing under the laws of its jurisdiction of incorporation or registration, and has full legal capacity and corporate authority to enter into and perform this Agreement.</p>
-<p class="cl"><strong>4.2</strong> This Agreement, when executed, shall constitute a valid, binding, and enforceable obligation of the Talent Partner, subject to applicable insolvency and equitable principles.</p>
-<p class="cl"><strong>4.3</strong> It has obtained, and shall maintain in good standing throughout the Term, all licences, registrations, and government approvals necessary to operate as a recruitment or talent agency in its jurisdiction.</p>
-<p class="cl"><strong>4.4</strong> It has full right, power, and authority to submit each Candidate&rsquo;s profile and has obtained all necessary consents and authorisations from each Candidate in accordance with Applicable Law.</p>
-<p class="cl"><strong>4.5</strong> It has not and shall not infringe any third-party rights, including Intellectual Property Rights, privacy rights, or rights of personality, in connection with any Candidate submission or use of the Platform.</p>
-<p class="cl"><strong>4.6</strong> All Candidate information submitted through the Platform has been collected lawfully, with appropriate notice and consent, and in compliance with Applicable Law, including the Digital Personal Data Protection Act 2023.</p>
-<p class="cl"><strong>4.7</strong> It shall not engage in any fraudulent, deceptive, or unethical practices and has implemented adequate internal compliance procedures to uphold these standards.</p>
-<p class="cl"><strong>4.8</strong> It has implemented and maintains adequate technical and organisational security measures to safeguard Candidate and Client information against unauthorised access, loss, destruction, or alteration.</p>
-<div class="sart">4B. Syncro1 Representations and Warranties</div>
-<p class="cl"><strong>4.9</strong> Syncro1 represents and warrants that: (a) it has the legal right and authority to operate the Platform and to grant the licences set out herein; (b) the Platform, when used as authorised, does not infringe any third-party Intellectual Property Rights of which Syncro1 is aware as at the Effective Date; and (c) it shall use commercially reasonable efforts to vet Clients and maintain a professionally operated Platform.</p>
+<!-- 6. COMMERCIAL TERMS, INVOICING AND PAYMENT -->
+<div class="art">6. COMMERCIAL TERMS, INVOICING AND PAYMENT</div>
+<div class="sart">6. Fees and payment</div>
+<p class="cl"><strong>6.1</strong> The commission rate and any role-specific variation are set out in Schedule A. A variation is valid only if agreed in writing by authorised representatives of both Parties before the relevant Candidate is submitted or, if later, before the Candidate is shortlisted.</p>
+<p class="cl"><strong>6.2</strong> Unless Schedule A expressly provides otherwise, commission is calculated on the Fixed Annual CTC in the Candidate&rsquo;s final offer letter. Any change in compensation after the offer shall be reflected only where the Parties agree in writing or the final offer clearly supersedes the earlier offer.</p>
+<p class="cl"><strong>6.3</strong> Commission shall become eligible for payment upon the Candidate successfully completing ninety (90) calendar days of employment with the Client from the Candidate&rsquo;s joining date, subject to the replacement policy set out in this Agreement. Syncro1 shall process payment of the undisputed commission within fifteen (15) calendar days after the later of (i) the Candidate&rsquo;s completion of the said ninety (90)-day period and (ii) receipt of a compliant invoice and the reasonable supporting documents specified in Schedule A. If the Candidate resigns or is terminated within the initial ninety (90)-day period, the commission shall not become payable, subject to the terms and exclusions of the replacement policy in this Agreement.</p>
+<p class="cl"><strong>6.4</strong> The Talent Partner shall issue a valid tax invoice where required by law and provide accurate bank, PAN and GST details, if applicable. GST shall be paid only against a valid invoice and in accordance with applicable law. Syncro1 may deduct or withhold tax where legally required and shall provide the relevant certificate or details within the statutory timeframe.</p>
+<p class="cl"><strong>6.5</strong> If Syncro1 disputes an invoice in good faith, it shall notify the Talent Partner within fifteen (15) calendar days of receipt, identifying the disputed item and reasons. Syncro1 shall pay the undisputed portion within the agreed payment period. The Parties shall work promptly to resolve the disputed portion.</p>
+<p class="cl"><strong>6.6</strong> Neither Party may make a unilateral retrospective reduction or cancellation of an earned commission. Set-off is permitted only for amounts admitted in writing by the other Party, finally determined by a court/arbitral tribunal, or otherwise expressly agreed in writing, except for deductions required by law.</p>
+<p class="cl"><strong>6.7</strong> No fee is payable for a Candidate who does not join, unless the Parties expressly agree otherwise in writing. No payment is contingent upon the Talent Partner guaranteeing a hiring outcome or the Client&rsquo;s continued employment of the Candidate.</p>
+<p class="cl"><strong>6.8</strong> Each Party shall maintain accurate records relating to submissions, offers, joining, invoices and payments for at least eight (8) years or such other period as applicable law requires.</p>
 
-<!-- ARTICLE 5 -->
-<div class="art">ARTICLE 5 &mdash;&mdash;&mdash; COMMISSION, PAYOUT, AND REPLACEMENT OBLIGATIONS</div>
-<div class="sart">5A. Commission Structure</div>
-<p class="cl"><strong>5.1</strong> Syncro1 shall pay the Talent Partner a Commission for each Successful Placement, calculated as five percent (5%) of the Candidate&rsquo;s fixed annual CTC as confirmed in the Candidate&rsquo;s offer letter. The Commission is fixed and shall not be affected by any arrangement, discount, or commission percentage between Syncro1 and the Client.</p>
-<p class="cl"><strong>5.2 Contingency.</strong> Commission is payable only upon Successful Placement. No Commission is payable in respect of a Candidate who does not join the Client, or whose joining is disputed by the Client in good faith and ultimately unconfirmed through the Platform&rsquo;s dispute resolution process.</p>
-<div class="sart">5B. Payout Terms</div>
-<p class="cl"><strong>5.3</strong> Syncro1 shall pay the Commission to the Talent Partner within ninety (90) days following the Joining Date, regardless of whether Syncro1 has received payment from the Client. The Commission shall be paid net of applicable tax deductions at source (TDS) as required by Applicable Law.</p>
-<p class="cl"><strong>5.4</strong> Payouts shall be made to the Talent Partner&rsquo;s verified bank account via NEFT/RTGS or other electronic means. The Talent Partner bears all costs arising from incorrect bank details. Syncro1 shall not be liable for delays caused by the Talent Partner&rsquo;s failure to provide accurate account information.</p>
-<p class="cl"><strong>5.5</strong> Before processing each payout, the Talent Partner shall upload a valid, compliant GST invoice to the Platform. Syncro1 may withhold payout until such invoice is received.</p>
-<div class="sart">5C. Replacement Obligation (Guarantee Period)</div>
-<p class="cl"><strong>5.6</strong> If, during the Guarantee Period of ninety (90) days from the Joining Date, the Candidate&rsquo;s employment with the Client terminates for any reason whatsoever (including resignation, termination by Client, layoff, or any other separation), the Talent Partner shall, upon written notice from Syncro1, provide a replacement Candidate for the same Job Posting.</p>
-<p class="cl"><strong>5.7</strong> The Talent Partner shall commence the replacement process and submit at least one (1) suitable replacement Candidate within fifteen (15) days of receiving the written notice from Syncro1. The replacement Candidate must meet the same job requirements and qualifications as the original Job Posting.</p>
-<p class="cl"><strong>5.8</strong> If the Talent Partner fails to provide a replacement Candidate within the stipulated fifteen (15) days, Syncro1 may, at its sole discretion, engage another talent partner to source a replacement, and the Talent Partner shall reimburse Syncro1 for any reasonable costs incurred in sourcing such replacement, or Syncro1 may recover such costs by adjusting against any pending Commission payable to the Talent Partner.</p>
-<p class="cl"><strong>5.9</strong> For the avoidance of doubt, no Replacement Fund or any withholding from the Commission shall be made by Syncro1. The Commission for the original placement is fully earned and payable as per Clause 5.3, regardless of any subsequent replacement obligation.</p>
-<div class="sart">5D. Taxes</div>
-<p class="cl"><strong>5.10</strong> All Commission amounts are exclusive of applicable taxes. The Talent Partner is responsible for all taxes on its income, including GST, and shall issue a compliant tax invoice to Syncro1 for each payout. Syncro1 shall deduct tax at source (TDS) as required by Applicable Law and provide the Talent Partner with a TDS certificate within the statutory timelines.</p>
+<!-- 7. TARGETED NON-CIRCUMVENTION AND PROTECTED OPPORTUNITIES -->
+<div class="art">7. TARGETED NON-CIRCUMVENTION AND PROTECTED OPPORTUNITIES</div>
+<div class="sart">7. Limited opportunity protection</div>
+<p class="cl"><strong>7.1</strong> For each Protected Opportunity, the Talent Partner shall not knowingly use confidential information supplied by Syncro1 to deliberately bypass Syncro1 for the primary purpose of avoiding commission that would otherwise be payable under this Agreement.</p>
+<p class="cl"><strong>7.2</strong> This restriction applies to each specific Client and hiring requirement introduced or made available to the Talent Partner through Syncro1 and documented in the Platform or in writing (&ldquo;Protected Opportunity&rdquo;). During the period in which the Protected Opportunity remains active and for twelve (12) months thereafter, the Talent Partner shall not knowingly bypass Syncro1 by directly or indirectly pursuing or completing the same Protected Opportunity for the purpose of avoiding commission or other fees contractually payable to Syncro1. This restriction shall not prevent the Talent Partner from working with the Client on unrelated hiring requirements or from continuing a demonstrable pre-existing business relationship, provided that such activities do not involve the deliberate circumvention of Syncro1 in relation to the Protected Opportunity. The restriction shall apply only to the extent permitted by applicable law and shall not operate as a general restriction on the Talent Partner&rsquo;s lawful business activities.</p>
+<p class="cl"><strong>7.3</strong> The restriction does not apply to a Client relationship or opportunity that the Talent Partner can demonstrate through contemporaneous written records existed independently before Syncro1&rsquo;s introduction; an unsolicited approach unrelated to the Protected Opportunity; public information independently obtained; or work authorised in writing by Syncro1.</p>
+<p class="cl"><strong>7.4</strong> Nothing in this clause prohibits lawful competition, generally approaching clients, working with other platforms or accepting unrelated work. The Parties intend this clause to protect documented confidential information and agreed fees, not to restrain lawful trade. It shall be interpreted and enforced only to the extent permitted by applicable law.</p>
+<p class="cl"><strong>7.5</strong> If a breach is established, the non-breaching Party may seek unpaid contractual fees and compensation for proven, legally recoverable loss in accordance with applicable law. No automatic penalty or double recovery applies. Any injunctive or other equitable relief is subject to the applicable court or tribunal&rsquo;s discretion.</p>
 
-<!-- ARTICLE 6 -->
-<div class="art">ARTICLE 6 &mdash;&mdash;&mdash; INTELLECTUAL PROPERTY</div>
-<p class="cl"><strong>6.1 Platform Ownership.</strong> Syncro1 retains all right, title, and interest in and to the Platform and all associated Intellectual Property Rights, including source code, algorithms, AI models, databases, user interfaces, proprietary workflows, and all modifications and derivatives thereof. No ownership or right is transferred to the Talent Partner under this Agreement except the limited access licence in Clause 2.4.</p>
-<p class="cl"><strong>6.2 Restrictions.</strong> The Talent Partner shall not, and shall not permit any third party to: (a) copy, reproduce, reverse engineer, decompile, or disassemble any part of the Platform; (b) modify, adapt, or create derivative works of the Platform; (c) access the Platform to build a competing product; (d) scrape or extract data from the Platform by automated means; or (e) remove or alter any proprietary notices on the Platform.</p>
-<p class="cl"><strong>6.3 Talent Partner Content Licence.</strong> The Talent Partner retains ownership of Talent Partner Content. By uploading Talent Partner Content to the Platform, the Talent Partner grants Syncro1 a worldwide, non-exclusive, royalty-free, fully paid-up, sublicensable licence to host, store, reproduce, process, display, and use such Talent Partner Content solely to: (a) operate and improve the Platform; and (b) train and enhance Syncro1&rsquo;s AI models using aggregated and anonymised data. Syncro1 shall not disclose raw, identifiable Talent Partner Content to any third party except relevant Clients (in relation to specific Candidate submissions) and shall not use it to directly compete with the Talent Partner&rsquo;s core recruitment business.</p>
-<p class="cl"><strong>6.4 Feedback.</strong> Any feedback, suggestions, or enhancement requests provided by the Talent Partner to Syncro1 regarding the Platform shall be deemed a non-exclusive, royalty-free, perpetual licence to Syncro1 to use such feedback without any obligation or compensation to the Talent Partner.</p>
+<!-- 8. REPLACEMENT SUPPORT -->
+<div class="art">8. REPLACEMENT SUPPORT</div>
+<div class="sart">8. 90-day replacement support</div>
+<p class="cl"><strong>8.1</strong> If a Candidate placed under this Agreement voluntarily resigns or is terminated for documented performance or misconduct reasons within ninety (90) calendar days of joining, the Talent Partner shall make reasonable efforts to provide one replacement Candidate for the same role without an additional placement commission, subject to the exclusions below.</p>
+<p class="cl"><strong>8.2</strong> Replacement support applies only if Syncro1 notifies the Talent Partner within twenty (20) Business Days after learning of the departure and provides reasonable details, subject to confidentiality and applicable law.</p>
+<p class="cl"><strong>8.3</strong> Replacement support does not apply where the departure results materially from redundancy, restructuring, role elimination, material change in role or compensation, workplace misconduct, non-payment or material breach by the Client, or another circumstance outside the Talent Partner&rsquo;s reasonable control.</p>
+<p class="cl"><strong>8.4</strong> Replacement support is the sole contractual remedy for an eligible early departure, unless Schedule A expressly provides otherwise. It does not automatically require repayment or forfeiture of commission already earned and paid. The Parties may agree a different written remedy for a specific role before submission.</p>
 
-<!-- ARTICLE 7 -->
-<div class="art">ARTICLE 7 &mdash;&mdash;&mdash; CONFIDENTIALITY</div>
-<p class="cl"><strong>7.1 Obligation.</strong> Each Party shall hold the other Party&rsquo;s Confidential Information in strict confidence and shall not disclose it to any person except: (a) to its employees, directors, advisors, or contractors who need to know such information for the performance of this Agreement and who are bound by confidentiality obligations no less protective than those in this Article; or (b) as required by Applicable Law, court order, or regulatory authority.</p>
-<p class="cl"><strong>7.2 Compelled Disclosure.</strong> If a Party is legally compelled to disclose Confidential Information, it shall: (a) provide the other Party with prompt prior written notice (to the extent legally permissible) to afford it the opportunity to seek a protective order; and (b) disclose only so much as is strictly required.</p>
-<p class="cl"><strong>7.3 Exclusions.</strong> Confidentiality obligations do not apply to information that: (a) is or becomes publicly available through no act or omission of the Receiving Party; (b) was rightfully known to the Receiving Party prior to disclosure, as evidenced by written records predating disclosure; (c) is independently developed by the Receiving Party without reference to the Disclosing Party&rsquo;s Confidential Information; or (d) is rightfully received from a third party without restriction.</p>
-<p class="cl"><strong>7.4 Security.</strong> Each Party shall implement industry-standard technical and organisational security measures to protect the other Party&rsquo;s Confidential Information from unauthorised access, use, alteration, or destruction.</p>
-<p class="cl"><strong>7.5 Survival.</strong> Obligations under this Article shall survive termination or expiry of this Agreement for five (5) years, except with respect to trade secrets, which shall be protected for as long as they qualify as trade secrets under Applicable Law.</p>
+<!-- 9. CONFIDENTIALITY -->
+<div class="art">9. CONFIDENTIALITY</div>
+<div class="sart">9. Confidential information</div>
+<p class="cl"><strong>9.1 &ldquo;Confidential Information&rdquo;</strong> means non-public business, commercial, technical, candidate, client, pricing, platform, security and operational information disclosed by or on behalf of a Party, whether orally, visually, electronically or in writing, that is marked confidential or should reasonably be understood to be confidential.</p>
+<p class="cl"><strong>9.2</strong> The receiving Party shall use Confidential Information only to perform this Agreement, protect it using at least reasonable care, disclose it only to personnel who need to know and are bound by confidentiality obligations, and remain responsible for their compliance.</p>
+<p class="cl"><strong>9.3</strong> Confidential Information excludes information the receiving Party can demonstrate was lawfully known without restriction, becomes public without breach, is independently developed without use of the information, or is lawfully received from a third party without confidentiality duty.</p>
+<p class="cl"><strong>9.4</strong> If disclosure is required by law or a competent authority, the receiving Party may disclose only the required portion and, where lawful and practicable, shall give advance notice to the disclosing Party.</p>
+<p class="cl"><strong>9.5</strong> On termination or reasonable written request, the receiving Party shall return or securely delete Confidential Information, except copies retained for legal, regulatory, audit or bona fide archival purposes, which remain protected under this clause.</p>
+<p class="cl"><strong>9.6</strong> These obligations continue for five (5) years after termination; trade secrets and personal data remain protected for as long as they qualify for protection under applicable law.</p>
 
-<!-- ARTICLE 8 -->
-<div class="art">ARTICLE 8 &mdash;&mdash;&mdash; DATA PROTECTION AND PRIVACY</div>
-<p class="cl"><strong>8.1 Compliance.</strong> Each Party shall comply with all Applicable Laws governing the collection, storage, processing, sharing, and deletion of personal data, including the Digital Personal Data Protection Act 2023 and all associated rules and regulations.</p>
-<p class="cl"><strong>8.2 Data Controller.</strong> For Candidate data collected and submitted by the Talent Partner, the Talent Partner is an independent data controller solely responsible for ensuring a valid legal basis for processing, providing appropriate privacy notices to Candidates, and honouring data subject rights.</p>
-<p class="cl"><strong>8.3 Talent Partner Data Obligations.</strong> The Talent Partner shall: (a) collect, use, and process Candidate data only for recruitment through the Platform and for no other purpose; (b) not retain Candidate data beyond the period necessary for such purpose; (c) promptly assist Syncro1 in responding to data subject requests relating to Candidates submitted by the Talent Partner; and (d) notify Syncro1 in writing within 72 hours of becoming aware of any data breach affecting Candidate or Client data.</p>
-<p class="cl"><strong>8.4 Deletion on Termination.</strong> Within 30 days following termination or expiry of this Agreement, the Talent Partner shall securely delete or return all personal data of Candidates and Clients obtained through the Platform, except to the extent retention is required by Applicable Law. The Talent Partner shall provide written certification of deletion to Syncro1 upon request.</p>
-<p class="cl"><strong>8.5</strong> The detailed data processing terms, categories of data processed, sub-processor list, security measures, and breach notification procedures are set out in Schedule D, which forms an integral part of this Agreement.</p>
+<!-- 10. PERSONAL DATA AND INFORMATION SECURITY -->
+<div class="art">10. PERSONAL DATA AND INFORMATION SECURITY</div>
+<div class="sart">10. Data handling</div>
+<p class="cl"><strong>10.1</strong> Each Party shall comply with privacy, data-protection and information-security laws applicable to its activities and the relevant processing at the time. The Parties acknowledge that the commencement of the Digital Personal Data Protection Act, 2023 and its Rules is staged; this clause does not imply that every provision is already in force.</p>
+<p class="cl"><strong>10.2 Candidate Data and Authorisation:</strong> The Talent Partner shall be solely responsible for ensuring that it has obtained all necessary candidate consents, authorisations, notices and permissions required under applicable law before collecting, accessing or sharing Candidate personal data with Syncro1 or any Client. The Talent Partner shall ensure that such data is lawfully obtained, accurate to the best of its knowledge, relevant to the applicable hiring requirement and limited to what is reasonably necessary for the recruitment purpose. The Talent Partner shall retain appropriate evidence of such consent or authorisation and provide it to Syncro1 upon request. Syncro1 shall be entitled to rely on the Talent Partner&rsquo;s representations and confirmations in this regard, without prejudice to its own obligations under applicable law.</p>
+<p class="cl"><strong>10.3 Data Security and Incident Notification:</strong> The Talent Partner shall implement and maintain appropriate technical, organisational and administrative safeguards to protect Candidate personal data against unauthorised access, disclosure, alteration, loss, misuse or destruction. The Talent Partner shall restrict access to such data to authorised personnel who require it for the relevant recruitment purpose and shall use secure methods when transmitting or storing such data. The Talent Partner shall notify Syncro1 in writing without undue delay, and in any event within twenty-four (24) hours of becoming aware of any actual or reasonably suspected unauthorised access, disclosure, loss, misuse or security incident involving Candidate personal data shared with, or processed in connection with, Syncro1. The notification shall include all information reasonably available regarding the nature of the incident, affected data, potential impact and remedial measures taken or proposed. The Talent Partner shall promptly cooperate with Syncro1 in investigating, containing, mitigating and resolving the incident and shall bear responsibility for the consequences to the extent caused by its breach of this Agreement or applicable law.</p>
+<p class="cl"><strong>10.4</strong> The notice under Clause 10.3 shall be given without undue delay and, where practicable, within forty-eight (48) hours after awareness. It shall include known facts, likely impact, mitigation steps and a contact for follow-up. This contractual notice does not replace any statutory reporting obligation.</p>
+<p class="cl"><strong>10.5 Restrictions on Candidate Data Use by Talent Partner:</strong> The Talent Partner shall not sell, disclose, transfer, use for unrelated marketing, use to enrich databases unrelated to the agreed recruitment purpose, or otherwise exploit Candidate personal data obtained through or in connection with Syncro1 for any purpose unrelated to the relevant hiring requirement, without the prior written approval of Syncro1 and any consent or authorisation required under applicable law. The Talent Partner shall not retain such data beyond the period reasonably necessary for the authorised recruitment purpose, except where retention is required by applicable law. Nothing in this clause shall restrict Syncro1 from collecting, processing, using, sharing or retaining Candidate personal data for legitimate platform operations, recruitment services, client requirements, fraud prevention, dispute resolution, legal or regulatory compliance, or recordkeeping, in each case subject to applicable law and any required notices, consents or other lawful basis.</p>
+<p class="cl"><strong>10.6</strong> The Parties shall reasonably cooperate with requests concerning Candidate data, corrections, withdrawal of authorisation, deletion, security incidents and regulatory enquiries, subject to law and the Parties&rsquo; respective roles.</p>
+<p class="cl"><strong>10.7</strong> Where the actual processing model requires a separate data-processing agreement, transfer terms, or specific controller/processor allocation, the Parties shall execute the additional terms in Schedule C or a separate written addendum before that processing begins.</p>
 
-<!-- ARTICLE 9 -->
-<div class="art">ARTICLE 9 &mdash;&mdash;&mdash; NON-CIRCUMVENTION, NON-SOLICITATION, AND PROHIBITION ON CLIENT CONTACT</div>
-<p class="cl"><strong>9.1 Prohibition on Contacting Clients.</strong> The Talent Partner irrevocably agrees that during the Term and for a period of twenty-four (24) months following the termination or expiry of this Agreement, it shall not, directly or indirectly, for any reason whatsoever:</p>
-<ul class="bul">
-  <li>(a) contact, communicate with, meet, call, email, or otherwise interact with any Client of Syncro1 (including any Client whose Job Posting the Talent Partner viewed or accessed through the Platform);</li>
-  <li>(b) solicit, engage, or attempt to do any business, recruitment, talent acquisition, or human resources services with any such Client outside the Platform;</li>
-  <li>(c) place any Candidate (whether submitted through the Platform or otherwise) with any such Client without routing the placement through Syncro1;</li>
-  <li>(d) encourage, induce, or facilitate any Client to circumvent or bypass the Platform for any transaction;</li>
-  <li>(e) obtain or attempt to obtain any Client&rsquo;s contact information, identity, or business details from any source for the purpose of circumventing this prohibition.</li>
+<!-- 11. INTELLECTUAL PROPERTY AND PUBLICITY -->
+<div class="art">11. INTELLECTUAL PROPERTY AND PUBLICITY</div>
+<div class="sart">11. Ownership and permitted use</div>
+<p class="cl"><strong>11.1</strong> Each Party retains ownership of its pre-existing intellectual property, tools, processes, templates, marks and materials. No ownership transfers under this Agreement.</p>
+<p class="cl"><strong>11.2</strong> Syncro1 grants the Talent Partner a limited, non-exclusive, non-transferable, revocable right during the term to use the Platform and Syncro1 materials solely to perform this Agreement.</p>
+<p class="cl"><strong>11.3</strong> The Talent Partner shall not use Syncro1&rsquo;s or a Client&rsquo;s name, logo, marks, testimonials or relationship in marketing, publicity or case studies without prior written consent.</p>
+<p class="cl"><strong>11.4</strong> The Talent Partner shall not copy, reverse engineer, resell or commercially exploit the Platform or its non-public workflows except as expressly authorised in writing.</p>
+
+<!-- 12. REPRESENTATIONS, WARRANTIES AND COMPLIANCE -->
+<div class="art">12. REPRESENTATIONS, WARRANTIES AND COMPLIANCE</div>
+<div class="sart">12. Mutual assurances</div>
+<p class="cl"><strong>12.1</strong> Each Party represents that it has authority to enter into and perform this Agreement and that doing so does not knowingly breach another binding obligation.</p>
+<p class="cl"><strong>12.2</strong> Each Party shall comply with laws applicable to its performance, including applicable tax, anti-bribery, privacy, data-security and non-discrimination requirements.</p>
+<p class="cl"><strong>12.3</strong> The Talent Partner represents that it will not knowingly submit stolen, unlawfully obtained or materially falsified Candidate information and will not knowingly misrepresent its identity, legal status or authority.</p>
+<p class="cl"><strong>12.4</strong> Except as expressly stated, neither Party guarantees a particular hiring outcome, Platform uptime, Client decision, Candidate performance or volume of business. Mandatory rights and liabilities that cannot lawfully be excluded remain unaffected.</p>
+
+<!-- 13. INDEMNITY AND LIMITATION OF LIABILITY -->
+<div class="art">13. INDEMNITY AND LIMITATION OF LIABILITY</div>
+<div class="sart">13. Risk allocation</div>
+<p class="cl"><strong>13.1</strong> Each Party (&ldquo;Indemnifying Party&rdquo;) shall indemnify the other Party against third-party claims, and reasonable direct losses, costs and expenses finally awarded or agreed in settlement, to the extent caused by the Indemnifying Party&rsquo;s (a) fraud or wilful misconduct; (b) material breach of confidentiality or data-security obligations; (c) infringement of third-party intellectual property rights by materials it supplied; or (d) violation of law in performing this Agreement. The indemnified Party shall give prompt notice, reasonable cooperation and control of the defence to the Indemnifying Party, provided no settlement may impose liability or an admission on the indemnified Party without its written consent.</p>
+<p class="cl"><strong>13.2</strong> Subject to Clause 13.3, neither Party shall be liable to the other for indirect, incidental, special, exemplary or consequential loss, or loss of anticipated profit, revenue, goodwill or business opportunity, except to the extent such loss forms part of a third-party claim covered under Clause 13.1 or cannot lawfully be excluded.</p>
+<p class="cl"><strong>13.3</strong> Subject to Clause 13.4, Syncro1&rsquo;s aggregate liability arising out of or in connection with this Agreement, whether in contract, tort or otherwise, shall not exceed the lower of (i) the total commission paid or payable to the Talent Partner during the twelve (12) months immediately preceding the event giving rise to the claim, or (ii) INR 5,00,000 (Indian Rupees Five Lakh). Where no commission has been paid or become payable during that period, Syncro1&rsquo;s aggregate liability shall not exceed INR 1,00,000 (Indian Rupees One Lakh). The Talent Partner&rsquo;s aggregate liability arising out of or in connection with this Agreement shall not exceed the greater of (i) the total commission paid or payable to the Talent Partner during the twelve (12) months immediately preceding the event giving rise to the claim, or (ii) INR 5,00,000 (Indian Rupees Five Lakh), except for the matters specified in Clause 13.4. Neither Party shall be liable to the other for any indirect, incidental, special, exemplary or consequential loss, or loss of anticipated profits, revenue, goodwill or business opportunity, except to the extent such loss forms part of a third-party claim covered under this Agreement or cannot lawfully be excluded. Nothing in this clause shall limit liability to the extent such limitation is prohibited by applicable law.</p>
+<p class="cl"><strong>13.4 Exceptions to Limitation of Liability:</strong> The limitations and exclusions set out in Clauses 13.2 and 13.3 shall not apply to: (a) the Talent Partner&rsquo;s obligations to indemnify Syncro1 for losses, claims, damages, costs and expenses arising from the Talent Partner&rsquo;s breach of its obligations under this Agreement, to the extent recoverable under applicable law; (b) fraud, fraudulent misrepresentation, wilful misconduct or deliberate unlawful acts by either Party; (c) the Talent Partner&rsquo;s unauthorised use, disclosure, transfer, sale or misuse of Candidate personal data, Syncro1&rsquo;s Confidential Information or Client information, or any breach of the Talent Partner&rsquo;s confidentiality and data-protection obligations; (d) infringement, misappropriation or unauthorised use of Syncro1&rsquo;s or a third party&rsquo;s intellectual property by the Talent Partner; (e) any unpaid commission or other amount that has become due and payable under this Agreement, subject to the applicable payment terms and any bona fide dispute; or (f) any liability that cannot lawfully be excluded or limited under applicable law. For clarity, Syncro1&rsquo;s liability for ordinary contractual claims shall remain subject to the cap specified in Clause 13.3. The exceptions above shall not automatically render Syncro1&rsquo;s liability unlimited; any liability of Syncro1 falling within an exception shall remain subject to the limitations permitted by applicable law and any expressly applicable contractual limitation. No Party shall be entitled to recover twice for the same loss, and all claims shall remain subject to applicable legal requirements, including the duty to establish recoverable loss where required.</p>
+<p class="cl"><strong>13.5</strong> A Party seeking recovery shall take reasonable steps to mitigate its loss. No Party may recover twice for the same loss. Any contractual remedy remains subject to Sections 73 and 74 of the Indian Contract Act, 1872 and other applicable law.</p>
+
+<!-- 14. TERM, SUSPENSION AND TERMINATION -->
+<div class="art">14. TERM, SUSPENSION AND TERMINATION</div>
+<div class="sart">14. Duration and exit</div>
+<p class="cl"><strong>14.1</strong> This Agreement begins on the Effective Date and continues until terminated under this clause.</p>
+<p class="cl"><strong>14.2</strong> Either Party may terminate for convenience by giving thirty (30) calendar days&rsquo; written notice.</p>
+<p class="cl"><strong>14.3</strong> Either Party may terminate for material breach if the breach is not remedied within fifteen (15) calendar days after written notice describing the breach. No cure period is required where the breach is incapable of remedy or where immediate termination is reasonably necessary due to fraud, unlawful conduct or serious security risk.</p>
+<p class="cl"><strong>14.4</strong> Syncro1 may suspend Platform access under Clause 3.4 while investigating a credible concern. Suspension shall be proportionate and shall not be used to avoid payment of earned commissions.</p>
+<p class="cl"><strong>14.5</strong> Termination does not affect rights or obligations accrued before termination. Undisputed earned commissions remain payable in accordance with Clause 6. Provisions intended by their nature to survive—including payment, confidentiality, data protection, intellectual property, liability, dispute resolution and the limited protection for existing Protected Opportunities—shall survive.</p>
+<p class="cl"><strong>14.6</strong> For Candidates submitted before termination, the Parties shall continue to resolve attribution and pay commission if a Placement occurs within one (1) month after termination, provided the Candidate&rsquo;s hire is reasonably traceable to the Talent Partner&rsquo;s documented submission before termination and the relevant opportunity was active. This survival period does not apply where the Talent Partner was terminated for proven fraud concerning that Candidate.</p>
+
+<!-- 15. RECORDS AND LIMITED AUDIT -->
+<div class="art">15. RECORDS AND LIMITED AUDIT</div>
+<div class="sart">15. Verification</div>
+<p class="cl"><strong>15.1</strong> On reasonable written notice, either Party may request records reasonably necessary to verify submissions, Candidate authorisation, Placement, invoice or payment matters under this Agreement.</p>
+<p class="cl"><strong>15.2</strong> Any audit shall be limited in scope, conducted during normal business hours, protect unrelated confidential information and avoid unreasonable disruption. Audits involving personal data must comply with applicable privacy law.</p>
+<p class="cl"><strong>15.3</strong> Neither Party may demand unrestricted access to the other Party&rsquo;s systems, unrelated client records, source code or general business books under this clause.</p>
+
+<!-- 16. DISPUTE RESOLUTION AND GOVERNING LAW -->
+<div class="art">16. DISPUTE RESOLUTION AND GOVERNING LAW</div>
+<div class="sart">16. Disputes</div>
+<p class="cl"><strong>16.1</strong> This Agreement is governed by the laws of India.</p>
+<p class="cl"><strong>16.2</strong> The Parties shall first attempt in good faith to resolve a dispute through authorised business representatives within fifteen (15) Business Days after written notice of the dispute.</p>
+<p class="cl"><strong>16.3</strong> If the dispute remains unresolved, it shall be referred to arbitration in accordance with the Arbitration and Conciliation Act, 1996, as amended from time to time. The tribunal shall consist of a sole independent arbitrator. Syncro1 shall have the first right to propose and nominate the sole arbitrator in writing, and the Talent Partner shall reasonably cooperate in completing the appointment process. The proposed arbitrator shall be independent and impartial, and the appointment shall be subject to applicable law. If the proposed appointment cannot be completed within thirty (30) days of written notice of the dispute being referred to arbitration, or if the appointment is challenged or otherwise cannot lawfully proceed, either Party may seek appointment of the arbitrator through the competent court or other procedure available under Section 11 of the Act. Nothing in this clause shall be construed as permitting an appointment contrary to applicable law. The seat and venue of arbitration shall be Pune, Maharashtra, India.</p>
+<p class="cl"><strong>16.4</strong> The seat and legal place of arbitration shall be Pune, Maharashtra. Hearings may be conducted virtually or at another mutually agreed location without changing the seat.</p>
+<p class="cl"><strong>16.5</strong> The award shall be final and binding, subject to rights available under applicable law. Courts having jurisdiction at Pune, Maharashtra shall have jurisdiction over court proceedings arising from the arbitration, subject to mandatory jurisdictional rules.</p>
+<p class="cl"><strong>16.6</strong> Nothing prevents either Party from seeking urgent interim relief from a competent court or tribunal as permitted by law.</p>
+
+<!-- 17. GENERAL -->
+<div class="art">17. GENERAL</div>
+<div class="sart">17. Miscellaneous</div>
+<p class="cl"><strong>17.1</strong> Notices must be sent by email and, where appropriate, by courier to the contacts in Schedule E. A notice is effective when receipt is acknowledged, or when delivery is otherwise reliably established; termination and breach notices should be sent to both listed contacts where available.</p>
+<p class="cl"><strong>17.2</strong> Neither Party may assign this Agreement without the other Party&rsquo;s prior written consent, not to be unreasonably withheld, except to an affiliate or successor in connection with a bona fide merger, reorganisation or sale of substantially all relevant business, provided the assignee assumes the obligations in writing and the assignment does not materially prejudice the other Party.</p>
+<p class="cl"><strong>17.3</strong> No amendment or waiver is effective unless in writing and signed or clearly accepted by authorised representatives of both Parties. Platform updates alone do not amend commercial terms.</p>
+<p class="cl"><strong>17.4</strong> If a provision is held invalid or unenforceable, it shall be modified only to the minimum extent legally permissible, if permitted by law; otherwise it shall be severed, and the remaining provisions shall continue.</p>
+<p class="cl"><strong>17.5</strong> Failure or delay in enforcing a right is not a waiver. Remedies are cumulative to the extent permitted by law.</p>
+<p class="cl"><strong>17.6</strong> This Agreement, including its Schedules, constitutes the entire agreement on its subject matter and supersedes prior discussions on that subject, but does not override a separate written client-specific commercial variation signed by both Parties.</p>
+<p class="cl"><strong>17.7</strong> This Agreement may be executed in counterparts and by legally valid electronic signature, subject to applicable law. Each Party shall retain the final executed version and evidence of signatory authority.</p>
+<p class="cl"><strong>17.8</strong> The Parties shall confirm the applicable stamp duty, stamping method and execution formalities under Maharashtra law before signing. This draft does not determine the stamp duty payable.</p>
+<p class="cl"><strong>17.9</strong> No provision creates rights in favour of a third party except where expressly stated or required by law.</p>
+
+<!-- SCHEDULE A -->
+<div class="art" style="margin-top:16px;">SCHEDULE A &mdash; COMMERCIAL TERMS</div>
+<table>
+  <tr>
+    <th style="width:30%;">Commercial item</th>
+    <th style="width:70%;">Agreed term</th>
+  </tr>
+  <tr>
+    <td><strong>Standard commission</strong></td>
+    <td>5% of Fixed Annual CTC, unless a role-specific rate is agreed in writing before submission/shortlisting.</td>
+  </tr>
+  <tr>
+    <td><strong>Commission trigger</strong></td>
+    <td>Candidate joins the Client for the relevant Placement.</td>
+  </tr>
+  <tr>
+    <td><strong>Invoice timing</strong></td>
+    <td>Talent Partner issues a compliant invoice after joining and supplies reasonable supporting documents.</td>
+  </tr>
+  <tr>
+    <td><strong>Payment deadline</strong></td>
+    <td>Post 90 days of candidate joining which covers the standard replacement period</td>
+  </tr>
+  <tr>
+    <td><strong>GST and taxes</strong></td>
+    <td>GST, if lawfully chargeable, against a valid tax invoice. Statutory withholding/deductions apply.</td>
+  </tr>
+  <tr>
+    <td><strong>Replacement support</strong></td>
+    <td>90 days from joining, subject to Clause 8.</td>
+  </tr>
+  <tr>
+    <td><strong>Role-specific terms</strong></td>
+    <td>[Insert role/requisition, agreed commission, special terms and authorised approvals, if any.]</td>
+  </tr>
+</table>
+<p style="font-size:8.8pt; font-style:italic; margin-top:4px;"><strong>Required invoice support (as reasonably applicable):</strong> Candidate name; Client and requisition; joining date confirmation; final offer/Fixed Annual CTC confirmation sufficient to calculate commission; invoice number/date; PAN/GST details; bank details. Personal data must be limited to what is necessary.</p>
+
+<!-- SCHEDULE B -->
+<div class="art" style="margin-top:16px;">SCHEDULE B &mdash; OPERATIONAL SERVICE LEVELS</div>
+<ol class="num">
+  <li>Acknowledge a role assignment within two (2) Business Days, or decline it in the Platform.</li>
+  <li>Submit only profiles for which Candidate authorisation has been obtained and recorded.</li>
+  <li>Disclose known duplicates or prior submissions before submission.</li>
+  <li>Provide reasonable status updates when requested and promptly report interview feedback or Candidate changes known to the Talent Partner.</li>
+  <li>Syncro1 will endeavour to provide role details, process updates and attribution decisions in a timely manner, subject to Client responsiveness.</li>
+  <li>The Parties recognise that Client decisions, interview scheduling, offers, joining dates and hiring volumes are outside either Party&rsquo;s complete control; no SLA guarantees a Placement.</li>
+</ol>
+
+<!-- SCHEDULE C -->
+<div class="art" style="margin-top:16px;">SCHEDULE C &mdash; DATA PROCESSING ADDENDUM (CORE TERMS)</div>
+<ol class="num">
+  <li><strong>Purpose:</strong> process Candidate data only to identify, assess, communicate about and facilitate hiring for the relevant role, and for associated lawful compliance and recordkeeping.</li>
+  <li><strong>Data categories:</strong> identity and contact details, CV/work history, qualifications, skills, compensation expectations, notice period, interview and recruitment status, and other role-relevant information. Sensitive or unrelated data should not be collected unless lawful and strictly necessary.</li>
+  <li><strong>Roles:</strong> each Party shall document its actual role for each processing activity. Nothing in this Agreement conclusively labels either Party as a data fiduciary/controller or processor where the applicable law and actual processing determine otherwise.</li>
+  <li><strong>Security:</strong> access controls, secure transmission, reasonable device/account security, staff confidentiality, incident response and appropriate deletion/retention controls.</li>
+  <li><strong>Incidents:</strong> notify the other Party without undue delay and, where practicable, within 48 hours; preserve evidence; cooperate in investigation and lawful notifications.</li>
+  <li><strong>Data subject requests:</strong> promptly refer requests to the Party responsible for responding and reasonably assist with access, correction, withdrawal, deletion or grievance handling where applicable.</li>
+  <li><strong>Sub-processors and transfers:</strong> no material third-party processing or cross-border transfer on behalf of the other Party where consent, notice, contractual controls or other safeguards are legally required unless those requirements have been satisfied.</li>
+  <li><strong>Retention:</strong> delete or de-identify data when no longer required for the recruitment purpose, subject to lawful retention, dispute preservation and documented audit needs.</li>
+  <li>This Schedule must be expanded or replaced by a tailored data-processing agreement if required by the Parties&rsquo; actual platform architecture, client contracts or applicable law.</li>
+</ol>
+
+<!-- SCHEDULE D -->
+<div class="art" style="margin-top:16px;">SCHEDULE D &mdash; TALENT PARTNER DUE-DILIGENCE CHECKLIST</div>
+<ul class="bul" style="list-style-type:none; margin-left:5px;">
+  <li>&#9744; Legal name and constitution of business confirmed</li>
+  <li>&#9744; PAN and GSTIN (if applicable) verified</li>
+  <li>&#9744; Registered/principal address and authorized signatory confirmed</li>
+  <li>&#9744; Bank account details independently verified</li>
+  <li>&#9744; Relevant business registrations, if applicable</li>
+  <li>&#9744; Candidate authorisation and data-handling process confirmed</li>
+  <li>&#9744; Conflict-of-interest and anti-bribery expectations communicated</li>
+  <li>&#9744; Contact details for legal, operational and payment notices confirmed</li>
 </ul>
-<p class="cl"><strong>9.2 Definition of Introduction.</strong> A Client is deemed &ldquo;introduced&rdquo; through the Platform if the Talent Partner accessed or viewed the Client&rsquo;s Job Posting, or if the Talent Partner submitted any Candidate in response to a Job Posting posted by that Client. The Talent Partner acknowledges that the identity of Clients is Confidential Information of Syncro1. The Talent Partner shall not attempt to prove &ldquo;prior independent knowledge&rdquo; of any Client as a defence to breach of this Article; any such claim shall be void ab initio.</p>
-<p class="cl"><strong>9.3 Prohibition on Doing Business with Syncro1 Clients.</strong> The Talent Partner shall not, during the Term and for twenty-four (24) months thereafter, directly or indirectly, provide recruitment, talent acquisition, placement, or any related services to any Client of Syncro1, regardless of whether the Talent Partner claims to have known such Client independently. This prohibition applies even if the Talent Partner learns of a Client through sources other than the Platform.</p>
-<p class="cl"><strong>9.4 Liquidated Damages.</strong> The Parties agree that Syncro1&rsquo;s actual loss from any breach of this Article is extremely difficult to quantify and includes loss of platform revenue, harm to platform integrity, erosion of Client trust, and enforcement costs, and that the following pre-estimate is a genuine and reasonable one, not a penalty. In the event of any breach of this Article (including any prohibited communication, contact, or business dealing with a Client), the Talent Partner shall pay Syncro1, as liquidated damages, a sum equal to three (3) times the Commission that would have been payable to Syncro1 had the relevant placement been made through the Platform, calculated on the basis of the highest applicable Commission for the relevant CTC slab. In addition, the Talent Partner shall pay to Syncro1 an amount equal to fifty percent (50%) of any fees or consideration received by the Talent Partner from such Client in connection with any prohibited transaction. The Talent Partner shall also reimburse all reasonable legal fees, investigation costs, and enforcement expenses incurred by Syncro1.</p>
-<p class="cl"><strong>9.5 Injunctive Relief.</strong> The Talent Partner acknowledges that any breach of this Article would cause irreparable harm to Syncro1 for which monetary damages would be inadequate. Syncro1 shall be entitled to seek injunctive or other equitable relief from any competent court without posting bond and without prejudice to any other rights or remedies.</p>
-<p class="cl"><strong>9.6 Non-Solicitation of Personnel.</strong> During the Term and for 12 months thereafter, neither Party shall directly or indirectly solicit, recruit, or hire any employee or key contractor of the other Party who was involved in the performance of this Agreement, without the other Party&rsquo;s prior written consent.</p>
 
-<!-- ARTICLE 10 -->
-<div class="art">ARTICLE 10 &mdash;&mdash;&mdash; INDEMNIFICATION</div>
-<p class="cl"><strong>10.1 Talent Partner Indemnity.</strong> The Talent Partner shall indemnify, defend, and hold harmless Syncro1, its affiliates, directors, officers, employees, and agents from and against any and all third-party claims, actions, damages, losses, liabilities, costs, and expenses (including reasonable attorneys&rsquo; fees) arising out of or relating to: (a) any breach by the Talent Partner of any representation, warranty, covenant, or obligation under this Agreement; (b) any false, fabricated, or materially inaccurate information provided by the Talent Partner in any Candidate submission; (c) the Talent Partner&rsquo;s failure to obtain or maintain required Candidate consents; (d) any claim by a Candidate arising from the Talent Partner&rsquo;s recruitment activities; (e) the Talent Partner&rsquo;s violation of Applicable Law; (f) any data breach caused by the Talent Partner&rsquo;s negligence or failure to implement adequate security measures; or (g) any breach of Article 9 (including any prohibited communication or dealing with a Client).</p>
-<p class="cl"><strong>10.2 Reduction for Syncro1 Fault.</strong> The Talent Partner&rsquo;s indemnity obligation shall be reduced proportionally to the extent that a court or arbitral tribunal determines that Syncro1&rsquo;s own negligence, breach, or misconduct materially contributed to the relevant claim.</p>
-<p class="cl"><strong>10.3 Syncro1 Indemnity.</strong> Syncro1 shall indemnify and hold harmless the Talent Partner from any third-party claim that the Platform, when used by the Talent Partner within the scope of this Agreement and in accordance with Syncro1&rsquo;s instructions, infringes a registered Intellectual Property Right in India.</p>
-<p class="cl"><strong>10.4 Procedure.</strong> The Party seeking indemnification shall: (a) promptly notify the indemnifying Party in writing of any claim; (b) grant the indemnifying Party reasonable control of the defence and settlement (provided no settlement imposing obligations on the indemnified Party shall be agreed without its prior written consent); and (c) cooperate reasonably in the defence at the indemnifying Party&rsquo;s cost.</p>
-
-<!-- ARTICLE 11 -->
-<div class="art">ARTICLE 11 &mdash;&mdash;&mdash; LIMITATION OF LIABILITY</div>
-<p class="cl"><strong>11.1 Liability Cap.</strong> TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, SYNCRO1&rsquo;S TOTAL AGGREGATE LIABILITY TO THE TALENT PARTNER ARISING OUT OF OR IN CONNECTION WITH THIS AGREEMENT, WHETHER IN CONTRACT, TORT (INCLUDING NEGLIGENCE), BREACH OF STATUTORY DUTY, OR OTHERWISE, SHALL NOT EXCEED THE TOTAL COMMISSION AMOUNTS ACTUALLY PAID BY SYNCRO1 TO THE TALENT PARTNER DURING THE TWELVE (12) MONTHS PRECEDING THE EVENT GIVING RISE TO THE CLAIM, PROVIDED THAT SUCH CAP SHALL IN NO EVENT BE LESS THAN INR 25,000 (INDIAN RUPEES TWENTY-FIVE THOUSAND) IN RESPECT OF ANY SINGLE CLAIM.</p>
-<p class="cl"><strong>11.2 Exclusion of Consequential Damages.</strong> IN NO EVENT SHALL EITHER PARTY BE LIABLE TO THE OTHER FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, INCLUDING LOSS OF PROFITS, LOSS OF REVENUE, LOSS OF GOODWILL, LOSS OF DATA, BUSINESS INTERRUPTION, OR COST OF PROCUREMENT OF SUBSTITUTE SERVICES, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES, HOWSOEVER ARISING.</p>
-<p class="cl"><strong>11.3 Exceptions.</strong> The limitations in Clauses 11.1 and 11.2 shall not apply to: (a) liability arising from a Party&rsquo;s fraud, gross negligence, or wilful misconduct; (b) indemnification obligations under Article 10; (c) breach of Article 7 (Confidentiality) or Article 9 (Non-Circumvention); or (d) liability that cannot be limited by Applicable Law.</p>
-<p class="cl"><strong>11.4 Risk Allocation.</strong> The Parties acknowledge that the liability limitations reflect a reasonable allocation of risk and form an essential basis of the bargain, without which Syncro1 would not have entered into this Agreement.</p>
-
-<!-- ARTICLE 12 -->
-<div class="art">ARTICLE 12 &mdash;&mdash;&mdash; AUDIT AND RECORD-KEEPING</div>
-<p class="cl"><strong>12.1</strong> Syncro1 may, upon ten (10) business days&rsquo; prior written notice, audit the Talent Partner&rsquo;s records relating to Candidate sourcing practices, consent records, data handling, and compliance with this Agreement, either through its own personnel or through a reputable third-party auditor bound by equivalent confidentiality obligations. Syncro1 may conduct no more than one (1) routine audit per calendar year, unless there is reasonable suspicion of material breach or fraud.</p>
-<p class="cl"><strong>12.2</strong> The Talent Partner shall cooperate fully with any audit and shall produce all requested documents and information within seven (7) business days of the written request. Non-cooperation within this period constitutes a material breach.</p>
-<p class="cl"><strong>12.3</strong> The Talent Partner shall maintain accurate and complete records relevant to its performance under this Agreement for a minimum of three (3) years following expiry or termination, or such longer period as required by Applicable Law.</p>
-<p class="cl"><strong>12.4</strong> Audit costs shall be borne by Syncro1 unless the audit reveals a material breach by the Talent Partner, in which case the Talent Partner shall reimburse Syncro1 for the reasonable audit costs.</p>
-
-<!-- ARTICLE 13 -->
-<div class="art">ARTICLE 13 &mdash;&mdash;&mdash; SERVICE LEVEL AGREEMENTS (SLAs) AND PERFORMANCE MONITORING</div>
-<p class="cl"><strong>13.1</strong> The Talent Partner&rsquo;s compliance with the Service Level Agreements set out in Schedule B shall be continuously monitored through Syncro1&rsquo;s systems. SLA breaches shall be recorded and may result in consequences as set out in Schedule B.</p>
-<p class="cl"><strong>13.2</strong> Syncro1 shall provide the Talent Partner with a monthly performance report through the Platform Dashboard, setting out any SLA breaches and the Talent Partner&rsquo;s overall compliance record.</p>
-<p class="cl"><strong>13.3</strong> The Talent Partner may dispute any SLA breach record within 15 days of the monthly report by submitting a written appeal with supporting evidence through the Platform. Sub Admin shall review and respond within 7 business days. If unsatisfied, the Talent Partner may escalate to Super Admin within 7 days, whose decision shall be final.</p>
-<p class="cl"><strong>13.4</strong> If the Talent Partner repeatedly or materially fails to meet the SLAs in Schedule B, Syncro1 may issue a formal performance warning with a 30-day improvement plan. If the Talent Partner fails to materially improve within the improvement period, Syncro1 may terminate this Agreement in accordance with Clause 14.4(c).</p>
-
-<!-- ARTICLE 14 -->
-<div class="art">ARTICLE 14 &mdash;&mdash;&mdash; TERM AND TERMINATION</div>
-<p class="cl"><strong>14.1 Term.</strong> This Agreement shall commence on the Effective Date and continue until terminated by either Party in accordance with this Article.</p>
-<p class="cl"><strong>14.2 Termination for Convenience.</strong> Either Party may terminate this Agreement without cause by giving not less than 30 (thirty) days&rsquo; prior written notice. On expiry of the notice period, the Talent Partner&rsquo;s Platform access shall cease, provided that any Commission validly earned prior to the effective date of termination shall continue to be paid subject to Article 5.</p>
-<p class="cl"><strong>14.3 Termination by Talent Partner for Cause.</strong> The Talent Partner may terminate immediately upon written notice to Syncro1 if Syncro1 commits a material breach and fails to remedy it within 15 business days of receiving written notice particularising the breach.</p>
-<p class="cl"><strong>14.4 Termination by Syncro1 for Cause.</strong> Syncro1 may terminate immediately upon written notice if: (a) the Talent Partner commits a material breach and fails to remedy it within 15 business days of written notice (provided that no cure period shall apply to breaches of Article 9, Clause 3.10, Clause 3.11, or Article 8); (b) the Talent Partner submits fabricated, fraudulent, or materially misrepresented Candidate profiles; (c) the Talent Partner repeatedly or materially fails to meet SLA requirements after receiving a performance warning and improvement plan under Clause 13.4; (d) the Talent Partner becomes insolvent, makes an assignment for the benefit of creditors, is subject to voluntary or involuntary insolvency proceedings, or ceases to carry on business; or (e) the Talent Partner breaches Article 9 (Non-Circumvention and Prohibition on Client Contact).</p>
-<p class="cl"><strong>14.5 Effect of Termination.</strong> Upon termination or expiry for any reason: (a) the Talent Partner&rsquo;s Platform access and all licences granted herein immediately terminate; (b) all outstanding Commission amounts validly earned in respect of Successful Placements prior to termination shall be settled within 30 days, subject to any pending replacement obligations or fraud investigation; (c) any Candidate shortlisted, interviewed, or offered a position prior to the termination date remains eligible for Commission if placed within 90 days, during which period the Talent Partner retains limited read-only Platform access to track such Candidates; (d) each Party shall promptly return or securely destroy the other Party&rsquo;s Confidential Information; and (e) all provisions that by their nature should survive shall survive, including Articles 6, 7, 8, 9, 10, 11, 12, 15, and 16.</p>
-
-<!-- ARTICLE 15 -->
-<div class="art">ARTICLE 15 &mdash;&mdash;&mdash; DISPUTE RESOLUTION</div>
-<p class="cl"><strong>15.1 Good Faith Negotiations.</strong> In the event of any Dispute, the Parties shall first attempt resolution through good faith management-level discussions. Either Party may initiate this by delivering a written notice of Dispute setting out the nature of the Dispute and the relief sought.</p>
-<p class="cl"><strong>15.2 Internal Escalation.</strong> If unresolved within 10 business days of the notice, the Dispute shall be submitted through the Platform&rsquo;s dispute resolution tool (for automated preliminary determination within 24 hours), then escalated to Sub Admin for mediation within 48 hours, and then (if still unresolved) to Super Admin for a final administrative determination within 7 business days. Pending resolution, the Parties shall continue to perform their obligations.</p>
-<p class="cl"><strong>15.3 Arbitration.</strong> If unresolved through the process in Clauses 15.1 and 15.2 within 30 days, or if either Party elects in writing to bypass internal escalation, either Party may refer the Dispute to final and binding arbitration under the Arbitration and Conciliation Act, 1996, as amended. The arbitration shall be conducted by a sole arbitrator appointed by mutual agreement or, failing agreement within 15 days, by the appropriate court. The seat and venue of arbitration shall be Mumbai, Maharashtra. The language shall be English. The arbitrator&rsquo;s award shall be final, binding, and enforceable. All proceedings shall be kept strictly confidential.</p>
-<p class="cl"><strong>15.4 Individual Basis.</strong> Arbitration shall be conducted on an individual basis only. The Talent Partner irrevocably waives any right to participate in any class, consolidated, or representative proceeding.</p>
-<p class="cl"><strong>15.5 Injunctive Relief.</strong> Either Party may seek urgent interim injunctive or other equitable relief from a competent court without prior recourse to escalation or arbitration, where necessary to prevent irreparable harm or preserve the status quo pending arbitration.</p>
-<p class="cl"><strong>15.6 Governing Law.</strong> This Agreement shall be governed by and construed in accordance with the laws of India, without regard to its conflict of laws principles.</p>
-<p class="cl"><strong>15.7 Jurisdiction.</strong> Subject to Clause 15.3, the courts in Mumbai, Maharashtra shall have exclusive jurisdiction over matters arising under this Agreement not required to be referred to arbitration.</p>
-<p class="cl"><strong>15.8 Costs.</strong> The prevailing party in any arbitration or litigation shall be entitled to recover reasonable legal costs and arbitral fees from the non-prevailing party.</p>
-
-<!-- ARTICLE 16 -->
-<div class="art">ARTICLE 16 &mdash;&mdash;&mdash; FORCE MAJEURE</div>
-<p class="cl"><strong>16.1</strong> Neither Party shall be in breach, nor liable for any failure or delay in performance, to the extent such failure or delay is caused by a Force Majeure Event, provided that: (a) the affected Party notifies the other in writing within 5 business days of the occurrence, describing the nature and expected duration; (b) the affected Party uses reasonable endeavours to mitigate the impact and resume performance; and (c) the Force Majeure Event is not caused by the affected Party&rsquo;s own act or omission.</p>
-<p class="cl"><strong>16.2</strong> If a Force Majeure Event continues for more than 30 consecutive days, either Party may terminate this Agreement upon 7 days&rsquo; written notice without liability, other than for amounts accrued and due prior to the Force Majeure Event.</p>
-<p class="cl"><strong>16.3</strong> Financial hardship, inability to meet agreed Commission splits, or general market downturns shall not constitute Force Majeure Events.</p>
-
-<!-- ARTICLE 17 -->
-<div class="art">ARTICLE 17 &mdash;&mdash;&mdash; GENERAL PROVISIONS</div>
-<p class="cl"><strong>17.1 Entire Agreement.</strong> This Agreement (including all Schedules and Annexures) constitutes the entire agreement between the Parties with respect to its subject matter and supersedes all prior agreements, negotiations, representations, and understandings, whether written or oral, relating thereto.</p>
-<p class="cl"><strong>17.2 Amendments.</strong> No amendment or modification of this Agreement shall be valid unless in writing and signed by duly authorised representatives of both Parties. Syncro1 may update the Schedules (including SLAs) by providing 30 days&rsquo; prior written notice. Any proposed change that materially and adversely affects the Talent Partner&rsquo;s economic position shall require the Talent Partner&rsquo;s express written consent. If the Talent Partner does not consent within 30 days, the change shall not apply to the Talent Partner, but Syncro1 may thereafter terminate this Agreement with 60 days&rsquo; notice.</p>
-<p class="cl"><strong>17.3 Waiver.</strong> No failure or delay in exercising any right or remedy shall constitute a waiver thereof. A waiver of any breach shall not constitute a waiver of any subsequent breach.</p>
-<p class="cl"><strong>17.4 Severability.</strong> If any provision is held to be invalid, illegal, or unenforceable, it shall be modified to the minimum extent necessary or, if not possible, severed, and the remaining provisions shall continue in full force and effect.</p>
-<p class="cl"><strong>17.5 Assignment.</strong> The Talent Partner may not assign, transfer, novate, or sub-contract this Agreement or any rights or obligations hereunder without Syncro1&rsquo;s prior written consent. Syncro1 may assign this Agreement without consent in connection with a merger, acquisition, amalgamation, or sale of all or substantially all of its assets or business, upon written notice to the Talent Partner. Any attempted assignment in violation of this Clause shall be void.</p>
-<p class="cl"><strong>17.6 Notices.</strong> All notices under this Agreement shall be in writing and delivered: (a) by hand or courier to the registered address of the relevant Party; or (b) by email to the addresses provided during Platform registration (or as updated in writing). Email notices shall be deemed received 24 hours after sending, unless a delivery failure notification is received.</p>
-<p class="cl"><strong>17.7 Relationship.</strong> The Parties are independent contractors. Nothing in this Agreement creates a partnership, joint venture, agency, employment, or franchise relationship. The Talent Partner shall not represent itself as agent or employee of Syncro1.</p>
-<p class="cl"><strong>17.8 Third-Party Rights.</strong> Except as expressly set out herein, this Agreement does not create any rights in favour of any third party. Clients are intended third-party beneficiaries solely in respect of the Talent Partner&rsquo;s obligations concerning Candidate quality, accuracy, and consent in Articles 3, 4, and 8.</p>
-<p class="cl"><strong>17.9 Counterparts and Electronic Signatures.</strong> This Agreement may be executed in counterparts, including by digital or electronic signature (which the Parties hereby agree shall have the same legal effect as a wet-ink signature). Each counterpart shall be an original and all counterparts together shall constitute one binding instrument.</p>
-<p class="cl"><strong>17.10 Language.</strong> This Agreement is drafted and executed in English. In the event of any conflict between an English version and any translation, the English version shall prevail.</p>
-<p class="cl"><strong>17.11 Headings.</strong> Article and clause headings are for convenience only and shall not affect the interpretation of this Agreement.</p>
+<!-- SCHEDULE E -->
+<div class="art" style="margin-top:16px;">SCHEDULE E &mdash; NOTICE DETAILS</div>
+<table>
+  <tr>
+    <th style="width:25%;">Party</th>
+    <th style="width:35%;">Email for notices</th>
+    <th style="width:40%;">Postal address</th>
+  </tr>
+  <tr>
+    <td><strong>Syncro1</strong></td>
+    <td>legal@syncro1.com</td>
+    <td>H801 Tiana Bldg Bellacasa, Sr No.42(P),43(P) 44(P), Sus, Haveli, Pune- 411021, Maharashtra</td>
+  </tr>
+  <tr>
+    <td><strong>Talent Partner</strong></td>
+    <td>${partnerData.email || '[●]'}</td>
+    <td>${partnerAddress}</td>
+  </tr>
+</table>
 
 <!-- SIGNATURES -->
-<hr class="hr1" style="margin-top:12px;">
-<p style="font-size:11pt; font-weight:bold; text-align:center; text-transform:uppercase; margin:6px 0;">SIGNATURES</p>
-<p style="text-align:center; font-size:9.5pt; margin-bottom:10px;">IN WITNESS WHEREOF, the Parties have executed this Master Talent Partner Agreement as of the date first written above, by their duly authorised representatives.</p>
+<div class="art" style="margin-top:18px;">SIGNATURES</div>
+<p class="cl">The Parties confirm that they have read and understood this Agreement and that the signatories below are authorised to bind the respective Parties.</p>
 
 <div class="sig-wrap">
   <table class="sig-grid">
     <tr>
       <td>
-        <p class="sig-lbl">FOR AND ON BEHALF OF</p>
-        <p class="sig-name">SYNCRO1 PRIVATE LIMITED</p>
-        <p style="font-size:8.5pt; font-weight:bold; margin-bottom:3px;">Signature: _________________________</p>
-        <div style="height:10px;"></div>
-        <p class="sf">Name: <span class="sf-ul">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></p>
-        <p class="sf">Designation: <span class="sf-ul">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></p>
-        <p class="sf">Date: <strong>${formattedDate}</strong></p>
-        <p class="sf">Place: <strong>Mumbai, Maharashtra</strong></p>
+        <div class="sig-lbl">For and on behalf of</div>
+        <div class="sig-name">Syncro1 Private Limited</div>
+        <div class="sf"><strong>Name:</strong> Abhishek Bartakke</div>
+        <div class="sf"><strong>Title/Capacity:</strong> Director</div>
+        <div class="sf" style="display:flex; align-items:center; gap:8px; min-height:36px; margin:3px 0;">
+          <strong>Signature:</strong>
+          ${abhiSignatureImg ? `
+            <img src="${abhiSignatureImg}" alt="Abhishek Bartakke Signature" style="height:34px; width:auto; vertical-align:middle; mix-blend-mode:multiply;" />
+          ` : `
+            <span>___________________________</span>
+          `}
+        </div>
+        <div class="sf"><strong>Date:</strong> ${formattedDate}</div>
+        <div class="sf"><strong>Place:</strong> Pune, Maharashtra</div>
       </td>
       <td>
-        <p class="sig-lbl">FOR AND ON BEHALF OF</p>
-        <p class="sig-name">${partnerLegalName}</p>
-        <p style="font-size:8.5pt; font-weight:bold; margin-bottom:3px;">Signature: _________________________</p>
-        <div style="height:10px;"></div>
-        <p class="sf">Name: <strong>${signatoryName}</strong></p>
-        <p class="sf">Designation: <strong>${designation || 'N/A'}</strong></p>
-        <p class="sf">Date: <strong>${formattedDate}</strong></p>
-        <p class="sf">Place: <strong>${city || 'N/A'}, ${state || 'N/A'}</strong></p>
-        <div class="sig-accepted" style="margin-top:8px;">
-          <p class="sa-text">&#10003; Electronically Accepted</p>
-          <p class="sa-meta">
-            Accepted by: <strong>${signatoryName}</strong><br>
-            Date &amp; Time: ${agreedDateTime}<br>
-            IP Address: ${agreedIp || 'N/A'}
-          </p>
+        <div class="sig-lbl">For and on behalf of</div>
+        <div class="sig-name">${partnerLegalName}</div>
+        <div class="sf"><strong>Name:</strong> ${signatoryName}</div>
+        <div class="sf"><strong>Title/Capacity:</strong> ${partnerDesignation}</div>
+        <div class="sf" style="display:flex; align-items:center; gap:8px; min-height:36px; margin:3px 0;">
+          <strong>Signature:</strong>
+          ${partnerSigImg ? `
+            <img src="${partnerSigImg}" alt="Authorised Signatory Signature" style="height:34px; max-width:140px; width:auto; vertical-align:middle; mix-blend-mode:multiply;" />
+          ` : (agreedAt ? `
+            <span style="font-family:'Brush Script MT', 'Dancing Script', 'Segoe Script', cursive; font-size:15pt; color:#1e3a8a; line-height:1;">${signatoryName}</span>
+            <span style="display:inline-block; font-size:7pt; color:#15803d; font-weight:bold; background:#dcfce7; border:0.5px solid #86efac; border-radius:3px; padding:1px 5px; vertical-align:middle; font-family:sans-serif;">&#10003; Digitally Signed</span>
+          ` : `
+            <span>___________________________</span>
+          `)}
         </div>
+        <div class="sf"><strong>Date:</strong> ${formattedDate}</div>
+        <div class="sf"><strong>Place:</strong> ${partnerPlace}</div>
+        ${agreedAt ? `
+        <div class="sig-accepted">
+          <div class="sa-text">&#10003; Digitally Accepted on Syncro1 Platform</div>
+          <div class="sa-meta">
+            <strong>Accepted At:</strong> ${agreedDateTime}<br>
+            <strong>IP Address:</strong> ${agreedIp || 'N/A'}<br>
+            <strong>Entity PAN:</strong> ${panNumber || 'N/A'}
+          </div>
+        </div>
+        ` : `
+        <div class="sig-blank">Pending Partner Digital Acceptance</div>
+        `}
       </td>
     </tr>
   </table>
-  <div class="auth-note">The undersigned represent and warrant that they are duly authorised to execute this Agreement on behalf of their respective entities and to bind such entities to its terms.</div>
 </div>
 
-<!-- SCHEDULE A -->
-<div class="sch-title">SCHEDULE A &mdash;&mdash;&mdash; COMMISSION STRUCTURE</div>
-<p class="sch-note">This Schedule forms an integral part of the Agreement.</p>
-<div class="sart">A1. Standard Commission</div>
-<p class="cl">The Talent Partner shall receive a Commission equal to five percent (5%) of the Candidate&rsquo;s fixed annual CTC (as confirmed in the offer letter issued by the Client) for each Successful Placement.</p>
-<p class="cl"><em>Example: If a Candidate&rsquo;s fixed annual CTC is INR 10,00,000 (Ten Lakhs), the Commission payable to the Talent Partner shall be INR 50,000 (Fifty Thousand Rupees).</em></p>
-<div class="sart">A2. No Deductions or Adjustments</div>
-<p class="cl">The Commission is fixed and shall not be reduced or affected by:</p>
-<ul class="bul">
-  <li>Any discount, rebate, or special arrangement between Syncro1 and the Client;</li>
-  <li>Any commission percentage or fee structure agreed between Syncro1 and the Client;</li>
-  <li>Any Replacement Fund (no such fund exists under this Agreement);</li>
-  <li>Any tier or performance classification (no tier system exists under this Agreement).</li>
+<!-- PRE-SIGNING LEGAL CHECKLIST -->
+<div class="art" style="margin-top:16px;">PRE-SIGNING LEGAL CHECKLIST &mdash; DO NOT OMIT</div>
+<ul class="bul" style="list-style-type:none; margin-left:5px; font-size:8.8pt;">
+  <li>&#9744; Confirm the exact contracting entity behind Syncro1 and insert its legal name, registration details, address and authorised signatory.</li>
+  <li>&#9744; Have Maharashtra counsel determine the applicable stamp duty, stamping method and any execution formalities for the final instrument.</li>
+  <li>&#9744; Confirm whether the parties are businesses, individuals or sole proprietors and whether the actual operating model creates any employment, labour, tax or other statutory obligations.</li>
+  <li>&#9744; Review the limited non-circumvention clause against Section 27 of the Indian Contract Act, 1872 and applicable case law; do not assume a 12-month period is automatically enforceable.</li>
+  <li>&#9744; Confirm the liability cap and whether a separately negotiated super-cap is appropriate. This draft intentionally leaves no numerical super-cap as an automatic term.</li>
+  <li>&#9744; Check the DPDP Act/Rules commencement dates and all other applicable privacy and information-security requirements as of the execution date; tailor Schedule C to actual data flows and client contracts.</li>
+  <li>&#9744; Check the arbitration appointment mechanism, seat, jurisdiction and electronic execution process against current law.</li>
+  <li>&#9744; Ensure the commission rate, CTC definition, payment clock, replacement policy and survival period align with Syncro1&rsquo;s client contracts and internal operating process.</li>
+  <li>&#9744; Remove this checklist and all drafting notes from the execution copy after legal approval.</li>
 </ul>
-<div class="sart">A3. Payout Timing</div>
-<p class="cl">Commission shall be paid within ninety (90) days following the Joining Date, regardless of whether Syncro1 has received payment from the Client.</p>
-<div class="sart">A4. Rate Card Changes</div>
-<p class="cl">Syncro1 may revise the Commission percentage only by providing 30 days&rsquo; written notice. Any reduction in the Commission percentage requires the Talent Partner&rsquo;s express written consent; failing such consent, Syncro1 may terminate this Agreement with 60 days&rsquo; notice.</p>
 
-<!-- SCHEDULE B -->
-<div class="sch-title">SCHEDULE B &mdash;&mdash;&mdash; TALENT PARTNER SERVICE LEVEL AGREEMENTS (SLAs)</div>
-<p style="margin-bottom:5px;">The Talent Partner agrees to comply with the following SLAs. Breaches are recorded in the Talent Partner&rsquo;s monthly performance report.</p>
-<table>
-  <tr>
-    <th style="width:35%;">Obligation</th>
-    <th style="width:20%;">Deadline</th>
-    <th style="width:45%;">Consequence of Breach</th>
-  </tr>
-  <tr><td>Response to QC queries</td><td>4 business hours</td><td>Candidate submission may be rejected; SLA failure recorded.</td></tr>
-  <tr><td>Submission of additional documents requested by QC</td><td>24 hours from request</td><td>Payout delayed until documents received; SLA failure recorded.</td></tr>
-  <tr><td>GST invoice upload after Successful Placement</td><td>3 business days from Joining Date confirmation</td><td>Payout withheld until invoice received.</td></tr>
-  <tr><td>Inactivity on an accepted Job Posting (no Candidate submitted)</td><td>5 calendar days from job acceptance</td><td>Talent Partner automatically removed from that Job Posting; inactivity flagged.</td></tr>
-  <tr><td>Force Majeure notification</td><td>5 business days of occurrence</td><td>Loss of Force Majeure protection for the delayed period.</td></tr>
-  <tr><td>Data breach notification to Syncro1</td><td>72 hours of becoming aware</td><td>Potential indemnity liability and regulatory non-compliance risk.</td></tr>
-  <tr><td>Deletion/return of Client/Candidate data post-termination</td><td>30 days of termination</td><td>Material breach; indemnity liability for data breach consequences.</td></tr>
-  <tr><td>Update of KYC/registration information upon material change</td><td>5 business days of change</td><td>Material breach; potential suspension of Platform access.</td></tr>
-</table>
+<!-- LEGAL REFERENCE NOTES -->
+<div class="art" style="margin-top:16px;">LEGAL REFERENCE NOTES (FOR COUNSEL; NOT OPERATIVE TERMS)</div>
+<p style="font-size:8.5pt; text-align:justify; margin-bottom:4px;">Key provisions to verify against current official sources include the Indian Contract Act, 1872 (including Sections 27, 73 and 74); the Arbitration and Conciliation Act, 1996 (including Section 11); the Maharashtra Stamp Act and applicable schedule; relevant Maharashtra Shops and Establishments legislation where applicable; and the Digital Personal Data Protection Act, 2023 and its staged commencement notifications/Rules.</p>
+<p style="font-size:8.5pt; text-align:justify;">The statutory commencement schedule for the DPDP Act is staged. As at the date of this draft, the commencement notification dated 13 November 2025 schedules many substantive provisions for commencement 18 months after publication (13 May 2027), while specified provisions have earlier dates. Counsel should verify the current position at signing and should not treat the Act as wholly in force merely because the Rules have been notified.</p>
 
-<!-- SCHEDULE C -->
-<div class="sch-title">SCHEDULE C &mdash;&mdash;&mdash; DATA PROCESSING AND PRIVACY TERMS</div>
-<p class="sch-note">This Schedule sets out the data processing obligations of the Parties and forms an integral part of the Agreement.</p>
-<div class="sart">D1. Categories of Personal Data Processed</div>
-<ul class="bul">
-  <li><strong>Candidate Data:</strong> Full name, contact details, residential address, date of birth, educational qualifications, employment history, current and expected CTC, resume, identity documents, and consent records.</li>
-  <li><strong>Client Data (limited):</strong> Name and contact details of Client representatives received in the course of Platform communications (but Talent Partner shall not communicate with Clients as per Clause 3.11).</li>
-  <li><strong>Talent Partner Data:</strong> Business registration details, KYC documents, bank account details, authorised signatory information, and GST records.</li>
-</ul>
-<div class="sart">D2. Purpose Limitation</div>
-<p class="cl">All personal data processed by the Talent Partner under this Agreement shall be used solely for the purpose of sourcing, verifying, and submitting Candidates for specific Job Postings through the Platform. The Talent Partner shall not use Candidate or Client data for any other purpose, including marketing, list-building, or sharing with third parties outside the Platform.</p>
-<div class="sart">D3. Security Standards</div>
-<p class="cl">The Talent Partner shall implement and maintain, at minimum, the following:</p>
-<ul class="bul">
-  <li>Encryption of data at rest and in transit using industry-standard protocols (AES-256 or equivalent).</li>
-  <li>Role-based access controls restricting personal data access to authorised personnel only.</li>
-  <li>Regular security assessments and vulnerability testing at least annually.</li>
-  <li>Secure deletion or anonymisation of personal data upon expiry of retention periods.</li>
-  <li>Mandatory employee training on data protection obligations.</li>
-</ul>
-<div class="sart">D4. Sub-Processors</div>
-<p class="cl">The Talent Partner shall not engage any sub-processor to process personal data obtained through the Platform without Syncro1&rsquo;s prior written consent. The Talent Partner shall ensure that any approved sub-processor is bound by data processing obligations equivalent to those in this Schedule.</p>
-<div class="sart">D5. Data Subject Rights</div>
-<p class="cl">If a data subject makes a request to exercise rights under Applicable Law (access, correction, deletion, restriction, or portability), the Talent Partner shall: (a) acknowledge the request within 48 hours; (b) notify Syncro1 promptly; and (c) comply within the timelines required by Applicable Law.</p>
-<div class="sart">D6. Data Breach Notification</div>
-<p class="cl">In the event of an actual or suspected data breach, the Talent Partner shall: (a) notify Syncro1 in writing within 72 hours of becoming aware; (b) provide details of the nature, scope, and likely consequences of the breach; (c) describe the measures taken or proposed to address the breach; and (d) cooperate with Syncro1 in notifying affected data subjects and regulatory authorities as required by Applicable Law.</p>
-<div class="sart">D7. Retention and Deletion</div>
-<p class="cl">Personal data shall be retained only as long as necessary for the purposes for which it was collected, or as required by Applicable Law, and in no event for longer than three (3) years following the end of the relevant recruitment engagement. Upon termination, the Talent Partner shall securely delete or return all personal data within 30 days and provide written certification thereof.</p>
-
-<!-- SCHEDULE E -->
-<div class="sch-title">SCHEDULE E &mdash;&mdash;&mdash; KYC AND DOCUMENT REQUIREMENTS</div>
-<p style="margin-bottom:5px;">The following documents must be submitted by the Talent Partner during registration and maintained current throughout the Term. Failure to maintain up-to-date KYC documents is a material breach.</p>
-<table>
-  <tr>
-    <th style="width:33%;">Document</th>
-    <th style="width:30%;">Purpose</th>
-    <th style="width:37%;">Format / Requirements</th>
-  </tr>
-  <tr><td>Certificate of Incorporation / Company Registration Certificate</td><td>Verification of legal entity status and registered name</td><td>PDF/Image; government-issued and unaltered</td></tr>
-  <tr><td>GST Registration Certificate</td><td>Tax compliance and invoice eligibility</td><td>PDF/Image; current and valid; GSTIN must match invoices</td></tr>
-  <tr><td>Cancelled Cheque or Bank Statement (not older than 3 months)</td><td>Bank account verification for payouts</td><td>PDF/Image; account holder name must match Talent Partner legal name</td></tr>
-  <tr><td>PAN Card of the Entity</td><td>Tax identification for TDS purposes</td><td>PDF/Image</td></tr>
-  <tr><td>List of Authorised Signatories with specimen signatures and board resolution or authorisation letter</td><td>Confirmation of persons authorised to bind the Talent Partner</td><td>PDF; signed by a director or equivalent officer</td></tr>
-  <tr><td>Data Protection Compliance Declaration</td><td>Confirmation of Applicable Law compliance</td><td>Signed declaration on Talent Partner letterhead</td></tr>
-  <tr><td>Any other document requested by Sub Admin or Super Admin for KYC purposes</td><td>As required by Syncro1 for regulatory compliance</td><td>As specified at time of request</td></tr>
-</table>
-<p style="font-size:8.8pt; font-style:italic; margin-top:5px;">All documents must be legible, unaltered, and in English (or accompanied by a certified English translation). Syncro1 reserves the right to request updated or additional documents at any time during the Term.</p>
-
-<!-- SCHEDULE F -->
-<div class="sch-title">SCHEDULE F &mdash;&mdash;&mdash; AMENDMENT AND VARIATION LOG</div>
-<p class="sch-note">This Schedule records all formally agreed amendments executed by duly authorised representatives of both Parties in accordance with Clause 17.2.</p>
-<table>
-  <tr>
-    <th style="width:7%;">No.</th>
-    <th style="width:20%;">Date of Amendment</th>
-    <th style="width:23%;">Clause(s) Amended</th>
-    <th style="width:27%;">Nature of Amendment</th>
-    <th style="width:23%;">Authorised Signatories</th>
-  </tr>
-  <tr><td>1</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
-  <tr><td>2</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
-  <tr><td>3</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
-</table>
-
-<!-- TALENT PARTNER RECORD -->
-<div class="sch-title" style="margin-top:14px;">TALENT PARTNER DETAILS RECORD</div>
-<p class="sch-note">Auto-generated from the Talent Partner&rsquo;s registered profile on the Syncro1 Platform at the time of acceptance.</p>
+<!-- TALENT PARTNER RECORD AUDIT TABLE -->
+<div class="sch-title" style="margin-top:16px; font-weight:bold; font-size:9.5pt; text-transform:uppercase;">TALENT PARTNER PROFILE &amp; ACCEPTANCE AUDIT RECORD</div>
 <div class="vr">
-  <div class="vr-title">Talent Partner Profile &mdash; Syncro1 Platform Record</div>
+  <div class="vr-title">Syncro1 Platform Cryptographic &amp; Acceptance Record</div>
   <div class="vr-row"><span class="vr-lbl">Legal Entity Name</span><span class="vr-val"><strong>${partnerLegalName}</strong></span></div>
   <div class="vr-row"><span class="vr-lbl">Entity Type</span><span class="vr-val">${partnerType}</span></div>
   <div class="vr-row"><span class="vr-lbl">Registered Address</span><span class="vr-val">${partnerAddress}</span></div>
   <div class="vr-row"><span class="vr-lbl">PAN Number</span><span class="vr-val">${panNumber || 'N/A'}</span></div>
   <div class="vr-row"><span class="vr-lbl">GST Number</span><span class="vr-val">${gstNumber || 'N/A'}</span></div>
-  <div class="vr-row"><span class="vr-lbl">CIN Number</span><span class="vr-val">${cinNumber || 'N/A'}</span></div>
+  <div class="vr-row"><span class="vr-lbl">CIN / Registration</span><span class="vr-val">${cinNumber || 'N/A'}</span></div>
   <div class="vr-row"><span class="vr-lbl">Authorised Signatory</span><span class="vr-val"><strong>${signatoryName}</strong></span></div>
-  <div class="vr-row"><span class="vr-lbl">Designation</span><span class="vr-val">${designation || 'N/A'}</span></div>
+  <div class="vr-row"><span class="vr-lbl">Designation</span><span class="vr-val">${partnerDesignation}</span></div>
   <div class="vr-row"><span class="vr-lbl">Agreement Accepted On</span><span class="vr-val"><strong>${agreedDateTime}</strong></span></div>
   <div class="vr-row"><span class="vr-lbl">IP Address at Acceptance</span><span class="vr-val">${agreedIp || 'N/A'}</span></div>
 </div>
 
 <!-- FOOTER -->
 <div class="doc-footer">
-  Document Reference: MSA-${Date.now()} &nbsp;&bull;&nbsp; Generated: ${new Date().toLocaleString('en-IN')} &nbsp;&bull;&nbsp; &copy; ${new Date().getFullYear()} Syncro1 Private Limited. All rights reserved.
+  Document Reference: MSA-${Date.now()} &bull; Generated: ${new Date().toLocaleString('en-IN')} &bull; &copy; ${new Date().getFullYear()} Syncro1 Private Limited. All rights reserved.
 </div>
 
 </div>
@@ -719,13 +755,14 @@ class AgreementTemplateService {
       'Partnership': 'Partnership firm registered under the Indian Partnership Act, 1932',
       'LLP': 'Limited Liability Partnership registered under the LLP Act, 2008',
       'Private Limited': 'Private Limited Company incorporated under the Companies Act, 2013',
-      'Agency': 'Recruitment Agency registered under applicable law'
+      'Agency': 'Recruitment Agency registered under applicable law',
+      'Individual': 'Individual residing and operating under the laws of India'
     };
-    return map[type] || type || 'entity registered under applicable law';
+    return map[type] || type || 'company/LLP/partnership/proprietorship/individual organised under the laws of India';
   }
 
   _formatAddress(address) {
-    if (!address) return '[REGISTERED ADDRESS]';
+    if (!address) return '[Principal Address of Talent Partner]';
     if (typeof address === 'string') return address;
     return [
       address.street,
@@ -733,7 +770,7 @@ class AgreementTemplateService {
       address.state,
       address.pincode,
       address.country
-    ].filter(Boolean).join(', ') || '[REGISTERED ADDRESS]';
+    ].filter(Boolean).join(', ') || '[Principal Address of Talent Partner]';
   }
 }
 
