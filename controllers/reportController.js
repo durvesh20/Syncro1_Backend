@@ -280,29 +280,33 @@ exports.generateReport = async (req, res) => {
 
     console.log(`[reports] generate: user=${req.user._id} role=${req.user.role} type=${reportType} fields=${validFields.length} filters=`, JSON.stringify(filters));
 
+    const isCsv = String(format).toLowerCase() === "csv";
+    const ext = isCsv ? "csv" : "xlsx";
+    const fileName = `${reportType.toLowerCase()}_${todayStamp()}.${ext}`;
+
     // No scoping entity -> empty result (still produce a valid file)
     if (cursor === null) {
-      const fileName = `${reportType.toLowerCase()}_${todayStamp()}.xlsx`;
       const rowCount = await reportService.streamReportToResponse({
         res,
         reportType,
         selectedFields: validFields,
         cursor: null,
         fileName,
-        role: req.user.role
+        role: req.user.role,
+        format: isCsv ? "csv" : "excel"
       });
       await writeAuditLog(req, reportType, readableFilters || filters, validFields, rowCount, fileName);
       return;
     }
 
-    const fileName = `${reportType.toLowerCase()}_${todayStamp()}.xlsx`;
     const rowCount = await reportService.streamReportToResponse({
       res,
       reportType,
       selectedFields: validFields,
       cursor,
       fileName,
-      role: req.user.role
+      role: req.user.role,
+      format: isCsv ? "csv" : "excel"
     });
 
     // Best-effort audit (response already streamed, so never throw)

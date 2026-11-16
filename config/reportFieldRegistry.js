@@ -43,6 +43,8 @@ const CANDIDATE_DETAILS_SECTION = {
     { key: 'cand_lastName', label: 'Last Name', path: 'lastName', type: 'string', default: false },
     { key: 'cand_email', label: 'Email', path: 'email', type: 'string', default: true },
     { key: 'cand_mobile', label: 'Mobile', path: 'mobile', type: 'string', default: false },
+    { key: 'cand_dob', label: 'Date of Birth (DOB)', path: 'dob', type: 'string', compute: 'cand_dob', default: false },
+    { key: 'cand_age', label: 'Age (yrs)', path: 'dob', type: 'string', compute: 'cand_age', default: false },
     { key: 'cand_status', label: 'Current Status', path: 'status', type: 'string', default: true },
     { key: 'cand_education', label: 'Education (Candidate Profile)', type: 'string', compute: 'cand_education', default: false },
     { key: 'cand_aiEducation', label: 'Education (Resume)', type: 'string', compute: 'cand_aiEducation', default: false },

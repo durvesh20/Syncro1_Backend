@@ -161,6 +161,52 @@ async function buildFilterMatch(def, filters = {}) {
 
 // ---- value formatting -----------------------------------------------------
 
+function calculateAgeFromDob(dob) {
+  if (!dob) return "";
+  let day, month, year;
+  if (dob instanceof Date) {
+    if (isNaN(dob.getTime())) return "";
+    day = dob.getDate();
+    month = dob.getMonth() + 1;
+    year = dob.getFullYear();
+  } else {
+    const str = String(dob).trim();
+    if (!str) return "";
+    const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    const dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+    if (ymd) {
+      year = parseInt(ymd[1], 10);
+      month = parseInt(ymd[2], 10);
+      day = parseInt(ymd[3], 10);
+    } else if (dmy) {
+      day = parseInt(dmy[1], 10);
+      month = parseInt(dmy[2], 10);
+      year = parseInt(dmy[3], 10);
+    } else {
+      const d = new Date(str);
+      if (isNaN(d.getTime())) return "";
+      day = d.getDate();
+      month = d.getMonth() + 1;
+      year = d.getFullYear();
+    }
+  }
+
+  if (!day || !month || !year || isNaN(day) || isNaN(month) || isNaN(year)) return "";
+
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth() + 1;
+  const currentDay = today.getDate();
+
+  let age = currentYear - year;
+  if (currentMonth < month || (currentMonth === month && currentDay < day)) {
+    age--;
+  }
+
+  if (age < 0 || isNaN(age)) return "";
+  return `${age} yrs`;
+}
+
 function computeValue(doc, fieldDef) {
   switch (fieldDef.compute) {
     case 'tp_status':
@@ -290,6 +336,36 @@ function computeValue(doc, fieldDef) {
       const d = new Date(dt);
       return isNaN(d.getTime()) ? '' : d;
     }
+    case 'cand_dob': {
+      const rawDob = getPath(doc, 'dob') || getPath(doc, 'profile.dob') || getPath(doc, 'dateOfBirth');
+      if (!rawDob) return "";
+      if (rawDob instanceof Date) {
+        if (isNaN(rawDob.getTime())) return "";
+        const day = String(rawDob.getDate()).padStart(2, "0");
+        const month = String(rawDob.getMonth() + 1).padStart(2, "0");
+        const year = rawDob.getFullYear();
+        return `${day}-${month}-${year}`;
+      }
+      const str = String(rawDob).trim();
+      const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+      if (ymd) {
+        return `${String(ymd[3]).padStart(2, "0")}-${String(ymd[2]).padStart(2, "0")}-${ymd[1]}`;
+      }
+      const dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+      if (dmy) {
+        return `${String(dmy[1]).padStart(2, "0")}-${String(dmy[2]).padStart(2, "0")}-${dmy[3]}`;
+      }
+      const d = new Date(str);
+      if (isNaN(d.getTime())) return "";
+      const day = String(d.getDate()).padStart(2, "0");
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const year = d.getFullYear();
+      return `${day}-${month}-${year}`;
+    }
+    case 'cand_age': {
+      const rawDob = getPath(doc, 'dob') || getPath(doc, 'profile.dob') || getPath(doc, 'dateOfBirth');
+      return calculateAgeFromDob(rawDob);
+    }
     case 'rej_rejectedBy': {
       // reviewedByUser is the $lookup result from users collection
       const user = doc.reviewedByUser;
@@ -409,6 +485,12 @@ function buildProjection(reportType, selectedFields, role) {
         case 'cand_fullName':
           proj['firstName'] = 1;
           proj['lastName'] = 1;
+          break;
+        case 'cand_dob':
+        case 'cand_age':
+          proj['dob'] = 1;
+          proj['profile.dob'] = 1;
+          proj['dateOfBirth'] = 1;
           break;
         case 'cand_education':
           proj['profile.education'] = 1;
@@ -542,9 +624,53 @@ function sheetName(reportType) {
  * Keeps memory usage flat (~20MB) and sends HTTP headers/bytes immediately,
  * preventing Nginx/Cloudflare 504 timeouts and unblocking the Node.js event loop.
  */
-async function streamReportToResponse({ res, reportType, selectedFields, cursor, fileName, role }) {
+async function streamReportToResponse({ res, reportType, selectedFields, cursor, fileName, role, format = 'excel' }) {
   const fieldMap = getFieldMap(reportType, role);
   const orderedFields = (selectedFields || []).map((k) => fieldMap[k]).filter(Boolean);
+
+  const isCsv = String(format).toLowerCase() === 'csv' || fileName.endsWith('.csv');
+
+  if (isCsv) {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    // UTF-8 BOM so Excel opens CSV with proper encoding
+    res.write('\uFEFF');
+
+    const escapeCsv = (val) => {
+      if (val === null || val === undefined) return '';
+      let str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+      if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    // Header row
+    res.write(orderedFields.map((f) => escapeCsv(f.label)).join(',') + '\r\n');
+
+    let rowCount = 0;
+    if (cursor) {
+      try {
+        for await (const doc of cursor) {
+          if (res.writableEnded || res.closed) {
+            console.warn(`[reports] Client closed connection during ${fileName}`);
+            break;
+          }
+          const rowValues = orderedFields.map((f) => escapeCsv(formatValue(doc, f)));
+          res.write(rowValues.join(',') + '\r\n');
+          rowCount++;
+        }
+      } catch (streamErr) {
+        console.error(`[reports] Error during cursor streaming for ${fileName}:`, streamErr);
+      }
+    }
+
+    res.end();
+    console.log(`[reports] ${fileName}: ${rowCount} data rows streamed successfully (CSV)`);
+    return rowCount;
+  }
 
   // Set HTTP headers immediately so proxy/browser sees active streaming
   res.setHeader(
