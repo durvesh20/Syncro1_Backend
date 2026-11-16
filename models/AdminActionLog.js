@@ -35,6 +35,7 @@ const adminActionLogSchema = new mongoose.Schema({
             'USER_REGISTERED',
             'USER_LOGIN',
             'STATUS_UPDATED',
+            'DEMO_STATUS_UPDATED',
 
             // Partner actions
             'PARTNER_APPROVED',
@@ -148,7 +149,8 @@ const adminActionLogSchema = new mongoose.Schema({
             'CompanyLogo',
             'Testimonial',
             'Award',
-            'WebsiteContent'
+            'WebsiteContent',
+            'DemoRequest'
         ],
         required: true
     },

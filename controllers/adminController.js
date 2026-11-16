@@ -1911,9 +1911,42 @@ exports.getUsers = async (req, res) => {
       roleQuery = role;
     }
 
+    // Self-heal legacy company sub-admins: set isCompanySubAdmin: true and restore ACTIVE status
+    try {
+      await User.updateMany(
+        { role: { $in: ['company', 'employer', 'client'] }, createdBy: { $ne: null }, isCompanySubAdmin: { $ne: true } },
+        { $set: { isCompanySubAdmin: true } }
+      );
+      await User.updateMany(
+        { role: { $in: ['company', 'employer', 'client'] }, createdBy: { $ne: null }, status: 'ONBOARDING_UNDERPROGRESS' },
+        { $set: { status: 'ACTIVE', isCompanySubAdmin: true } }
+      );
+    } catch (e) {
+      /* ignore migration error */
+    }
+
     const query = {};
     if (roleQuery) {
       query.role = roleQuery;
+    }
+
+    // Exclude sub-admins / team members from company leads & primary company accounts list
+    if (role === 'company') {
+      query.isCompanySubAdmin = { $ne: true };
+      query.createdBy = null;
+    } else if (role === 'talent_partner') {
+      query.createdBy = null;
+    } else if (!role) {
+      query.isCompanySubAdmin = { $ne: true };
+    }
+
+    if (status === 'REGISTERED' || status === 'LEADS') {
+      // In leads list, NEVER show platform sub-admins or company sub-admins
+      query.isCompanySubAdmin = { $ne: true };
+      query.createdBy = null;
+      if (!role) {
+        query.role = { $nin: ['admin', 'sub_admin', 'super_admin'] };
+      }
     }
 
     // Fetch profile status maps for role
@@ -2189,13 +2222,19 @@ exports.getUsers = async (req, res) => {
         vStatus = String(u.status).toUpperCase();
         resolvedStatus = String(u.status).toUpperCase();
       } else {
-        // Not approved, not submitted, not rejected, not suspended, not in lead status -> user is in onboarding
-        vStatus = 'ONBOARDING_UNDERPROGRESS';
-        resolvedStatus = 'ONBOARDING_UNDERPROGRESS';
+        // Guard against mutating sub-admins (both platform sub_admin and company sub-admins)
+        if (u.createdBy || u.isCompanySubAdmin || ['sub_admin', 'admin', 'super_admin'].includes(u.role)) {
+          vStatus = u.status || 'ACTIVE';
+          resolvedStatus = u.status || 'ACTIVE';
+        } else {
+          // Not approved, not submitted, not rejected, not suspended, not in lead status -> user is in onboarding
+          vStatus = 'ONBOARDING_UNDERPROGRESS';
+          resolvedStatus = 'ONBOARDING_UNDERPROGRESS';
 
-        // Self-heal in MongoDB if user document had status === 'ACTIVE'
-        if (String(u.status || '').toUpperCase() === 'ACTIVE') {
-          await User.updateOne({ _id: u._id }, { $set: { status: 'ONBOARDING_UNDERPROGRESS' } });
+          // Self-heal in MongoDB if user document had status === 'ACTIVE'
+          if (String(u.status || '').toUpperCase() === 'ACTIVE') {
+            await User.updateOne({ _id: u._id }, { $set: { status: 'ONBOARDING_UNDERPROGRESS' } });
+          }
         }
       }
 
@@ -2227,15 +2266,20 @@ exports.getUsers = async (req, res) => {
     // Calculate stats
     let stats = null;
     if (role) {
+      const isCompanyRole = role === 'company';
+      const subAdminExclusion = isCompanyRole ? { createdBy: null, isCompanySubAdmin: { $ne: true } } : {};
+
       const activeStageQuery = {
         role: roleQuery,
         _id: { $nin: nonActiveUserIds },
-        status: { $in: ['ONBOARDING_UNDERPROGRESS', 'ACTIVE'] }
+        status: { $in: ['ONBOARDING_UNDERPROGRESS', 'ACTIVE'] },
+        ...subAdminExclusion
       };
 
       const registeredQuery = {
         role: roleQuery,
-        status: { $in: ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED', 'ONBOARDING_UNDERPROGRESS'] }
+        status: { $in: ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED', 'ONBOARDING_UNDERPROGRESS'] },
+        ...subAdminExclusion
       };
 
       const [
@@ -2249,7 +2293,7 @@ exports.getUsers = async (req, res) => {
         registeredMobilePendingCount,
         registeredCompletedOtpCount
       ] = await Promise.all([
-        User.countDocuments({ role: roleQuery, status: { $in: allowedUserStatuses } }),
+        User.countDocuments({ role: roleQuery, status: { $in: allowedUserStatuses }, ...subAdminExclusion }),
         User.countDocuments(activeStageQuery),
         User.countDocuments({ ...activeStageQuery, emailVerified: false }),
         User.countDocuments({ ...activeStageQuery, emailVerified: true, mobileVerified: false }),

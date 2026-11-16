@@ -166,9 +166,9 @@ class NotificationEngine {
    * Email template builder
    */
   _buildEmailTemplate(title, message, actionUrl) {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const productUrl = process.env.PRODUCT_URL || process.env.FRONTEND_URL;
     const fullActionUrl = actionUrl
-      ? (actionUrl.startsWith('http') ? actionUrl : `${frontendUrl}${actionUrl}`)
+      ? (actionUrl.startsWith('http') ? actionUrl : `${productUrl}${actionUrl}`)
       : null;
 
     return `

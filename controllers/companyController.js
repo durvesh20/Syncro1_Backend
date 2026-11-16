@@ -4248,9 +4248,10 @@ exports.createSubAdmin = async (req, res) => {
       mobile: normalizedMobile,
       password: autoPassword,
       role: 'company',
-      status,
+      status: status || 'ACTIVE',
       permissions: [...new Set(finalPermissions)],
       createdBy: req.user._id,
+      isCompanySubAdmin: true,
       emailVerified: true,
       mobileVerified: true,
       isPasswordChanged: false // Must change on first login

@@ -71,6 +71,13 @@ const userSchema = new mongoose.Schema({
     trim: true
   }],
 
+  // Company sub-admin flag (distinguishes company sub-admins / team members from primary business accounts)
+  isCompanySubAdmin: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+
   // Lead validity status (for Talent Partner and Client/Company leads - no default selection)
   leadValidity: {
     type: String,
