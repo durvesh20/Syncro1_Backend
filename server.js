@@ -46,6 +46,7 @@ require('./models/ApiLog');
 require('./models/IntegrationEvent');
 require('./models/PartnerTournament');
 require('./models/PartnerPointEvent');
+require('./models/DemoRequest');
 
 const app = express();
 

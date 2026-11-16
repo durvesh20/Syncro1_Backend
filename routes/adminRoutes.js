@@ -10,6 +10,8 @@ const {
   verifyCompany,
   getUsers,
   updateUserStatus,
+  updateLeadValidity,
+  sendUserTempPassword,
   getAnalytics,
   createAdmin,
 
@@ -151,6 +153,16 @@ router.put(
   '/users/:id/status',
   checkPermission(PERMISSIONS.UPDATE_USER_STATUS),
   updateUserStatus
+);
+
+router.put(
+  '/users/:id/lead-validity',
+  updateLeadValidity
+);
+
+router.post(
+  '/users/:id/send-temp-password',
+  sendUserTempPassword
 );
 
 // ==================== JOB APPROVAL ====================

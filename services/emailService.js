@@ -17,6 +17,18 @@ class EmailService {
     this.senderEmail = process.env.BREVO_SENDER_EMAIL || 'developer@syncro1.com';
   }
 
+  get frontendUrl() {
+    return process.env.FRONTEND_URL;
+  }
+
+  get productUrl() {
+    return process.env.PRODUCT_URL;
+  }
+
+  get loginUrl() {
+    return `${this.productUrl}/auth/login`;
+  }
+
   async sendEmail(options) {
     // Guard: never send to a missing/invalid email — prevents Brevo 400 "email is missing in to"
     if (!options.to || typeof options.to !== 'string' || !options.to.includes('@')) {
@@ -206,10 +218,10 @@ class EmailService {
               ⚠️ <strong>Important:</strong> You will be required to change this password immediately after your first login.
             </div>
             <p style="text-align: center;">
-              <a href="${process.env.FRONTEND_URL}/login" class="button">Login to Your Account →</a>
+              <a href="${this.loginUrl}" class="button">Login to Your Account →</a>
             </p>
             <p style="margin-top: 30px;">If the button doesn't work, copy and paste this link in your browser:</p>
-            <p style="color: #667eea; word-break: break-all;">${process.env.FRONTEND_URL}/login</p>
+            <p style="color: #667eea; word-break: break-all;">${this.loginUrl}</p>
           </div>
           <div class="footer">
             <p>© ${new Date().getFullYear()} Syncro1. All rights reserved.</p>
@@ -229,8 +241,8 @@ class EmailService {
   async sendVerificationApproved(email, name, role) {
     const isPartner = role === 'talent_partner';
     const dashboardUrl = isPartner
-      ? `${process.env.FRONTEND_URL}/dashboard/talent-partner`
-      : `${process.env.FRONTEND_URL}/dashboard/company`;
+      ? `${this.productUrl}/dashboard/talent-partner`
+      : `${this.productUrl}/dashboard/company`;
 
     console.log('=================================================');
     console.log('✅ Verification Approved Email');
@@ -333,7 +345,7 @@ class EmailService {
             </div>
             <p>Please update your profile with the correct information and resubmit for verification.</p>
             <p style="text-align: center; margin-top: 30px;">
-              <a href="${process.env.FRONTEND_URL}/login" class="button">Update Profile</a>
+              <a href="${this.loginUrl}" class="button">Update Profile</a>
             </p>
           </div>
           <div class="footer">
@@ -405,7 +417,7 @@ class EmailService {
             </div>
 
             <p style="text-align: center;">
-              <a href="${process.env.FRONTEND_URL}/company/jobs/${jobId}" class="button">
+              <a href="${this.productUrl}/company/jobs/${jobId}" class="button">
                 View Job Dashboard →
               </a>
             </p>
@@ -474,7 +486,7 @@ class EmailService {
             </div>
 
             <p style="text-align: center;">
-              <a href="${process.env.FRONTEND_URL}/company/jobs/${jobId}/edit" class="button">
+              <a href="${this.productUrl}/company/jobs/${jobId}/edit" class="button">
                 Edit Job Posting →
               </a>
             </p>
@@ -558,7 +570,7 @@ class EmailService {
             ` : ''}
 
             <p style="text-align: center;">
-              <a href="${process.env.FRONTEND_URL}/company/jobs/${jobId}" class="button">
+              <a href="${this.productUrl}/company/jobs/${jobId}" class="button">
                 View Updated Job →
               </a>
             </p>
@@ -616,7 +628,7 @@ class EmailService {
             ` : ''}
 
             <p style="text-align: center;">
-              <a href="${process.env.FRONTEND_URL}/company/jobs/${jobId}" class="button">
+              <a href="${this.productUrl}/company/jobs/${jobId}" class="button">
                 View Job Details →
               </a>
             </p>
@@ -684,7 +696,7 @@ class EmailService {
             </div>
 
             <p style="text-align: center;">
-              <a href="${process.env.FRONTEND_URL}/company/jobs/create" class="button">
+              <a href="${this.productUrl}/company/jobs/create" class="button">
                 Create New Job Posting →
               </a>
             </p>
@@ -704,12 +716,12 @@ class EmailService {
     });
   }
 
-  async sendSubAdminWelcome(email, firstName, lastName, password, permissions = []) {
+  async sendSubAdminWelcome(email, firstName, lastName, password, permissions = [], roleName = "Sub-Admin") {
     const name = `${firstName} ${lastName}`.trim() || email;
-    const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:9696'}/login`;
+    const loginUrl = this.loginUrl;
 
     console.log('=================================================');
-    console.log('🎉 Sub-Admin Welcome Email');
+    console.log(`🎉 ${roleName} Welcome Email`);
     console.log(`   To: ${email}`);
     console.log(`   Name: ${name}`);
     console.log(`   Temp Password: ${password}`);
@@ -747,7 +759,7 @@ class EmailService {
                   <td style="padding:36px 40px;">
                     <p style="margin:0 0 20px; font-size:16px; color:#374151;">Hi <strong>${name}</strong>,</p>
                     <p style="margin:0 0 24px; font-size:15px; color:#6b7280; line-height:1.6;">
-                      You've been added as a <strong>Sub-Admin</strong> on the Syncro1 platform. Below are your login credentials to get started.
+                      You've been added as an <strong>${roleName}</strong> on the Syncro1 platform. Below are your login credentials to get started.
                     </p>
 
                     <!-- Credentials Box -->

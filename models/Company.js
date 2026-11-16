@@ -24,21 +24,28 @@ const companySchema = new mongoose.Schema({
   },
   designation: {
     type: String,
-    required: [true, 'Designation is required']
+    required: false,
+    default: ''
   },
   department: {
     type: String,
     trim: true,
-    required: true
+    required: false,
+    default: ''
   },
-  linkedinProfile: String,
+  linkedinProfile: {
+    type: String,
+    default: ''
+  },
   city: {
     type: String,
-    required: true
+    required: false,
+    default: ''
   },
   state: {
     type: String,
-    required: true
+    required: false,
+    default: ''
   },
 
   // ==================== 2. COMPANY INFORMATION ====================
@@ -202,6 +209,7 @@ const companySchema = new mongoose.Schema({
   verificationNotes: String,
   verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   verifiedAt: Date,
+  submittedAt: Date,
   rejectionReason: String,
   assignedTo: {
     type: mongoose.Schema.Types.ObjectId,
@@ -218,6 +226,7 @@ const companySchema = new mongoose.Schema({
     legalConsents: { type: Boolean, default: false },
     documents: { type: Boolean, default: false }
   },
+  basicInfoCompletedAt: Date,
 
   // ==================== METRICS ====================
   metrics: {

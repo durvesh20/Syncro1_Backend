@@ -75,6 +75,16 @@ exports.submitDemoRequest = async (req, res) => {
       notes: notes ? String(notes).trim() : '',
       referenceCode,
       status: 'pending',
+      statusHistory: [
+        {
+          status: 'pending',
+          previousStatus: '',
+          changedAt: new Date(),
+          changedByName: name.trim(),
+          changedByEmail: email.trim().toLowerCase(),
+          notes: 'Demo request submitted via walkthrough form'
+        }
+      ],
       ipAddress: req.ip || req.connection?.remoteAddress || '',
       userAgent: req.get('user-agent') || ''
     });
@@ -144,6 +154,8 @@ exports.getDemoRequests = async (req, res) => {
     const limitNum = parseInt(limit, 10) || 50;
     const skip = (pageNum - 1) * limitNum;
 
+    const stakeholderMatch = query.stakeholder ? { stakeholder: query.stakeholder } : {};
+
     const [
       requests,
       total,
@@ -151,15 +163,23 @@ exports.getDemoRequests = async (req, res) => {
       companyCount,
       partnerCount,
       pendingCount,
-      scheduledCount
+      scheduledCount,
+      contactedCount,
+      completedCount,
+      cancelledCount,
+      invalidLeadCount
     ] = await Promise.all([
       DemoRequest.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
       DemoRequest.countDocuments(query),
       DemoRequest.countDocuments(),
       DemoRequest.countDocuments({ stakeholder: 'client' }),
       DemoRequest.countDocuments({ stakeholder: 'partner' }),
-      DemoRequest.countDocuments({ status: 'pending' }),
-      DemoRequest.countDocuments({ status: 'scheduled' })
+      DemoRequest.countDocuments({ ...stakeholderMatch, status: 'pending' }),
+      DemoRequest.countDocuments({ ...stakeholderMatch, status: 'scheduled' }),
+      DemoRequest.countDocuments({ ...stakeholderMatch, status: 'contacted' }),
+      DemoRequest.countDocuments({ ...stakeholderMatch, status: 'completed' }),
+      DemoRequest.countDocuments({ ...stakeholderMatch, status: 'cancelled' }),
+      DemoRequest.countDocuments({ ...stakeholderMatch, status: { $in: ['invalid_lead', 'invalid'] } })
     ]);
 
     return res.status(200).json({
@@ -173,7 +193,12 @@ exports.getDemoRequests = async (req, res) => {
         company: companyCount,
         partner: partnerCount,
         pending: pendingCount,
-        scheduled: scheduledCount
+        scheduled: scheduledCount,
+        contacted: contactedCount,
+        completed: completedCount,
+        cancelled: cancelledCount,
+        invalid_lead: invalidLeadCount,
+        invalid: invalidLeadCount
       },
       data: requests
     });
@@ -194,8 +219,8 @@ exports.getDemoRequests = async (req, res) => {
  */
 exports.updateDemoStatus = async (req, res) => {
   try {
-    const { status } = req.body;
-    const validStatuses = ['pending', 'contacted', 'scheduled', 'completed', 'cancelled'];
+    const { status, notes } = req.body;
+    const validStatuses = ['pending', 'contacted', 'scheduled', 'completed', 'cancelled', 'invalid_lead', 'invalid'];
 
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
@@ -204,17 +229,66 @@ exports.updateDemoStatus = async (req, res) => {
       });
     }
 
-    const demoDoc = await DemoRequest.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true, runValidators: true }
-    );
+    const demoDoc = await DemoRequest.findById(req.params.id);
 
     if (!demoDoc) {
       return res.status(404).json({
         success: false,
         message: 'Demo request not found'
       });
+    }
+
+    const previousStatus = demoDoc.status || 'pending';
+    const actorUser = req.user;
+    const actorName = actorUser
+      ? `${actorUser.firstName || ''} ${actorUser.lastName || ''}`.trim() || actorUser.email
+      : 'Admin';
+    const actorEmail = actorUser?.email || 'admin@syncro1.com';
+    const actorId = actorUser?._id || null;
+
+    demoDoc.status = status;
+
+    if (!Array.isArray(demoDoc.statusHistory)) {
+      demoDoc.statusHistory = [];
+    }
+
+    const formattedPrevious = previousStatus.replace(/_/g, ' ');
+    const formattedNew = status.replace(/_/g, ' ');
+    const defaultNote = `Status changed from ${formattedPrevious} to ${formattedNew} by ${actorName}`;
+
+    demoDoc.statusHistory.push({
+      status,
+      previousStatus,
+      changedAt: new Date(),
+      changedBy: actorId,
+      changedByName: actorName,
+      changedByEmail: actorEmail,
+      notes: notes || defaultNote
+    });
+
+    await demoDoc.save();
+
+    // Audit log
+    try {
+      const auditService = require('../services/auditService');
+      if (req.user) {
+        await auditService.log({
+          actor: req.user._id,
+          actorRole: req.user.role || 'admin',
+          actorEmail: req.user.email,
+          action: 'DEMO_STATUS_UPDATED',
+          entityType: 'DemoRequest',
+          entityId: demoDoc._id,
+          description: `Demo request (${demoDoc.referenceCode || demoDoc.name}) status updated from ${previousStatus} to ${status}`,
+          before: { status: previousStatus },
+          after: { status },
+          notes: notes || defaultNote,
+          ipAddress: req.ip || req.connection?.remoteAddress,
+          userAgent: req.get('user-agent')
+        });
+      }
+    } catch (auditErr) {
+      console.warn('[DEMO] Audit log non-fatal error:', auditErr.message);
     }
 
     return res.status(200).json({

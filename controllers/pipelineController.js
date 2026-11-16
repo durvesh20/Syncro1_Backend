@@ -1,4 +1,4 @@
-/**
+  /**
  * pipelineController.js
  * Phase 1 endpoints — application-level pipeline actions.
  * All DB writes go through the FSM; direct status mutation is forbidden.
@@ -1050,7 +1050,6 @@ async function syncCandidateRoundsWithJobTemplate(candidate, options = {}) {
     const candTemplateStr = JSON.stringify((candidate.pipelineTemplate || []).map(r => r.roundType));
 
     if (jobTemplateStr !== candTemplateStr) {
-      const isPrePipelineReview = ['SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW', 'DRAFT', 'CONSENT_PENDING', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT'].includes(candidate.status);
       candidate.pipelineTemplate = normalizedJobTemplate;
       candidate.rounds = normalizedJobTemplate.map((r, i) => ({
         roundType: r.roundType,

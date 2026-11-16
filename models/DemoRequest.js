@@ -52,9 +52,41 @@ const demoRequestSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'contacted', 'scheduled', 'completed', 'cancelled'],
+      enum: ['pending', 'contacted', 'scheduled', 'completed', 'cancelled', 'invalid_lead', 'invalid'],
       default: 'pending'
     },
+    statusHistory: [
+      {
+        status: {
+          type: String,
+          required: true
+        },
+        previousStatus: {
+          type: String,
+          default: ''
+        },
+        changedAt: {
+          type: Date,
+          default: Date.now
+        },
+        changedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User'
+        },
+        changedByName: {
+          type: String,
+          default: ''
+        },
+        changedByEmail: {
+          type: String,
+          default: ''
+        },
+        notes: {
+          type: String,
+          default: ''
+        }
+      }
+    ],
     ipAddress: {
       type: String,
       trim: true,
