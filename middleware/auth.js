@@ -93,7 +93,12 @@ exports.authorize = (...roles) => {
 // Status check middleware
 exports.checkStatus = (...statuses) => {
   return (req, res, next) => {
-    if (!statuses.includes(req.user.status)) {
+    // Admins and Super Admins bypass status checks
+    if (['admin', 'super_admin'].includes(req.user?.role)) {
+      return next();
+    }
+
+    if (!statuses.includes(req.user?.status)) {
       return res.status(403).json({
         success: false,
         message: `Account status must be one of: ${statuses.join(', ')}`
@@ -161,13 +166,39 @@ exports.checkCompanyPermission = (permission) => {
       });
     }
 
+    // Admins and Super Admins bypass company permission checks
+    if (['admin', 'super_admin'].includes(req.user.role)) {
+      return next();
+    }
+
+    // Platform sub_admin bypasses if they have candidate view/manage permissions or general admin access
+    if (req.user.role === 'sub_admin') {
+      const userPermissions = req.user.permissions || [];
+      if (
+        userPermissions.includes('VIEW_ALL_CANDIDATES') ||
+        userPermissions.includes('MANAGE_ALL_CANDIDATES') ||
+        userPermissions.includes('VIEW_CANDIDATES') ||
+        userPermissions.includes('VIEW_APPLICANTS')
+      ) {
+        return next();
+      }
+    }
+
     // Main/parent company user bypasses all permission checks
     if (!req.user.createdBy) {
       return next();
     }
 
     const userPermissions = req.user.permissions || [];
-    const requiredPermissions = Array.isArray(permission) ? permission : [permission];
+    const requiredPermissions = Array.isArray(permission) ? [...permission] : [permission];
+
+    // Treat VIEW_CANDIDATES and VIEW_APPLICANTS interchangeably for candidate operations
+    if (requiredPermissions.includes('VIEW_CANDIDATES') && !requiredPermissions.includes('VIEW_APPLICANTS')) {
+      requiredPermissions.push('VIEW_APPLICANTS');
+    }
+    if (requiredPermissions.includes('VIEW_APPLICANTS') && !requiredPermissions.includes('VIEW_CANDIDATES')) {
+      requiredPermissions.push('VIEW_CANDIDATES');
+    }
 
     const hasPermission = requiredPermissions.some(p => userPermissions.includes(p));
 
