@@ -4338,17 +4338,31 @@ exports.createSubAdmin = async (req, res) => {
       dataScope = 'OWN'
     } = req.body;
 
-    if (!email || !mobile) {
+    if (!firstName || !firstName.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'Email and WhatsApp number are required'
+        message: 'First name is required'
       });
     }
 
-    if (!firstName.trim() || !lastName.trim()) {
+    if (!lastName || !lastName.trim()) {
       return res.status(400).json({
         success: false,
-        message: 'First name and last name are required'
+        message: 'Last name is required'
+      });
+    }
+
+    if (!email || !email.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email address is required'
+      });
+    }
+
+    if (!mobile || !mobile.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'WhatsApp number is required'
       });
     }
 

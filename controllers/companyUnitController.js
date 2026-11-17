@@ -250,9 +250,90 @@ exports.updateCompanyUnit = async (req, res) => {
       }
     }
 
-    const { name, code, description, head, status } = req.body;
+    const { name, code, description, parentUnit, head, status } = req.body;
 
-    if (name !== undefined) unit.name = name.trim();
+    let parentChanged = false;
+    const oldPath = unit.path;
+
+    // Handle parentUnit update / re-parenting
+    if (parentUnit !== undefined) {
+      const currentParentId = unit.parentUnit ? String(unit.parentUnit) : null;
+      const targetParentId = parentUnit && parentUnit !== 'ROOT' ? String(parentUnit) : null;
+
+      if (targetParentId !== currentParentId) {
+        // Prevent setting itself as parent
+        if (targetParentId && targetParentId === String(unit._id)) {
+          return res.status(400).json({
+            success: false,
+            message: 'A unit cannot be its own parent unit.',
+          });
+        }
+
+        let newParentUnitDoc = null;
+        if (targetParentId) {
+          newParentUnitDoc = await CompanyUnit.findOne({
+            _id: targetParentId,
+            company: company._id,
+            status: 'ACTIVE',
+          });
+
+          if (!newParentUnitDoc) {
+            return res.status(404).json({
+              success: false,
+              message: 'Selected parent unit not found.',
+            });
+          }
+
+          // Cycle check: Cannot move unit under any of its own descendants
+          if (unit.path && newParentUnitDoc.path && newParentUnitDoc.path.startsWith(unit.path)) {
+            return res.status(400).json({
+              success: false,
+              message: 'Circular hierarchy detected: Cannot move a unit under one of its own sub-units.',
+            });
+          }
+        }
+
+        // Sub-admin (Unit Head) branch restriction
+        if (actor.isCompanySubAdmin) {
+          if (!targetParentId) {
+            return res.status(403).json({
+              success: false,
+              message: 'Unit Heads cannot move a unit to the root level. Only Primary Company Admin can do this.',
+            });
+          }
+          const actorUnitDoc = await CompanyUnit.findById(actor.unit);
+          if (!actorUnitDoc || !newParentUnitDoc.path.startsWith(actorUnitDoc.path)) {
+            return res.status(403).json({
+              success: false,
+              message: 'You can only move units within your assigned branch.',
+            });
+          }
+        }
+
+        unit.parentUnit = targetParentId || null;
+        parentChanged = true;
+      }
+    }
+
+    // Name and duplicate check under current or new parent
+    const finalName = name !== undefined ? name.trim() : unit.name;
+    if (name !== undefined || parentChanged) {
+      const duplicate = await CompanyUnit.findOne({
+        company: company._id,
+        name: finalName,
+        parentUnit: unit.parentUnit || null,
+        _id: { $ne: unit._id },
+        status: 'ACTIVE',
+      });
+      if (duplicate) {
+        return res.status(400).json({
+          success: false,
+          message: 'A unit with this name already exists under the selected parent unit.',
+        });
+      }
+      unit.name = finalName;
+    }
+
     if (code !== undefined) unit.code = code.trim().toUpperCase();
     if (description !== undefined) unit.description = description.trim();
     if (status !== undefined) unit.status = status;
@@ -287,6 +368,21 @@ exports.updateCompanyUnit = async (req, res) => {
     }
 
     await unit.save();
+
+    // If parent changed and path changed, propagate path & level updates to all descendants
+    if (parentChanged && oldPath && oldPath !== unit.path) {
+      const descendants = await CompanyUnit.find({
+        company: company._id,
+        path: new RegExp('^' + oldPath),
+        _id: { $ne: unit._id },
+      });
+
+      for (const desc of descendants) {
+        desc.path = desc.path.replace(oldPath, unit.path);
+        desc.level = desc.path.split('/').filter(Boolean).length;
+        await desc.save();
+      }
+    }
 
     const populatedUnit = await CompanyUnit.findById(unit._id)
       .populate('head', 'firstName lastName email mobile jobTitle')
