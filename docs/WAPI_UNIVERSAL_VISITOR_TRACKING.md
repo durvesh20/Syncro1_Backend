@@ -12,7 +12,7 @@ The browser loads one shared script from the platform backend:
 
 `https://devapi.syncro1.com/tracking/wapi-tracking.js`
 
-The script posts browser events to the same API origin:
+The script posts browser events to the origin from which the script was loaded. It also accepts an explicit window.SYNCRO1_WAPI_TRACKING_API override. For local testing, load the script from localhost so the browser never calls the production API:
 
 - `POST https://devapi.syncro1.com/api/wapi-tracking/visitor`
 - `POST https://devapi.syncro1.com/api/wapi-tracking/event` (only when a valid campaign token is present)
