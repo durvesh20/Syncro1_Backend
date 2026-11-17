@@ -70,6 +70,16 @@ const {
 } = require('../controllers/companyController');
 
 const {
+  getCompanyTree,
+  getCompanyUnits,
+  createCompanyUnit,
+  updateCompanyUnit,
+  deleteCompanyUnit,
+  transferUnitMembers,
+  getReportingManagerOptions,
+} = require('../controllers/companyUnitController');
+
+const {
   pipelineShortlist,
   pipelineReject,
   pipelineReShortlist,
@@ -116,39 +126,96 @@ const {
 router.use(protect);
 router.use(authorize('company', 'admin', 'sub_admin'));
 
-// Middleware to block sub-admins from managing sub-admins
-const blockSubAdmins = (req, res, next) => {
-  if (req.user && req.user.createdBy) {
+// Middleware to set up Company Context and Hierarchical Scoping
+const setupCompanyContextAndScoping = async (req, res, next) => {
+  try {
+    if (req.user && req.user.createdBy) {
+      req.subAdminUser = req.user;
+      req.realUser = req.user;
+
+      const Company = require('../models/Company');
+      const { computeScopedUserIds } = require('../services/companyTreeService');
+
+      const company = await Company.findOne({ user: req.user.createdBy });
+      if (company) {
+        req.company = company;
+        req.scopedUserIds = await computeScopedUserIds(req.user, company._id);
+      }
+
+      // Preserve req.user._id as req.user.createdBy for backward-compatibility with Company queries
+      const userObj = req.user.toObject ? req.user.toObject() : req.user;
+      req.user = {
+        ...userObj,
+        _id: req.user.createdBy,
+        realId: req.user._id,
+        permissions: req.user.permissions,
+        createdBy: req.user.createdBy
+      };
+    } else if (req.user) {
+      req.realUser = req.user;
+      req.subAdminUser = null;
+      req.scopedUserIds = null; // Unrestricted access for root company admin
+    }
+    next();
+  } catch (err) {
+    console.error('[COMPANY-AUTH] Setup context error:', err);
+    next();
+  }
+};
+
+router.use(setupCompanyContextAndScoping);
+
+// Middleware: Allows Primary Company Admin or Unit Heads to manage team/units
+const authorizeTeamManagement = (req, res, next) => {
+  const actor = req.subAdminUser || req.realUser || req.user;
+  if (!actor) {
+    return res.status(401).json({ success: false, message: 'Authentication required' });
+  }
+
+  // Primary company account has full management authority
+  if (!actor.isCompanySubAdmin) {
+    return next();
+  }
+
+  // Unit Heads are authorized to view tree, units, and manage members/sub-units in their unit
+  if (actor.isUnitHead) {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: 'Only Company Admins or Unit Heads are authorized to manage team units and members.'
+  });
+};
+
+// Middleware: Strictly requires Primary Company Admin
+const requirePrimaryCompanyAdmin = (req, res, next) => {
+  const actor = req.subAdminUser || req.realUser || req.user;
+  if (actor && actor.isCompanySubAdmin) {
     return res.status(403).json({
       success: false,
-      message: 'Only the main company account is authorized to manage sub-admins.'
+      message: 'Only the Primary Company Admin is authorized to perform this operation.'
     });
   }
   next();
 };
 
-// ==================== COMPANY SUB-ADMIN ROUTES ====================
-router.get('/sub-admins/permissions', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getPermissionsMeta);
-router.post('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, createSubAdmin);
-router.get('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getSubAdmins);
-router.get('/sub-admins/:id', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, getSubAdminById);
-router.put('/sub-admins/:id', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, updateSubAdmin);
-router.put('/sub-admins/:id/status', checkStatus('VERIFIED', 'ACTIVE'), blockSubAdmins, updateSubAdminStatus);
+// ==================== COMPANY ORGANIZATION TREE & UNITS ====================
+router.get('/tree', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, getCompanyTree);
+router.get('/units', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, getCompanyUnits);
+router.post('/units', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, createCompanyUnit);
+router.put('/units/:id', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, updateCompanyUnit);
+router.delete('/units/:id', checkStatus('VERIFIED', 'ACTIVE'), requirePrimaryCompanyAdmin, deleteCompanyUnit);
+router.post('/units/:id/transfer-members', checkStatus('VERIFIED', 'ACTIVE'), requirePrimaryCompanyAdmin, transferUnitMembers);
+router.get('/users/managers-options', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, getReportingManagerOptions);
 
-// Middleware to override req.user._id for sub-admins so they act on behalf of the parent company
-router.use((req, res, next) => {
-  if (req.user && req.user.createdBy) {
-    req.subAdminUser = req.user;
-    const userObj = req.user.toObject ? req.user.toObject() : req.user;
-    req.user = {
-      ...userObj,
-      _id: req.user.createdBy,
-      permissions: req.user.permissions,
-      createdBy: req.user.createdBy
-    };
-  }
-  next();
-});
+// ==================== COMPANY TEAM / SUB-ADMIN ROUTES ====================
+router.get('/sub-admins/permissions', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, getPermissionsMeta);
+router.post('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, createSubAdmin);
+router.get('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, getSubAdmins);
+router.get('/sub-admins/:id', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, getSubAdminById);
+router.put('/sub-admins/:id', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, updateSubAdmin);
+router.put('/sub-admins/:id/status', checkStatus('VERIFIED', 'ACTIVE'), requirePrimaryCompanyAdmin, updateSubAdminStatus);
 
 // ==================== DASHBOARD ====================
 router.get('/dashboard', getDashboard);

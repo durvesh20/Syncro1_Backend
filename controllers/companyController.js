@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Company = require("../models/Company");
+const CompanyUnit = require("../models/CompanyUnit");
 const User = require("../models/User");
 const Job = require("../models/Job");
 const Candidate = require("../models/Candidate");
@@ -10,6 +11,11 @@ const InterviewSlot = require("../models/InterviewSlot");
 const whatsappService = require("../services/whatsappService");
 const notifyCRM = require('../utils/notifyCRM');
 const auditService = require('../services/auditService');
+const {
+  validateReportingLine,
+  recordUnitChange,
+  recordManagerChange,
+} = require("../services/companyTreeService");
 const {
   COMPANY_ALL_PERMISSIONS,
   COMPANY_PERMISSION_GROUPS,
@@ -972,20 +978,32 @@ exports.getDashboard = async (req, res) => {
     // NOTE: Deadline-based auto ON_HOLD removed intentionally.
     // Status is changed only via explicit action.
 
+    // Determine scoping based on caller
+    const isScoped = req.scopedUserIds && Array.isArray(req.scopedUserIds);
+    const jobFilter = { company: company._id };
+    const candidateFilter = { company: company._id };
+
+    if (isScoped) {
+      jobFilter.postedBy = { $in: req.scopedUserIds };
+      const accessibleJobs = await Job.find({ company: company._id, postedBy: { $in: req.scopedUserIds } }).select('_id');
+      const accessibleJobIds = accessibleJobs.map(j => j._id);
+      candidateFilter.job = { $in: accessibleJobIds };
+    }
+
     const jobStats = await Job.aggregate([
-      { $match: { company: company._id } },
+      { $match: jobFilter },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
 
     // ✅ NEW: Approval status breakdown
     const approvalStats = await Job.aggregate([
-      { $match: { company: company._id } },
+      { $match: jobFilter },
       { $group: { _id: "$status", count: { $sum: 1 } } }
     ]);
 
     // ✅ NEW: Get rejected jobs for alerts
     const rejectedJobs = await Job.find({
-      company: company._id,
+      ...jobFilter,
       status: 'REJECTED'
     })
       .select('title rejectionReason rejectedAt')
@@ -994,7 +1012,7 @@ exports.getDashboard = async (req, res) => {
 
     // ✅ NEW: Get pending approval jobs
     const pendingApprovalJobs = await Job.find({
-      company: company._id,
+      ...jobFilter,
       status: 'PENDING_APPROVAL'
     })
       .select('title createdAt')
@@ -1004,7 +1022,7 @@ exports.getDashboard = async (req, res) => {
     const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED'];
 
     const recentCandidates = await Candidate.find({
-      company: company._id,
+      ...candidateFilter,
       status: { $nin: HIDDEN_STATUSES }
     })
       .populate("job", "title")
@@ -1014,7 +1032,7 @@ exports.getDashboard = async (req, res) => {
     const hiringFunnel = await Candidate.aggregate([
       {
         $match: {
-          company: company._id,
+          ...candidateFilter,
           status: { $nin: HIDDEN_STATUSES }
         }
       },
@@ -1022,9 +1040,95 @@ exports.getDashboard = async (req, res) => {
     ]);
 
     const activeJobs = await Job.find({
-      company: company._id,
+      ...jobFilter,
       status: "ACTIVE",
     }).limit(5);
+
+    // Real-time Dashboard Stats calculations with validation
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const INACTIVE_STATUSES = [
+      ...HIDDEN_STATUSES,
+      'REJECTED', 'CLIENT_SCREEN_REJECT', 'CLIENT_REJECTED', 'COMPANY_REJECTED',
+      'ROUND_REJECTED', 'HR_REJECTED', 'ASSESSMENT_FAILED', 'OFFER_REJECTED',
+      'OFFER_DECLINED', 'CLIENT_PORTAL_DUPLICATE', 'COMPANY_PORTAL_DUPLICATE',
+      'CANDIDATE_DROP', 'WITHDRAWN', 'JOINED', 'NOT_JOINED'
+    ];
+
+    const [
+      totalRequirements,
+      activeRequirements,
+      totalCandidates,
+      activeCandidates,
+      interviewStatsAgg,
+      totalOfferedAndAccepted,
+      totalJoined,
+      totalSubAdmins
+    ] = await Promise.all([
+      Job.countDocuments(jobFilter),
+      Job.countDocuments({ ...jobFilter, status: 'ACTIVE' }),
+      Candidate.countDocuments({ ...candidateFilter, status: { $nin: HIDDEN_STATUSES } }),
+      Candidate.countDocuments({ ...candidateFilter, status: { $nin: INACTIVE_STATUSES } }),
+      InterviewSlot.aggregate([
+        { $match: { company: company._id, status: { $ne: 'CANCELLED' } } },
+        { $unwind: '$bookedCandidates' },
+        { $match: { 'bookedCandidates.bookingStatus': { $ne: 'CANCELLED' } } },
+        {
+          $group: {
+            _id: null,
+            totalScheduled: { $sum: 1 },
+            todayScheduled: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $gte: ['$date', todayStart] },
+                      { $lte: ['$date', todayEnd] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            }
+          }
+        }
+      ]),
+      Candidate.countDocuments({
+        ...candidateFilter,
+        status: { $in: ['OFFER_ACCEPTED', 'ONBOARDING', 'OFFERED', 'OFFER_SENT'] }
+      }),
+      Candidate.countDocuments({
+        ...candidateFilter,
+        status: { $in: ['JOINED', 'HIRED'] }
+      }),
+      isScoped
+        ? User.countDocuments({ _id: { $in: req.scopedUserIds }, status: { $ne: 'DELETED' } })
+        : User.countDocuments({
+            role: 'company',
+            createdBy: company.user?._id || company.user,
+            isCompanySubAdmin: true,
+            status: { $ne: 'DELETED' }
+          })
+    ]);
+
+    const totalInterviewsScheduled = interviewStatsAgg[0]?.totalScheduled || 0;
+    const todaysInterviewsScheduled = interviewStatsAgg[0]?.todayScheduled || 0;
+
+    const stats = {
+      totalRequirements,
+      activeRequirements,
+      totalCandidates,
+      activeCandidates,
+      totalInterviewsScheduled,
+      todaysInterviewsScheduled,
+      totalOfferedAndAccepted,
+      totalJoined,
+      totalSubAdmins
+    };
 
     const profileCompletion = company.profileCompletion ? (company.profileCompletion.toObject ? company.profileCompletion.toObject() : company.profileCompletion) : {};
 
@@ -1049,7 +1153,14 @@ exports.getDashboard = async (req, res) => {
             percentage: completionPercentage,
           },
         },
-        metrics: company.metrics,
+        metrics: {
+          ...(company.metrics?.toObject ? company.metrics.toObject() : (company.metrics || {})),
+          ...stats,
+          totalJobs: totalRequirements,
+          activeJobsCount: activeRequirements,
+          totalHires: totalJoined
+        },
+        stats,
         jobStats,
 
         // ✅ NEW: Approval stats
@@ -1157,10 +1268,12 @@ exports.createJob = async (req, res) => {
       }
     }
 
+    const actor = req.subAdminUser || req.realUser || req.user;
     const jobData = {
       ...req.body,
       company: company._id,
-      postedBy: req.user._id,
+      postedBy: actor._id,
+      unit: actor.unit || null,
       status: "DRAFT",
       eligiblePlans,
     };
@@ -1257,6 +1370,9 @@ exports.getJobs = async (req, res) => {
     const { status, search } = req.query;
 
     const query = { company: company._id };
+    if (req.scopedUserIds && Array.isArray(req.scopedUserIds)) {
+      query.postedBy = { $in: req.scopedUserIds };
+    }
     if (status) {
       const normalizedStatus = String(status).toUpperCase().trim().replace(/[\s-]+/g, '_');
       if (normalizedStatus === 'ACTIVE') {
@@ -1921,15 +2037,62 @@ exports.getAllCandidates = async (req, res) => {
     const { status, search, job, jobId } = req.query;
 
     const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED'];
+    const INACTIVE_STATUSES = [
+      ...HIDDEN_STATUSES,
+      'REJECTED', 'CLIENT_SCREEN_REJECT', 'CLIENT_REJECTED', 'COMPANY_REJECTED',
+      'ROUND_REJECTED', 'HR_REJECTED', 'ASSESSMENT_FAILED', 'OFFER_REJECTED',
+      'OFFER_DECLINED', 'CLIENT_PORTAL_DUPLICATE', 'COMPANY_PORTAL_DUPLICATE',
+      'CANDIDATE_DROP', 'WITHDRAWN', 'JOINED', 'NOT_JOINED'
+    ];
+    const INTERVIEW_STATUSES = [
+      'SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED',
+      'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'RESCHEDULE_REQUESTED',
+      'INTERVIEWED', 'INTERVIEW_CONDUCTED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR',
+      'ROUND_ON_HOLD', 'HR_ROUND_PENDING', 'HR_SELECTED', 'HR_ON_HOLD',
+      'ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE', 'ASSESSMENT_PASSED'
+    ];
+    const OFFER_STATUSES = ['OFFER_ACCEPTED', 'ONBOARDING', 'OFFERED', 'OFFER_SENT'];
+    const JOINED_STATUSES = ['JOINED', 'HIRED'];
+
+    let statusCondition;
+    if (status) {
+      if (status === 'ACTIVE_CANDIDATES' || status === 'ACTIVE') {
+        statusCondition = { $nin: INACTIVE_STATUSES };
+      } else if (status === 'ACTIVE_INTERVIEWS' || status === 'IN_INTERVIEWS' || status === 'INTERVIEWS') {
+        statusCondition = { $in: INTERVIEW_STATUSES };
+      } else if (status === 'OFFER_ACCEPTED' || status === 'OFFERED' || status === 'OFFERS') {
+        statusCondition = { $in: OFFER_STATUSES };
+      } else if (status === 'JOINED' || status === 'HIRED') {
+        statusCondition = { $in: JOINED_STATUSES };
+      } else if (status.includes(',')) {
+        statusCondition = { $in: status.split(',').map(s => s.trim()) };
+      } else {
+        statusCondition = status;
+      }
+    } else {
+      statusCondition = { $nin: HIDDEN_STATUSES };
+    }
 
     const query = {
       company: company._id,
-      status: status ? status : { $nin: HIDDEN_STATUSES }
+      status: statusCondition
     };
 
-    const targetJob = job || jobId;
-    if (targetJob && targetJob !== 'ALL') {
-      query.job = targetJob;
+    if (req.scopedUserIds && Array.isArray(req.scopedUserIds)) {
+      const accessibleJobs = await Job.find({ company: company._id, postedBy: { $in: req.scopedUserIds } }).select('_id');
+      const accessibleJobIds = accessibleJobs.map(j => j._id);
+      const targetJob = job || jobId;
+      if (targetJob && targetJob !== 'ALL') {
+        const isAllowed = accessibleJobIds.some(jId => jId.toString() === targetJob.toString());
+        query.job = isAllowed ? targetJob : { $in: [] };
+      } else {
+        query.job = { $in: accessibleJobIds };
+      }
+    } else {
+      const targetJob = job || jobId;
+      if (targetJob && targetJob !== 'ALL') {
+        query.job = targetJob;
+      }
     }
 
     if (search && search.trim()) {
@@ -4153,12 +4316,13 @@ const validateCompanyPermissions = (permissions = []) => {
   return permissions.every((permission) => COMPANY_ALL_PERMISSIONS.includes(permission));
 };
 
-// @desc    Create company sub-admin
+// @desc    Create company sub-admin / team user
 // @route   POST /api/companies/sub-admins
-// @access  Company (Main User only)
+// @access  Company (Main Admin or Unit Head)
 exports.createSubAdmin = async (req, res) => {
   try {
     const emailService = require('../services/emailService');
+    const actor = req.subAdminUser || req.realUser || req.user;
     const {
       firstName = '',
       lastName = '',
@@ -4166,7 +4330,12 @@ exports.createSubAdmin = async (req, res) => {
       mobile,
       permissions = [],
       bundle,
-      status = 'ACTIVE'
+      status = 'ACTIVE',
+      unit,
+      isUnitHead,
+      reportingManager,
+      jobTitle = '',
+      dataScope = 'OWN'
     } = req.body;
 
     if (!email || !mobile) {
@@ -4181,6 +4350,22 @@ exports.createSubAdmin = async (req, res) => {
         success: false,
         message: 'First name and last name are required'
       });
+    }
+
+    // Authorization: Unit Heads can only add users into their own assigned unit
+    if (actor.isCompanySubAdmin) {
+      if (!actor.isUnitHead) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only Company Admins or Unit Heads can create team members.'
+        });
+      }
+      if (!unit || String(unit) !== String(actor.unit)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Unit Heads can only add users into their own assigned unit.'
+        });
+      }
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -4238,8 +4423,26 @@ exports.createSubAdmin = async (req, res) => {
       });
     }
 
+    // Validate reporting manager if provided
+    let mgrName = '';
+    if (reportingManager) {
+      await validateReportingLine(null, reportingManager);
+      const mgrDoc = await User.findById(reportingManager);
+      if (mgrDoc) {
+        mgrName = [mgrDoc.firstName, mgrDoc.lastName].filter(Boolean).join(' ') || mgrDoc.email;
+      }
+    }
+
+    // Resolve unit name if provided
+    let assignedUnitName = '';
+    if (unit) {
+      const uDoc = await CompanyUnit.findById(unit);
+      if (uDoc) assignedUnitName = uDoc.name;
+    }
+
     // Auto-generate a secure password
     const autoPassword = generatePassword();
+    const rootCompanyUserId = req.user.createdBy || req.user._id;
 
     const subAdmin = await User.create({
       firstName: firstName.trim(),
@@ -4250,12 +4453,28 @@ exports.createSubAdmin = async (req, res) => {
       role: 'company',
       status: status || 'ACTIVE',
       permissions: [...new Set(finalPermissions)],
-      createdBy: req.user._id,
+      createdBy: rootCompanyUserId,
       isCompanySubAdmin: true,
+      unit: unit || null,
+      isUnitHead: isUnitHead === true,
+      reportingManager: reportingManager || null,
+      jobTitle: jobTitle.trim(),
+      dataScope: dataScope || 'OWN',
+      unitHistory: unit
+        ? [{ unit, unitName: assignedUnitName, assignedAt: new Date(), changedBy: actor._id }]
+        : [],
+      managerHistory: reportingManager
+        ? [{ manager: reportingManager, managerName: mgrName, assignedAt: new Date(), changedBy: actor._id }]
+        : [],
       emailVerified: true,
       mobileVerified: true,
       isPasswordChanged: false // Must change on first login
     });
+
+    // If marked as unit head and unit provided, check if unit head can be assigned
+    if (isUnitHead && unit) {
+      await CompanyUnit.findByIdAndUpdate(unit, { head: subAdmin._id });
+    }
 
     // Send onboarding welcome email (fire-and-forget)
     emailService.sendSubAdminWelcome(
@@ -4266,18 +4485,22 @@ exports.createSubAdmin = async (req, res) => {
       [...new Set(finalPermissions)]
     ).catch(e => console.error('[COMPANY-SUB-ADMIN] Welcome email failed:', e.message));
 
-    const responseUser = await User.findById(subAdmin._id).select('-password');
+    const responseUser = await User.findById(subAdmin._id)
+      .select('-password')
+      .populate('createdBy', 'email role')
+      .populate('unit', 'name code')
+      .populate('reportingManager', 'firstName lastName email jobTitle');
 
     res.status(201).json({
       success: true,
-      message: `Sub-admin created! Welcome email sent to ${normalizedEmail}`,
+      message: `User created! Welcome email sent to ${normalizedEmail}`,
       data: responseUser
     });
   } catch (error) {
     console.error('[COMPANY-SUB-ADMIN] Create error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to create sub-admin',
+      message: error.message || 'Failed to create sub-admin',
       error: error.message
     });
   }
@@ -4285,22 +4508,39 @@ exports.createSubAdmin = async (req, res) => {
 
 // @desc    Get all company sub-admins
 // @route   GET /api/companies/sub-admins
-// @access  Company (Main User only)
+// @access  Company (Main Admin or Unit Head)
 exports.getSubAdmins = async (req, res) => {
   try {
     const { page, limit } = sanitizePagination(req.query.page, req.query.limit);
-    const { status, search } = req.query;
+    const { status, search, unit } = req.query;
 
-    const query = { role: 'company', createdBy: req.user._id };
+    const rootUserId = req.user.createdBy || req.user._id;
+    const query = { role: 'company', createdBy: rootUserId, isCompanySubAdmin: true };
 
     if (status) {
       query.status = status;
     }
 
+    if (unit) {
+      if (unit === 'unassigned') {
+        query.unit = null;
+      } else {
+        query.unit = unit;
+      }
+    }
+
+    if (req.scopedUserIds && Array.isArray(req.scopedUserIds)) {
+      query._id = { $in: req.scopedUserIds };
+    }
+
     if (search) {
+      const rx = new RegExp(search, 'i');
       query.$or = [
-        { email: new RegExp(search, 'i') },
-        { mobile: new RegExp(search, 'i') }
+        { firstName: rx },
+        { lastName: rx },
+        { email: rx },
+        { mobile: rx },
+        { jobTitle: rx }
       ];
     }
 
@@ -4310,6 +4550,8 @@ exports.getSubAdmins = async (req, res) => {
       User.find(query)
         .select('-password')
         .populate('createdBy', 'email role')
+        .populate('unit', 'name code')
+        .populate('reportingManager', 'firstName lastName email jobTitle')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -4340,16 +4582,19 @@ exports.getSubAdmins = async (req, res) => {
 
 // @desc    Get single company sub-admin
 // @route   GET /api/companies/sub-admins/:id
-// @access  Company (Main User only)
+// @access  Company (Main Admin or Unit Head)
 exports.getSubAdminById = async (req, res) => {
   try {
+    const rootUserId = req.user.createdBy || req.user._id;
     const subAdmin = await User.findOne({
       _id: req.params.id,
       role: 'company',
-      createdBy: req.user._id
+      createdBy: rootUserId
     })
       .select('-password')
-      .populate('createdBy', 'email role');
+      .populate('createdBy', 'email role')
+      .populate('unit', 'name code')
+      .populate('reportingManager', 'firstName lastName email jobTitle');
 
     if (!subAdmin) {
       return res.status(404).json({
@@ -4374,22 +4619,29 @@ exports.getSubAdminById = async (req, res) => {
 
 // @desc    Update company sub-admin
 // @route   PUT /api/companies/sub-admins/:id
-// @access  Company (Main User only)
+// @access  Company (Main Admin or Unit Head)
 exports.updateSubAdmin = async (req, res) => {
   try {
+    const actor = req.subAdminUser || req.realUser || req.user;
     const {
       firstName,
       lastName,
       mobile,
       permissions,
       bundle,
-      status
+      status,
+      unit,
+      isUnitHead,
+      reportingManager,
+      jobTitle,
+      dataScope
     } = req.body;
 
+    const rootUserId = req.user.createdBy || req.user._id;
     const subAdmin = await User.findOne({
       _id: req.params.id,
       role: 'company',
-      createdBy: req.user._id
+      createdBy: rootUserId
     });
 
     if (!subAdmin) {
@@ -4401,6 +4653,7 @@ exports.updateSubAdmin = async (req, res) => {
 
     if (firstName !== undefined) subAdmin.firstName = firstName.trim();
     if (lastName !== undefined) subAdmin.lastName = lastName.trim();
+    if (jobTitle !== undefined) subAdmin.jobTitle = jobTitle.trim();
 
     if (mobile) {
       const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
@@ -4420,34 +4673,74 @@ exports.updateSubAdmin = async (req, res) => {
       subAdmin.mobile = normalizedMobile;
     }
 
-    let finalPermissions = permissions;
+    // Only Primary Company Admin can configure granular permissions and data scope
+    if (!actor.isCompanySubAdmin) {
+      let finalPermissions = permissions;
 
-    if ((!permissions || permissions.length === 0) && bundle) {
-      if (!COMPANY_SUB_ADMIN_BUNDLES[bundle]) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid permission bundle'
-        });
-      }
-      finalPermissions = COMPANY_SUB_ADMIN_BUNDLES[bundle];
-    }
-
-    if (finalPermissions !== undefined) {
-      if (!validateCompanyPermissions(finalPermissions)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid permissions provided'
-        });
+      if ((!permissions || permissions.length === 0) && bundle) {
+        if (!COMPANY_SUB_ADMIN_BUNDLES[bundle]) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid permission bundle'
+          });
+        }
+        finalPermissions = COMPANY_SUB_ADMIN_BUNDLES[bundle];
       }
 
-      subAdmin.permissions = [...new Set(finalPermissions)];
+      if (finalPermissions !== undefined) {
+        if (!validateCompanyPermissions(finalPermissions)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid permissions provided'
+          });
+        }
+        subAdmin.permissions = [...new Set(finalPermissions)];
+      }
+
+      if (dataScope !== undefined) {
+        subAdmin.dataScope = dataScope;
+      }
+
+      if (isUnitHead !== undefined) {
+        subAdmin.isUnitHead = isUnitHead === true;
+      }
     }
 
-    if (status) {
+    // Unit change & history tracking
+    if (unit !== undefined) {
+      const newUnitId = unit || null;
+      if (String(subAdmin.unit) !== String(newUnitId)) {
+        let unitName = '';
+        if (newUnitId) {
+          const uDoc = await CompanyUnit.findById(newUnitId);
+          if (uDoc) unitName = uDoc.name;
+        }
+        recordUnitChange(subAdmin, newUnitId, unitName, actor._id);
+        subAdmin.unit = newUnitId;
+      }
+    }
+
+    // Reporting manager change & loop prevention
+    if (reportingManager !== undefined) {
+      const newManagerId = reportingManager || null;
+      if (String(subAdmin.reportingManager) !== String(newManagerId)) {
+        if (newManagerId) {
+          await validateReportingLine(subAdmin._id, newManagerId);
+          const mgr = await User.findById(newManagerId);
+          const mgrName = mgr ? [mgr.firstName, mgr.lastName].filter(Boolean).join(' ') || mgr.email : '';
+          recordManagerChange(subAdmin, newManagerId, mgrName, actor._id);
+        } else {
+          recordManagerChange(subAdmin, null, '', actor._id);
+        }
+        subAdmin.reportingManager = newManagerId;
+      }
+    }
+
+    if (status && !actor.isCompanySubAdmin) {
       subAdmin.status = status;
 
       if (status === 'SUSPENDED') {
-        subAdmin.suspendedBy = req.user._id;
+        subAdmin.suspendedBy = actor._id;
         subAdmin.suspendedAt = new Date();
       } else {
         subAdmin.suspendedBy = null;
@@ -4459,7 +4752,9 @@ exports.updateSubAdmin = async (req, res) => {
 
     const updatedSubAdmin = await User.findById(subAdmin._id)
       .select('-password')
-      .populate('createdBy', 'email role');
+      .populate('createdBy', 'email role')
+      .populate('unit', 'name code')
+      .populate('reportingManager', 'firstName lastName email jobTitle');
 
     res.json({
       success: true,

@@ -12,6 +12,13 @@ const jobSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  // Organizational unit this job belongs to
+  unit: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CompanyUnit',
+    default: null,
+    index: true
+  },
 
   // ==================== BASIC JOB INFO ====================
   title: {

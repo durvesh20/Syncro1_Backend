@@ -78,6 +78,93 @@ const userSchema = new mongoose.Schema({
     index: true
   },
 
+  // ==================== COMPANY HIERARCHY & TREE ====================
+  // Unit assignment
+  unit: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CompanyUnit',
+    default: null,
+    index: true,
+  },
+
+  // Flag if this user is a Unit Head / Administrator
+  isUnitHead: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+
+  // Single reporting manager rule: strictly one reporting manager
+  reportingManager: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true,
+  },
+
+  // Operational job designation / title (e.g., "Senior Recruiter", "HR Lead")
+  jobTitle: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+
+  // Level-based data scoping (configurable by higher levels)
+  dataScope: {
+    type: String,
+    enum: ['OWN', 'TEAM', 'UNIT', 'COMPANY'],
+    default: 'OWN',
+    index: true,
+  },
+
+  // Unit assignment history tracking
+  unitHistory: [{
+    unit: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CompanyUnit',
+    },
+    unitName: {
+      type: String,
+      default: '',
+    },
+    assignedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    removedAt: {
+      type: Date,
+      default: null,
+    },
+    changedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+  }],
+
+  // Reporting manager change history tracking
+  managerHistory: [{
+    manager: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    managerName: {
+      type: String,
+      default: '',
+    },
+    assignedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    removedAt: {
+      type: Date,
+      default: null,
+    },
+    changedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+  }],
+
   // Lead validity status (for Talent Partner and Client/Company leads - no default selection)
   leadValidity: {
     type: String,
