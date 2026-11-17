@@ -1,53 +1,85 @@
 (function () {
   'use strict';
 
-  // Include this file on the public Syncro1 registration landing page.
-  // It preserves WAPI attribution across the SPA -> API registration request.
+  // Install only on the Talent Partner campaign registration landing page.
+  // A static WhatsApp URL proves landing arrival, not a recipient-specific click.
+  var path = window.location.pathname || '';
+  if (!/^\/auth\/register\/campaign\/talent-partner\/?$/i.test(path)) return;
+
   var query = new URLSearchParams(window.location.search);
   var campaignKey = query.get('utm_campaign') || '';
   var recipientToken = query.get('wapi_recipient') || '';
-  var storageKey = 'syncro1_wapi_attribution_v1';
+  var attributionKey = 'syncro1_wapi_attribution_v2';
+  var visitorStorageKey = 'syncro1_wapi_visitor_v1';
   var attribution = null;
 
-  try {
-    attribution = JSON.parse(sessionStorage.getItem(storageKey) || 'null');
-  } catch (_) {}
+  function resolveTrackingApi() {
+    var configured = String(window.SYNCRO1_WAPI_TRACKING_API || '').trim();
+    if (configured) return configured.replace(/\/$/, '');
 
-  if (campaignKey && /^[a-f0-9]{64}$/i.test(campaignKey)) {
-    attribution = {
-      campaignKey: campaignKey,
-      recipientToken: recipientToken,
-      visitorId: (attribution && attribution.visitorId) || makeVisitorId()
-    };
-    try { sessionStorage.setItem(storageKey, JSON.stringify(attribution)); } catch (_) {}
+    // Derive the API origin from the script URL. This makes the exact same
+    // script usable locally (localhost API) and in production (devapi origin).
+    var scriptUrl = '';
+    try {
+      if (document.currentScript && document.currentScript.src) {
+        scriptUrl = document.currentScript.src;
+      } else {
+        var scripts = document.getElementsByTagName('script');
+        for (var i = scripts.length - 1; i >= 0; i -= 1) {
+          if (/\/tracking\/wapi-tracking\.js(?:\?|$)/i.test(scripts[i].src || '')) {
+            scriptUrl = scripts[i].src;
+            break;
+          }
+        }
+      }
+      if (scriptUrl) return new URL(scriptUrl, window.location.href).origin + '/api/wapi-tracking';
+    } catch (_) {}
+
+    return 'https://devapi.syncro1.com/api/wapi-tracking';
   }
 
-  if (!attribution || !/^[a-f0-9]{64}$/i.test(attribution.campaignKey || '')) return;
+  var trackingApi = resolveTrackingApi();
 
-  function makeVisitorId() {
+  function makeId() {
     try {
       if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
     } catch (_) {}
-    return 'v_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    return 'v_' + Date.now().toString(36) + '_' +
+      Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   }
 
-  var endpoint = window.SYNCRO1_CRM_TRACKING_URL ||
-    'https://crm.syncro1.com/api/crm/communications/wapi/tracking/event';
+  function safeRead(storage, key) {
+    try { return storage.getItem(key); } catch (_) { return null; }
+  }
+  function safeWrite(storage, key, value) {
+    try { storage.setItem(key, value); } catch (_) {}
+  }
 
-  function send(eventType) {
-    var payload = {
-      campaignKey: attribution.campaignKey,
-      recipientToken: attribution.recipientToken || '',
-      visitorId: attribution.visitorId,
-      eventId: makeVisitorId(),
-      eventType: eventType,
-      pagePath: window.location.pathname,
-      referrerHost: (function () {
-        try { return document.referrer ? new URL(document.referrer).host : ''; } catch (_) { return ''; }
-      })()
-    };
+  var visitorId = safeRead(window.localStorage, visitorStorageKey);
+  if (!visitorId || !/^[a-zA-Z0-9_-]{12,100}$/.test(visitorId)) {
+    visitorId = makeId();
+    safeWrite(window.localStorage, visitorStorageKey, visitorId);
+  }
+
+  try { attribution = JSON.parse(safeRead(window.sessionStorage, attributionKey) || 'null'); } catch (_) {}
+  attribution = attribution && typeof attribution === 'object' ? attribution : {};
+  attribution.visitorId = visitorId;
+
+  if (/^[a-f0-9]{64}$/i.test(campaignKey)) {
+    attribution.campaignKey = campaignKey;
+    attribution.recipientToken = recipientToken;
+  }
+  safeWrite(window.sessionStorage, attributionKey, JSON.stringify(attribution));
+
+  var hasCampaignAttribution = /^[a-f0-9]{64}$/i.test(attribution.campaignKey || '');
+
+  function referrerHost() {
+    try { return document.referrer ? new URL(document.referrer).host : ''; } catch (_) { return ''; }
+  }
+
+  function postJson(pathSuffix, payload) {
     try {
-      fetch(endpoint, {
+      return window.fetch(trackingApi + pathSuffix, {
         method: 'POST',
         mode: 'cors',
         credentials: 'omit',
@@ -55,14 +87,48 @@
         body: JSON.stringify(payload),
         keepalive: true
       }).catch(function () {});
-    } catch (_) {}
+    } catch (_) {
+      return Promise.resolve();
+    }
   }
 
-  // A page view is emitted only when the WAPI campaign key is present.
-  send('PAGE_VIEW');
+  function visitorEvent(eventType, eventId) {
+    return postJson('/visitor', {
+      visitorId: visitorId,
+      eventId: eventId,
+      eventType: eventType,
+      pagePath: path,
+      referrerHost: referrerHost()
+    });
+  }
+
+  function campaignEvent(eventType, eventId) {
+    if (!hasCampaignAttribution) return Promise.resolve();
+    return postJson('/event', {
+      campaignKey: attribution.campaignKey,
+      recipientToken: attribution.recipientToken || '',
+      visitorId: visitorId,
+      eventId: eventId,
+      eventType: eventType,
+      pagePath: path,
+      referrerHost: referrerHost()
+    });
+  }
+
+  // One stable arrival event per tab. Record the anonymous visitor regardless
+  // of campaign-token presence; campaign analytics are an additional event.
+  var arrivalEventKey = 'syncro1_wapi_arrival_event_v1';
+  var arrivalEventId = safeRead(window.sessionStorage, arrivalEventKey);
+  if (!arrivalEventId) {
+    arrivalEventId = makeId();
+    safeWrite(window.sessionStorage, arrivalEventKey, arrivalEventId);
+  }
+
+  visitorEvent('LANDING_PAGE_ARRIVED', arrivalEventId);
+  campaignEvent('PAGE_VIEW', arrivalEventId);
 
   function isRegistrationRequest(url) {
-    return /\/api\/auth\/register\/(staffing-partner|company)\/init(?:[?#]|$)/i.test(String(url || ''));
+    return /\/api\/auth\/register\/(staffing-partner|talent-partner|company)\/init(?:[?#]|$)/i.test(String(url || ''));
   }
 
   function attachAttribution(body) {
@@ -70,18 +136,20 @@
     try {
       var data = JSON.parse(body);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return body;
-      data.utm_campaign = attribution.campaignKey;
-      data.utm_source = 'whatsapp';
-      data.utm_medium = 'campaign';
-      data.wapi_recipient = attribution.recipientToken || '';
-      data.visitorId = attribution.visitorId;
+      data.visitorId = visitorId;
+      if (hasCampaignAttribution) {
+        data.utm_campaign = attribution.campaignKey;
+        data.utm_source = 'whatsapp';
+        data.utm_medium = 'campaign';
+        data.wapi_recipient = attribution.recipientToken || '';
+      }
       return JSON.stringify(data);
     } catch (_) {
       return body;
     }
   }
 
-  // Preserve attribution when the registration SPA posts JSON with fetch.
+  // Preserve visitor attribution through fetch-based registration requests.
   if (window.fetch) {
     var originalFetch = window.fetch;
     window.fetch = function (input, init) {
@@ -93,7 +161,7 @@
     };
   }
 
-  // Also support XMLHttpRequest-based API clients.
+  // Also support Axios/XHR-based registration requests.
   if (window.XMLHttpRequest) {
     var originalOpen = XMLHttpRequest.prototype.open;
     var originalSend = XMLHttpRequest.prototype.send;
@@ -107,6 +175,10 @@
     };
   }
 
-  // Keep attribution on same-site navigation within the registration flow.
-  window.syncro1WapiAttribution = attribution;
+  window.syncro1WapiAttribution = {
+    visitorId: visitorId,
+    campaignKey: hasCampaignAttribution ? attribution.campaignKey : null,
+    recipientToken: hasCampaignAttribution ? attribution.recipientToken || null : null,
+    trackingApi: trackingApi
+  };
 })();

@@ -176,6 +176,9 @@ app.get('/api/health', (req, res) => {
 
 app.use(sanitizeErrors);
 
+// Public browser tracking is relayed server-to-server to CRM over the private network.
+app.use('/api/wapi-tracking', require('./routes/wapiTrackingRoutes'));
+
 /* =========================================================
    API ROUTES — MOUNTED ONCE ONLY
 ========================================================= */
