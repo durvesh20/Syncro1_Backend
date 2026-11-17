@@ -99,14 +99,6 @@
     visitorEvent('LANDING_PAGE_ARRIVED', arrivalEventId);
   }
 
-  var registrationEventKey = 'syncro1_wapi_registration_started_v1';
-  var registrationEventId = safeRead(window.sessionStorage, registrationEventKey);
-  if (!registrationEventId) {
-    registrationEventId = makeId();
-    safeWrite(window.sessionStorage, registrationEventKey, registrationEventId);
-  }
-  var registrationStartedSent = false;
-
   function isRegistrationRequest(url) {
     return /\/api\/auth\/register\/(staffing-partner|talent-partner|company)\/init(?:[?#]|$)/i.test(String(url || ''));
   }
@@ -129,21 +121,12 @@
     }
   }
 
-  function markRegistrationStarted() {
-    if (registrationStartedSent) return;
-    registrationStartedSent = true;
-    if (!hasCampaignAttribution) {
-      visitorEvent('REGISTRATION_STARTED', registrationEventId);
-    }
-  }
-
   // Preserve visitor attribution through fetch-based registration requests.
   if (window.fetch) {
     var originalFetch = window.fetch;
     window.fetch = function (input, init) {
       var url = typeof input === 'string' ? input : (input && input.url);
       if (isRegistrationRequest(url)) {
-        markRegistrationStarted();
         if (init && typeof init.body === 'string') {
           init = Object.assign({}, init, { body: attachAttribution(init.body) });
         }
@@ -162,7 +145,6 @@
     };
     XMLHttpRequest.prototype.send = function (body) {
       if (this.__syncro1WapiRegistration) {
-        markRegistrationStarted();
         body = attachAttribution(body);
       }
       return originalSend.call(this, body);
