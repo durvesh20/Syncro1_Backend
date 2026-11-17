@@ -62,10 +62,9 @@ Do not add this script only to the CRM admin UI. The CRM branch `syncro1-fronten
 ## Events and lead matching
 
 1. `LANDING_PAGE_ARRIVED`: creates an anonymous `STAFFING_PARTNER` lead in CRM, keyed by browser `visitorId`.
-2. `REGISTRATION_STARTED`: recorded when the browser detects the registration-init request.
-3. The browser attaches the same `visitorId` to the registration-init request body.
-4. The platform backend registration controller forwards `REGISTRATION_STARTED` and `REGISTRATION_COMPLETED` to CRM using the same visitor ID.
-5. CRM updates the existing visitor lead instead of creating a second lead, then adds journey/activity history.
+2. The browser attaches the same `visitorId` to the registration-init request body.
+3. The platform backend registration controller forwards `REGISTRATION_STARTED` and `REGISTRATION_COMPLETED` to CRM using the same visitor ID. This avoids sending duplicate registration-start events from both browser and backend.
+4. CRM updates the existing visitor lead instead of creating a second lead, then adds journey/activity history.
 
 The platform backend currently exposes the registration-init route as `/api/auth/register/staffing-partner/init`. The copied Vite frontend reference calls `/api/auth/register/talent-partner/init`; verify the production webapp's actual API path before assuming those routes are interchangeable.
 
