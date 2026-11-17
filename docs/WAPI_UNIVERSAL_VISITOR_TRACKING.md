@@ -61,12 +61,48 @@ Do not add this script only to the CRM admin UI. The CRM branch `syncro1-fronten
 
 ## Events and lead matching
 
-1. `LANDING_PAGE_ARRIVED`: creates an anonymous `STAFFING_PARTNER` lead in CRM, keyed by browser `visitorId`.
-2. The browser attaches the same `visitorId` to the registration-init request body.
-3. The platform backend registration controller forwards `REGISTRATION_STARTED` and `REGISTRATION_COMPLETED` to CRM using the same visitor ID. This avoids sending duplicate registration-start events from both browser and backend.
-4. CRM updates the existing visitor lead instead of creating a second lead, then adds journey/activity history.
+1. `LANDING_PAGE_ARRIVED`: always goes to the anonymous visitor endpoint and creates/updates an anonymous `STAFFING_PARTNER` lead in CRM, keyed by browser `visitorId`.
+2. If a valid campaign token exists, `PAGE_VIEW` is additionally sent to campaign analytics. Campaign analytics never replace anonymous visitor tracking.
+3. The browser attaches the same `visitorId` to the registration-init request body.
+4. The platform backend registration controller forwards `REGISTRATION_STARTED` and `REGISTRATION_COMPLETED` to the anonymous visitor endpoint. If campaign attribution exists, it also sends a separate campaign analytics event.
+5. CRM updates the existing visitor lead instead of creating a second lead, then adds journey/activity history.
 
 The platform backend currently exposes the registration-init route as `/api/auth/register/staffing-partner/init`. The copied Vite frontend reference calls `/api/auth/register/talent-partner/init`; verify the production webapp's actual API path before assuming those routes are interchangeable.
+
+## Local-only test setup (before any deployment)
+
+Use separate local test databases for the platform backend and CRM. Do not copy production MongoDB URIs into local .env files.
+
+1. Start the CRM backend locally on its configured API port (the current VPS configuration uses 5001; confirm the local port in the local CRM .env).
+2. Start the platform backend locally on port 5000, with:
+
+~~~env
+CRM_INTERNAL_HOST=127.0.0.1
+CRM_INTERNAL_PORT=5001
+~~~
+
+Change the port only if the local CRM API listens elsewhere.
+
+3. Open the local Talent Partner campaign route and load the tracking script from the local platform API:
+
+~~~html
+<script src="http://localhost:5000/tracking/wapi-tracking.js"></script>
+~~~
+
+The script derives its tracking API base from this script origin, so requests go to http://localhost:5000/api/wapi-tracking rather than the production API.
+
+4. Verify the anonymous visitor endpoint with a fresh visitor ID:
+
+~~~bash
+curl -i -X POST http://localhost:5000/api/wapi-tracking/visitor -H "Content-Type: application/json" -d '{"visitorId":"local_test_visitor_001","eventId":"local_arrival_001","eventType":"LANDING_PAGE_ARRIVED","pagePath":"/auth/register/campaign/talent-partner"}'
+~~~
+
+5. Verify that one anonymous lead appears in the local CRM All Leads view. Repeat the same event ID and verify it is idempotent.
+6. Submit a test registration through the local frontend. Verify the same visitor lead receives registration lifecycle activity and is enriched with the registered contact details.
+7. For campaign-attributed testing, use a valid test campaign key and recipient token from the local CRM database. Verify both the anonymous visitor lead and campaign analytics event are recorded.
+8. Repeat with a new browser profile and verify a different visitor ID is generated.
+
+Do not use real WhatsApp recipients or send a live campaign during this test. Simulate the landing URL locally first. The local test is not complete until lead identity, duplicate handling, and lifecycle history are confirmed in CRM.
 
 ## Deployment and verification
 
