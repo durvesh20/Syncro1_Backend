@@ -73,13 +73,31 @@ const timeToMinutes = (timeStr) => {
 // HELPER: Verify company owns the candidate
 // ─────────────────────────────────────────────────────────────────────────────
 const verifyCompanyOwnership = async (candidateId, userId) => {
-  const company = await Company.findOne({ user: userId });
+  const User = require('../models/User');
+  const user = await User.findById(userId);
+  if (user && ['admin', 'super_admin'].includes(user.role)) {
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) throw { statusCode: 404, message: "Candidate not found" };
+    return { company: null, candidate };
+  }
+
+  const companyLookup = user?.createdBy
+    ? { $or: [{ user: userId }, { user: user.createdBy }] }
+    : { user: userId };
+  let company = await Company.findOne(companyLookup);
+  if (!company && user?.company) {
+    company = await Company.findById(user.company);
+  }
   if (!company) throw { statusCode: 404, message: "Company not found" };
 
   const candidate = await Candidate.findById(candidateId);
   if (!candidate) throw { statusCode: 404, message: "Candidate not found" };
 
-  if (candidate.company.toString() !== company._id.toString()) {
+  const candCompanyId = candidate.company?._id
+    ? candidate.company._id.toString()
+    : candidate.company?.toString();
+
+  if (candCompanyId && candCompanyId !== company._id.toString()) {
     throw { statusCode: 403, message: "Not authorized" };
   }
 
@@ -2756,10 +2774,18 @@ exports.createInterviewSlots = async (req, res) => {
 
           // Update active round
           let roundUpdated = false;
+          const normRt = str => (str || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+          const isHrMatch = (r1, r2) => (r1 || '').toUpperCase().includes('HR') && (r2 || '').toUpperCase().includes('HR');
+          const isRoundMatch = (r1, r2) => isHrMatch(r1, r2) || (normRt(r1) === normRt(r2));
+          const CLEARED = ['PASSED', 'ROUND_PASSED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'REJECTED', 'ROUND_REJECTED'];
+
           for (let i = 0; i < (cand.rounds || []).length; i++) {
             const r = cand.rounds[i];
-            const isMatch = createdSlot.roundType ? ((r.roundType || '').trim().toLowerCase() === createdSlot.roundType.trim().toLowerCase()) : false;
-            if (isMatch || ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'RESCHEDULE_REQUESTED'].includes(r.status)) {
+            if (CLEARED.includes(r.status) || ['SELECTED_NEXT_ROUND', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'REJECTED'].includes(r.outcome?.decision)) {
+              continue;
+            }
+            const isMatch = createdSlot.roundType ? isRoundMatch(r.roundType, createdSlot.roundType) : false;
+            if (isMatch || ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SHORTLISTED', 'CLIENT_SCREEN_SELECT', 'RESCHEDULE_REQUESTED', 'NOT_STARTED'].includes(r.status)) {
               r.status = 'SLOT_ASSIGNED';
               r.slots = [{
                 date: createdSlot.date,
@@ -3280,9 +3306,18 @@ exports.updateInterviewSlot = async (req, res) => {
 
         newCand.assignedSlot = slot._id;
         newCand.status = 'SLOT_ASSIGNED';
+        const normRtUpdate = str => (str || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+        const isHrMatchUpdate = (r1, r2) => (r1 || '').toUpperCase().includes('HR') && (r2 || '').toUpperCase().includes('HR');
+        const isRoundMatchUpdate = (r1, r2) => isHrMatchUpdate(r1, r2) || (normRtUpdate(r1) === normRtUpdate(r2));
+        const CLEARED_UPDATE = ['PASSED', 'ROUND_PASSED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'REJECTED', 'ROUND_REJECTED'];
+
         for (let i = 0; i < (newCand.rounds || []).length; i++) {
           const r = newCand.rounds[i];
-          if (['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SHORTLISTED', 'RESCHEDULE_REQUESTED'].includes(r.status)) {
+          if (CLEARED_UPDATE.includes(r.status) || ['SELECTED_NEXT_ROUND', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'REJECTED'].includes(r.outcome?.decision)) {
+            continue;
+          }
+          const isMatch = slot.roundType ? isRoundMatchUpdate(r.roundType, slot.roundType) : false;
+          if (isMatch || ['SLOTS_NOT_PUBLISHED', 'SLOTS_PUBLISHED', 'SHORTLISTED', 'RESCHEDULE_REQUESTED', 'SLOT_ASSIGNED', 'NOT_STARTED'].includes(r.status)) {
             r.status = 'SLOT_ASSIGNED';
             r.slots = [{
               date: slot.date,
@@ -3468,20 +3503,27 @@ exports.confirmInterviewDetails = async (req, res) => {
     const getActiveRoundInfo = (c) => {
       const status = c.status;
       if (status === 'SHORTLISTED' || status === 'REJECTED') return null;
-      const hrStates = ['HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
+      const isHrMatch = (r1, r2) => (r1 || '').toUpperCase().includes('HR') && (r2 || '').toUpperCase().includes('HR');
+
+      const hrStates = ['ROUND_SELECTED_DIRECT_HR', 'HR_ROUND_PENDING', 'HR_SELECTED', 'HR_REJECTED', 'HR_ON_HOLD'];
       if (hrStates.includes(status)) {
-        const idx = c.rounds.findIndex(r => r.roundType === 'HR_ROUND');
+        const idx = c.rounds.findIndex(r => isHrMatch(r.roundType, 'HR'));
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
       }
       const assessmentStates = ['ASSESSMENT_PENDING', 'ASSESSMENT_LINK_SENT', 'ASSESSMENT_LINK_COMPLETE'];
       if (assessmentStates.includes(status)) {
-        const idx = c.rounds.findIndex(r => r.roundType === 'ASSESSMENT');
+        const idx = c.rounds.findIndex(r => (r.roundType || '').toUpperCase().includes('ASSESS'));
         if (idx !== -1) return { index: idx, round: c.rounds[idx] };
       }
       const offerStates = ['OFFER_SENT', 'OFFER_ACCEPTED', 'OFFER_REJECTED', 'ONBOARDING'];
       if (offerStates.includes(status)) return null;
+
+      const CLEARED = ['PASSED', 'ROUND_PASSED', 'ROUND_SELECTED_NEXT', 'ROUND_SELECTED_DIRECT_HR', 'REJECTED', 'ROUND_REJECTED'];
       for (let i = 0; i < c.rounds.length; i++) {
         const r = c.rounds[i];
+        if (CLEARED.includes(r.status) || ['SELECTED_NEXT_ROUND', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'REJECTED'].includes(r.outcome?.decision)) {
+          continue;
+        }
         const L_STATES = [
           'SLOTS_NOT_PUBLISHED',
           'SLOTS_PUBLISHED',
@@ -3493,6 +3535,14 @@ exports.confirmInterviewDetails = async (req, res) => {
         ];
         if (L_STATES.includes(r.status)) return { index: i, round: r };
       }
+
+      // Check if candidate was skipped to HR
+      const hasSkippedToHr = (c.rounds || []).some(r => r.status === 'ROUND_SELECTED_DIRECT_HR' || r.outcome?.decision === 'SELECTED_DIRECT_HR' || r.outcome?.decision === 'SKIPPED_TO_HR');
+      if (hasSkippedToHr) {
+        const hrIdx = c.rounds.findIndex(r => isHrMatch(r.roundType, 'HR'));
+        if (hrIdx !== -1) return { index: hrIdx, round: c.rounds[hrIdx] };
+      }
+
       return null;
     };
 

@@ -27,6 +27,7 @@ function roleFromReq(req) {
     candidate: ROLES.CANDIDATE,
     admin: ROLES.ADMIN,
     sub_admin: ROLES.ADMIN,  // sub_admin is also read-only in pipeline
+    super_admin: ROLES.ADMIN,
   };
   return map[req.user?.role] || req.user?.role;
 }
@@ -34,9 +35,9 @@ function roleFromReq(req) {
 async function verifyCompanyCandidateOwnership(candidateId, userId) {
   const User = require('../models/User');
   const user = await User.findById(userId);
-  const isAdmin = user && (user.role === 'admin' || user.role === 'sub_admin');
+  const isAdmin = user && (user.role === 'admin' || user.role === 'super_admin' || user.role === 'sub_admin');
 
-  const candidate = await Candidate.findById(candidateId).populate('job');
+  const candidate = await Candidate.findById(candidateId).populate('job').populate('assignedSlot');
   if (!candidate) throw Object.assign(new Error('Candidate not found'), { statusCode: 404 });
 
   if (isAdmin) {
@@ -44,10 +45,20 @@ async function verifyCompanyCandidateOwnership(candidateId, userId) {
   }
 
   const Company = require('../models/Company');
-  const company = await Company.findOne({ user: userId });
+  const companyLookup = user?.createdBy
+    ? { $or: [{ user: userId }, { user: user.createdBy }] }
+    : { user: userId };
+  let company = await Company.findOne(companyLookup);
+  if (!company && user?.company) {
+    company = await Company.findById(user.company);
+  }
   if (!company) throw Object.assign(new Error('Company profile not found'), { statusCode: 403 });
 
-  if (candidate.company.toString() !== company._id.toString()) {
+  const candCompanyId = candidate.company?._id
+    ? candidate.company._id.toString()
+    : candidate.company?.toString();
+
+  if (candCompanyId && candCompanyId !== company._id.toString()) {
     throw Object.assign(new Error('Access denied: candidate does not belong to your company'), { statusCode: 403 });
   }
   return { candidate, company };
@@ -659,11 +670,17 @@ exports.defineJobPipelineTemplate = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
-    const isAdmin = req.user.role === 'admin' || req.user.role === 'sub_admin';
+    const isAdmin = ['admin', 'super_admin', 'sub_admin'].includes(req.user.role);
 
     if (!isAdmin) {
       const Company = require('../models/Company');
-      const company = await Company.findOne({ user: req.user._id });
+      const companyLookup = req.user?.createdBy
+        ? { $or: [{ user: req.user._id }, { user: req.user.createdBy }] }
+        : { user: req.user._id };
+      let company = await Company.findOne(companyLookup);
+      if (!company && req.user?.company) {
+        company = await Company.findById(req.user.company);
+      }
       if (!company) {
         return res.status(403).json({ success: false, message: 'Company profile not found' });
       }
@@ -749,9 +766,15 @@ exports.getJobPipelineTemplate = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Job not found' });
     }
 
-    if (req.user.role !== 'admin' && req.user.role !== 'sub_admin') {
+    if (!['admin', 'super_admin', 'sub_admin'].includes(req.user.role)) {
       const Company = require('../models/Company');
-      const company = await Company.findOne({ user: req.user._id });
+      const companyLookup = req.user?.createdBy
+        ? { $or: [{ user: req.user._id }, { user: req.user.createdBy }] }
+        : { user: req.user._id };
+      let company = await Company.findOne(companyLookup);
+      if (!company && req.user?.company) {
+        company = await Company.findById(req.user.company);
+      }
       if (!company) {
         return res.status(403).json({ success: false, message: 'Company profile not found' });
       }
@@ -842,16 +865,44 @@ async function populateRoundsWithJobSlots(candidate) {
   }
 
   const populatedRounds = [];
+  const norm = str => (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const isHrMatch = (r1, r2) => (r1 || '').toUpperCase().includes('HR') && (r2 || '').toUpperCase().includes('HR');
+
+  const CLEARED_OR_SKIPPED = [
+    'PASSED',
+    'ROUND_PASSED',
+    'ROUND_SELECTED_NEXT',
+    'ROUND_SELECTED_DIRECT_HR',
+    'REJECTED',
+    'ROUND_REJECTED',
+    'HR_REJECTED',
+    'ASSESSMENT_FAILED',
+    'CANDIDATE_DROP',
+    'CLIENT_PORTAL_DUPLICATE'
+  ];
+  const CLEARED_OR_SKIPPED_DECISIONS = [
+    'SELECTED_NEXT_ROUND',
+    'SELECTED_DIRECT_HR',
+    'SKIPPED_TO_HR',
+    'REJECTED',
+    'FAILED'
+  ];
 
   for (let i = 0; i < candidate.rounds.length; i++) {
     const r = candidate.rounds[i];
     const roundObj = r.toObject ? r.toObject() : JSON.parse(JSON.stringify(r));
+    const isRoundCleared = CLEARED_OR_SKIPPED.includes(r.status) ||
+      ['SELECTED_NEXT_ROUND', 'SELECTED_DIRECT_HR', 'SKIPPED_TO_HR', 'REJECTED'].includes(r.outcome?.decision);
 
     // If candidate already has slot(s) assigned in this round, preserve them directly!
     if (r.slots && r.slots.length > 0) {
       roundObj.slots = r.slots.map(s => {
         const slotData = s.toObject ? s.toObject() : JSON.parse(JSON.stringify(s));
-        if (bookedSlot) {
+        const matchesBooked = bookedSlot && !isRoundCleared && (
+          isHrMatch(roundObj.roundType, bookedSlot.roundType) ||
+          norm(roundObj.roundType) === norm(bookedSlot.roundType)
+        );
+        if (matchesBooked) {
           slotData.isTagged = Boolean(bookedSlot.isTagged || bookedSlot.candidateId || slotData.isTagged || slotData.candidateId);
           slotData.candidateId = bookedSlot.candidateId || slotData.candidateId || null;
           slotData.slotId = bookedSlot._id || slotData.slotId || slotData._id;
@@ -866,11 +917,10 @@ async function populateRoundsWithJobSlots(candidate) {
     }
 
     // If candidate has a bookedSlot matching this round, map it
-    const norm = str => (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    const isMatchingRound = bookedSlot && (
+    const isMatchingRound = bookedSlot && !isRoundCleared && (
       norm(roundObj.roundType) === norm(bookedSlot.roundType) ||
       (bookedSlot.roundType && (
-        (norm(bookedSlot.roundType).includes('hr') && norm(roundObj.roundType).includes('hr')) ||
+        isHrMatch(roundObj.roundType, bookedSlot.roundType) ||
         (norm(bookedSlot.roundType).includes('tech') && norm(roundObj.roundType).includes('tech'))
       ))
     );
@@ -901,25 +951,51 @@ async function populateRoundsWithJobSlots(candidate) {
     populatedRounds.push(roundObj);
   }
 
-  // If candidate has a bookedSlot but no round matched roundType, map it to the active or last non-assessment round
-  if (bookedSlot && !populatedRounds.some(r => r.slots && r.slots.length > 0) && populatedRounds.length > 0) {
-    const hrIdx = populatedRounds.findIndex(r => (r.roundType || '').toUpperCase().includes('HR'));
-    const targetIdx = hrIdx !== -1 ? hrIdx : (populatedRounds.length - 1);
-    const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
-    const isVirtual = displayMode.toLowerCase() === 'virtual';
-    const mapped = mapSlotDetails(bookedSlot);
-    if (mapped) {
-      const detailsVal = candidate.interviewConfig?.details || bookedSlot.interviewDetails || bookedSlot.notes || '';
-      mapped.details = {
-        address: !isVirtual ? detailsVal : '',
-        meetingLink: isVirtual ? detailsVal : '',
-        pointOfContact: {
-          name: candidate.interviewConfig?.interviewer || bookedSlot.interviewerName || '',
-          email: '',
-          phone: ''
-        }
-      };
-      populatedRounds[targetIdx].slots = [mapped];
+  // Fallback: If candidate has a bookedSlot but no ACTIVE (uncleared) round matched roundType:
+  // Map it to the active round (or HR round if candidate was skipped to HR)
+  const hasActiveRoundWithSlots = populatedRounds.some(r =>
+    !CLEARED_OR_SKIPPED.includes(r.status) &&
+    !CLEARED_OR_SKIPPED_DECISIONS.includes(r.outcome?.decision) &&
+    r.slots && r.slots.length > 0
+  );
+
+  if (bookedSlot && !hasActiveRoundWithSlots && populatedRounds.length > 0) {
+    const hasSkippedToHr = populatedRounds.some(r =>
+      r.status === 'ROUND_SELECTED_DIRECT_HR' ||
+      r.outcome?.decision === 'SELECTED_DIRECT_HR' ||
+      r.outcome?.decision === 'SKIPPED_TO_HR'
+    );
+    let targetIdx = -1;
+    if (hasSkippedToHr) {
+      targetIdx = populatedRounds.findIndex(r => isHrMatch(r.roundType, 'HR'));
+    }
+    if (targetIdx === -1) {
+      targetIdx = populatedRounds.findIndex(r =>
+        !CLEARED_OR_SKIPPED.includes(r.status) &&
+        !CLEARED_OR_SKIPPED_DECISIONS.includes(r.outcome?.decision)
+      );
+    }
+    if (targetIdx === -1) {
+      targetIdx = populatedRounds.length - 1;
+    }
+
+    if (targetIdx !== -1) {
+      const displayMode = candidate.interviewConfig?.mode || bookedSlot.interviewMode || 'Virtual';
+      const isVirtual = displayMode.toLowerCase() === 'virtual';
+      const mapped = mapSlotDetails(bookedSlot);
+      if (mapped) {
+        const detailsVal = candidate.interviewConfig?.details || bookedSlot.interviewDetails || bookedSlot.notes || '';
+        mapped.details = {
+          address: !isVirtual ? detailsVal : '',
+          meetingLink: isVirtual ? detailsVal : '',
+          pointOfContact: {
+            name: candidate.interviewConfig?.interviewer || bookedSlot.interviewerName || '',
+            email: '',
+            phone: ''
+          }
+        };
+        populatedRounds[targetIdx].slots = [mapped];
+      }
     }
   }
 
@@ -1089,6 +1165,10 @@ exports.getPipelinePreview = async (req, res) => {
       }));
     }
 
+    const isTaggedCand = Boolean(
+      candidate.assignedSlot && (candidate.assignedSlot.isTagged || candidate.assignedSlot.candidateId || candidate.status === 'SLOT_ASSIGNED')
+    );
+
     res.json({
       success: true,
       data: {
@@ -1098,10 +1178,24 @@ exports.getPipelinePreview = async (req, res) => {
         pipelineTemplate: pipelineTemplate,
         rounds: populatedRounds,
         hrRound: candidate.hrRound,
-        auditTrail: [],
+        auditTrail: candidate.auditTrail || [],
+        statusHistory: candidate.statusHistory || [],
         job: candidate.job,
         offer: candidate.offer,
-        assignedSlot: candidate.assignedSlot || null,
+        joining: candidate.joining,
+        assignedSlot: candidate.assignedSlot ? {
+          _id: candidate.assignedSlot._id || candidate.assignedSlot,
+          date: candidate.assignedSlot.date,
+          startTime: candidate.assignedSlot.startTime,
+          endTime: candidate.assignedSlot.endTime,
+          isTagged: isTaggedCand,
+          candidateId: candidate.assignedSlot.candidateId,
+          roundType: candidate.assignedSlot.roundType,
+          interviewMode: candidate.assignedSlot.interviewMode,
+          interviewDetails: candidate.assignedSlot.interviewDetails,
+          interviewerName: candidate.assignedSlot.interviewerName,
+        } : null,
+        isTaggedCandidate: isTaggedCand,
       }
     });
   } catch (err) {
@@ -1116,6 +1210,7 @@ exports.adminGetPipeline = async (req, res) => {
   try {
     const candidate = await Candidate.findById(req.params.id)
       .populate('job')
+      .populate('assignedSlot')
       .populate('auditTrail.actorId', 'email role');
 
     if (!candidate) return res.status(404).json({ success: false, message: 'Candidate not found' });
@@ -1137,6 +1232,10 @@ exports.adminGetPipeline = async (req, res) => {
       }));
     }
 
+    const isTaggedAdminCand = Boolean(
+      candidate.assignedSlot && (candidate.assignedSlot.isTagged || candidate.assignedSlot.candidateId || candidate.status === 'SLOT_ASSIGNED')
+    );
+
     res.json({
       success: true,
       data: {
@@ -1147,9 +1246,23 @@ exports.adminGetPipeline = async (req, res) => {
         rounds: populatedRounds,
         hrRound: candidate.hrRound,
         auditTrail: candidate.auditTrail,
+        statusHistory: candidate.statusHistory || [],
         job: candidate.job,
         offer: candidate.offer,
-        assignedSlot: candidate.assignedSlot || null,
+        joining: candidate.joining,
+        assignedSlot: candidate.assignedSlot ? {
+          _id: candidate.assignedSlot._id || candidate.assignedSlot,
+          date: candidate.assignedSlot.date,
+          startTime: candidate.assignedSlot.startTime,
+          endTime: candidate.assignedSlot.endTime,
+          isTagged: isTaggedAdminCand,
+          candidateId: candidate.assignedSlot.candidateId,
+          roundType: candidate.assignedSlot.roundType,
+          interviewMode: candidate.assignedSlot.interviewMode,
+          interviewDetails: candidate.assignedSlot.interviewDetails,
+          interviewerName: candidate.assignedSlot.interviewerName,
+        } : null,
+        isTaggedCandidate: isTaggedAdminCand,
       }
     });
   } catch (err) {
@@ -1324,19 +1437,62 @@ function getActiveRoundInfo(candidate) {
     return null;
   }
 
+  // Pre-shortlist / review states
+  const prePipelineStates = [
+    'SENT_TO_CLIENT', 'SUBMITTED', 'COMPANY_REVIEW', 'CLIENT_REVIEW',
+    'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED',
+    'DRAFT', 'CONSENT_PENDING', 'CONSENT_SENT'
+  ];
+  if (prePipelineStates.includes(status)) {
+    return null;
+  }
+
+  const isHrMatch = (r1, r2) => (r1 || '').toUpperCase().includes('HR') && (r2 || '').toUpperCase().includes('HR');
+  const norm = str => (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const CLEARED_OR_SKIPPED = [
+    'PASSED',
+    'ROUND_PASSED',
+    'ROUND_SELECTED_NEXT',
+    'ROUND_SELECTED_DIRECT_HR',
+    'REJECTED',
+    'ROUND_REJECTED',
+    'HR_REJECTED',
+    'ASSESSMENT_FAILED',
+    'CANDIDATE_DROP',
+    'CLIENT_PORTAL_DUPLICATE'
+  ];
+  const CLEARED_OR_SKIPPED_DECISIONS = [
+    'SELECTED_NEXT_ROUND',
+    'SELECTED_DIRECT_HR',
+    'SKIPPED_TO_HR',
+    'REJECTED',
+    'FAILED'
+  ];
+
+  const isRoundCleared = (r) => {
+    if (!r) return false;
+    if (CLEARED_OR_SKIPPED.includes(r.status)) return true;
+    if (r.outcome?.decision && CLEARED_OR_SKIPPED_DECISIONS.includes(r.outcome.decision)) return true;
+    return false;
+  };
+
+  const hasSkippedToHr = candidate.rounds && candidate.rounds.some(r =>
+    r.status === 'ROUND_SELECTED_DIRECT_HR' ||
+    r.outcome?.decision === 'SELECTED_DIRECT_HR' ||
+    r.outcome?.decision === 'SKIPPED_TO_HR'
+  );
+
   // HR states
   const hrStates = [
+    'ROUND_SELECTED_DIRECT_HR',
     PIPELINE_STATES.HR_ROUND_PENDING,
     PIPELINE_STATES.HR_SELECTED,
     PIPELINE_STATES.HR_REJECTED,
     PIPELINE_STATES.HR_ON_HOLD
   ];
   if (hrStates.includes(status)) {
-    const idx = candidate.rounds.findIndex(r => {
-      const rt = (r.roundType || '').trim().toUpperCase();
-      const hrNames = ['HR', 'HR ROUND', 'HR_ROUND', 'HUMAN RESOURCE', 'HUMAN RESOURCE ROUND'];
-      return hrNames.includes(rt);
-    });
+    const idx = candidate.rounds.findIndex(r => isHrMatch(r.roundType, 'HR'));
     if (idx !== -1) return { index: idx, round: candidate.rounds[idx] };
   }
 
@@ -1375,9 +1531,64 @@ function getActiveRoundInfo(candidate) {
     return null;
   }
 
-  // L-round states
+  // If candidate was skipped directly to HR, prioritize HR round if status is in slot states
+  if (hasSkippedToHr) {
+    const hrIdx = candidate.rounds.findIndex(r => isHrMatch(r.roundType, 'HR'));
+    if (hrIdx !== -1) {
+      const hrRound = candidate.rounds[hrIdx];
+      const activeSlotStates = [
+        PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
+        PIPELINE_STATES.SLOTS_PUBLISHED,
+        PIPELINE_STATES.SLOT_ASSIGNED,
+        'INTERVIEW_SCHEDULED',
+        'INTERVIEW_CONFIRMED',
+        PIPELINE_STATES.RESCHEDULE_REQUESTED,
+        PIPELINE_STATES.SLOT_DETAILS_SHARED,
+        PIPELINE_STATES.INTERVIEW_CONDUCTED,
+        PIPELINE_STATES.ROUND_ON_HOLD
+      ];
+      if (activeSlotStates.includes(hrRound.status) || activeSlotStates.includes(status)) {
+        return { index: hrIdx, round: hrRound };
+      }
+    }
+  }
+
+  // Active scheduled/confirmed/assigned interview state resolution
+  const isScheduledOrConfirmed = ['INTERVIEW_CONFIRMED', 'INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED', 'SLOT_ASSIGNED', 'RESCHEDULE_REQUESTED'].includes(status);
+  if (isScheduledOrConfirmed && candidate.rounds && candidate.rounds.length > 0) {
+    // First: Match by candidate.assignedSlot if available
+    if (candidate.assignedSlot) {
+      const slotRoundType = candidate.assignedSlot.roundType;
+      if (slotRoundType) {
+        const matchIdx = candidate.rounds.findIndex(r => !isRoundCleared(r) && (isHrMatch(r.roundType, slotRoundType) || norm(r.roundType) === norm(slotRoundType)));
+        if (matchIdx !== -1) return { index: matchIdx, round: candidate.rounds[matchIdx] };
+      }
+    }
+
+    // Second: find uncleared round with slots
+    const roundWithSlot = candidate.rounds.findIndex(r => !isRoundCleared(r) && r.slots && r.slots.length > 0);
+    if (roundWithSlot !== -1) return { index: roundWithSlot, round: candidate.rounds[roundWithSlot] };
+
+    // Third: If skipped to HR, return HR round
+    if (hasSkippedToHr) {
+      const hrIdx = candidate.rounds.findIndex(r => isHrMatch(r.roundType, 'HR'));
+      if (hrIdx !== -1) return { index: hrIdx, round: candidate.rounds[hrIdx] };
+    }
+
+    // Fourth: return first uncleared round
+    const unclearedIdx = candidate.rounds.findIndex(r => !isRoundCleared(r));
+    if (unclearedIdx !== -1) return { index: unclearedIdx, round: candidate.rounds[unclearedIdx] };
+
+    const hrIdx = candidate.rounds.findIndex(r => isHrMatch(r.roundType, 'HR'));
+    const targetIdx = hrIdx !== -1 ? hrIdx : (candidate.rounds.length - 1);
+    return { index: targetIdx, round: candidate.rounds[targetIdx] };
+  }
+
+  // L-round states (check uncleared rounds)
   for (let i = 0; i < candidate.rounds.length; i++) {
     const r = candidate.rounds[i];
+    if (isRoundCleared(r)) continue;
+
     const L_STATES = [
       PIPELINE_STATES.SLOTS_NOT_PUBLISHED,
       PIPELINE_STATES.SLOTS_PUBLISHED,
@@ -1394,25 +1605,20 @@ function getActiveRoundInfo(candidate) {
     }
   }
 
-  // Active scheduled/confirmed interview state resolution
-  const isScheduledOrConfirmed = ['INTERVIEW_CONFIRMED', 'INTERVIEW_SCHEDULED', 'SLOT_DETAILS_SHARED'].includes(status);
-  if (isScheduledOrConfirmed && candidate.rounds && candidate.rounds.length > 0) {
-    const roundWithSlot = candidate.rounds.findIndex(r => r.slots && r.slots.length > 0);
-    if (roundWithSlot !== -1) return { index: roundWithSlot, round: candidate.rounds[roundWithSlot] };
-
-    const hrIdx = candidate.rounds.findIndex(r => (r.roundType || '').toUpperCase().includes('HR'));
-    const targetIdx = hrIdx !== -1 ? hrIdx : (candidate.rounds.length - 1);
-    return { index: targetIdx, round: candidate.rounds[targetIdx] };
-  }
-
   // Fallback for SHORTLISTED or un-matched states: find first uncleared round
   if (candidate.rounds && candidate.rounds.length > 0) {
     for (let i = 0; i < candidate.rounds.length; i++) {
       const r = candidate.rounds[i];
-      if (r.status !== 'PASSED' && r.status !== 'REJECTED' && r.outcome?.decision !== 'SELECTED_NEXT_ROUND' && r.outcome?.decision !== 'REJECTED') {
+      if (!isRoundCleared(r)) {
         return { index: i, round: r };
       }
     }
+
+    if (hasSkippedToHr) {
+      const hrIdx = candidate.rounds.findIndex(r => isHrMatch(r.roundType, 'HR'));
+      if (hrIdx !== -1) return { index: hrIdx, round: candidate.rounds[hrIdx] };
+    }
+
     return { index: 0, round: candidate.rounds[0] };
   }
 
@@ -3828,20 +4034,22 @@ exports.pipelineCompanyRejectOffer = async (req, res) => {
 // ─── POST /api/companies/pipeline/:id/mark-not-joined (Company-initiated) ──
 exports.pipelineCompanyMarkNotJoined = async (req, res) => {
   try {
-    const role = 'company';
-    const { reason } = req.body;
+    const role = ['admin', 'super_admin'].includes(req.user?.role) ? ROLES.ADMIN : ROLES.COMPANY;
+    const reason = (req.body.reason || req.body.notes || req.body.comment || '').trim();
     if (!reason) return res.status(400).json({ success: false, message: 'Reason is required for marking as not joined.' });
 
     const { candidate } = await verifyCompanyCandidateOwnership(req.params.id, req.user._id);
     const fromState = candidate.status;
 
-    const fsm = transition({ currentState: fromState, action: ACTIONS.MARK_NOT_JOINED, role, payload: {} });
+    const fsm = transition({ currentState: fromState, action: ACTIONS.MARK_NOT_JOINED, role, payload: { reason } });
     if (!fsm.ok) return handleFsmError(fsm, res);
 
     candidate.status = fsm.nextState;
     candidate.joining = {
       ...(candidate.joining || {}),
-      confirmed: false
+      confirmed: false,
+      notJoinedAt: new Date(),
+      notJoinedReason: reason
     };
     candidate.statusHistory.push({
       status: fsm.nextState,
@@ -3858,7 +4066,39 @@ exports.pipelineCompanyMarkNotJoined = async (req, res) => {
       reason: reason
     });
 
+    // Clear candidate slot assignments so no slot remains assigned
+    await freeCandidateSlotIfUncompleted(candidate, 'MARK_NOT_JOINED', reason, req.user, role);
+
     await candidate.save();
+
+    try {
+      await auditService.log({
+        actor: req.user._id,
+        actorRole: role,
+        actorEmail: req.user.email,
+        action: 'PIPELINE_MARK_NOT_JOINED',
+        entityType: 'Candidate',
+        entityId: candidate._id,
+        description: `Candidate marked as Not Joined. Reason: ${reason}`,
+        ipAddress: req.ip
+      });
+    } catch (auditErr) {
+      console.warn('[PIPELINE] Audit log error:', auditErr.message);
+    }
+
+    // Notify partner (fire-and-forget)
+    sendPipelineEmail('partner', candidate._id, `⚠️ Candidate Did Not Join - ${candidate.job?.title || 'Job'}`, 
+      `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <div style="background: linear-gradient(135deg, #64748b 0%, #475569 100%); color: white; padding: 24px; border-radius: 10px 10px 0 0; text-align: center;">
+          <h2 style="margin: 0; font-size: 20px;">Candidate Did Not Join</h2>
+        </div>
+        <div style="padding: 24px; background: #f9fafb; border: 1px solid #e5e7eb;">
+          <p>Hello Team,</p>
+          <p>Candidate <strong>${candidate.firstName} ${candidate.lastName}</strong> accepted the offer but did not join for the <strong>${candidate.job?.title || 'Job'}</strong> role.</p>
+          <p><strong>Reason:</strong> ${reason}</p>
+        </div>
+      </div>`
+    ).catch(e => console.error('[PIPELINE] Not joined email error:', e.message));
     res.json({ success: true, message: 'Candidate marked as not joined.', data: { candidateId: candidate._id, status: candidate.status } });
   } catch (err) {
     console.error('[PIPELINE] Company mark not joined error:', err);

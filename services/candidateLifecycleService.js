@@ -317,6 +317,13 @@ class CandidateLifecycleService {
           message: `${candidateName}'s application for "${jobTitle}" has been put on hold.${notes ? ` Note: ${notes}` : ''}`,
           priority: 'low',
           sendEmail: false
+        },
+        'NOT_JOINED': {
+          type: 'CANDIDATE_NOT_JOINED',
+          title: '⚠️ Candidate did not join',
+          message: `${candidateName} accepted the offer but did not join ${companyName} for "${jobTitle}".${notes ? ` Reason: ${notes}` : ''}`,
+          priority: 'high',
+          sendEmail: true
         }
       };
 

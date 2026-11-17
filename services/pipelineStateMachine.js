@@ -53,6 +53,7 @@ const PIPELINE_STATES = {
 
   // General (kept from existing flow for re-shortlist support)
   REJECTED: 'REJECTED',
+  NOT_JOINED: 'NOT_JOINED',
   CLIENT_PORTAL_DUPLICATE: 'CLIENT_PORTAL_DUPLICATE',
   CANDIDATE_DROP: 'CANDIDATE_DROP',
   JOINED: 'JOINED',
@@ -584,7 +585,19 @@ const TRANSITIONS = {
     },
     [ACTIONS.MARK_NOT_JOINED]: {
       allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
-      nextState: PIPELINE_STATES.REJECTED,
+      nextState: PIPELINE_STATES.NOT_JOINED,
+      requiresReason: true,
+    },
+  },
+
+  [PIPELINE_STATES.ONBOARDING]: {
+    [ACTIONS.MARK_JOINED]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: 'JOINED',
+    },
+    [ACTIONS.MARK_NOT_JOINED]: {
+      allowedRoles: [ROLES.COMPANY, ROLES.ADMIN],
+      nextState: PIPELINE_STATES.NOT_JOINED,
       requiresReason: true,
     },
   },
@@ -771,6 +784,7 @@ function _isTerminalState(state) {
     PIPELINE_STATES.OFFER_REJECTED,
     PIPELINE_STATES.ONBOARDING,
     PIPELINE_STATES.REJECTED,
+    PIPELINE_STATES.NOT_JOINED,
     PIPELINE_STATES.CLIENT_PORTAL_DUPLICATE,
     PIPELINE_STATES.CANDIDATE_DROP,
     PIPELINE_STATES.JOINED,

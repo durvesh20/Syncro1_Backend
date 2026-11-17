@@ -314,7 +314,9 @@ const candidateSchema = new mongoose.Schema({
     actualJoiningDate: Date,
     confirmed: Boolean,
     confirmedAt: Date,
-    documentsSubmitted: Boolean
+    documentsSubmitted: Boolean,
+    notJoinedAt: Date,
+    notJoinedReason: String
   },
 
   // ==================== COMMISSION SYSTEM (RE-ENABLED) ====================

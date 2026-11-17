@@ -209,6 +209,20 @@ router.delete('/units/:id', checkStatus('VERIFIED', 'ACTIVE'), requirePrimaryCom
 router.post('/units/:id/transfer-members', checkStatus('VERIFIED', 'ACTIVE'), requirePrimaryCompanyAdmin, transferUnitMembers);
 router.get('/users/managers-options', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, getReportingManagerOptions);
 
+// Middleware to override req.user._id for sub-admins so they act on behalf of the parent company
+router.use((req, res, next) => {
+  if (req.user && req.user.role === 'company' && req.user.createdBy) {
+    req.subAdminUser = req.user;
+    const userObj = req.user.toObject ? req.user.toObject() : req.user;
+    req.user = {
+      ...userObj,
+      _id: req.user.createdBy,
+      permissions: req.user.permissions,
+      createdBy: req.user.createdBy
+    };
+  }
+  next();
+});
 // ==================== COMPANY TEAM / SUB-ADMIN ROUTES ====================
 router.get('/sub-admins/permissions', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, getPermissionsMeta);
 router.post('/sub-admins', checkStatus('VERIFIED', 'ACTIVE'), authorizeTeamManagement, createSubAdmin);
@@ -443,10 +457,10 @@ router.delete(
 );
 
 // ==================== CANDIDATE ROUTES ====================
-router.get('/candidates', checkCompanyPermission('VIEW_CANDIDATES'), getAllCandidates);
-router.get('/candidates/:id', checkCompanyPermission('VIEW_CANDIDATES'), getCandidate);
-router.put("/candidates/:id/shortlist", checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), jobOnHoldGuard, shortlistCandidate);
-router.put("/candidates/:id/reject", checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), jobOnHoldGuard, rejectCandidate);
+router.get('/candidates', checkCompanyPermission(['VIEW_CANDIDATES', 'VIEW_APPLICANTS']), getAllCandidates);
+router.get('/candidates/:id', checkCompanyPermission(['VIEW_CANDIDATES', 'VIEW_APPLICANTS']), getCandidate);
+router.put("/candidates/:id/shortlist", checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['VIEW_CANDIDATES', 'VIEW_APPLICANTS']), jobOnHoldGuard, shortlistCandidate);
+router.put("/candidates/:id/reject", checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['VIEW_CANDIDATES', 'VIEW_APPLICANTS']), jobOnHoldGuard, rejectCandidate);
 
 // ── Interview Slot Flow ───────────────────────────────────────────────────────
 router.post('/jobs/:jobId/interview-slots', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), jobOnHoldGuard, createInterviewSlots);
@@ -456,11 +470,11 @@ router.delete('/jobs/:jobId/interview-slots/:slotId', checkStatus('VERIFIED', 'A
 router.post('/candidates/:id/confirm-interview', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), jobOnHoldGuard, confirmInterviewDetails);
 router.get('/interview-schedule', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['MANAGE_INTERVIEWS_SELF', 'MANAGE_INTERVIEWS_ALL']), getInterviewSchedule);
 
-router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), addNote);
+router.post('/candidates/:id/notes', checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['VIEW_CANDIDATES', 'VIEW_APPLICANTS']), addNote);
 
 // ==================== PIPELINE ROUTES (Phase 1–4) ====================
 // These sit alongside the existing candidate routes — no existing routes modified.
-const PIPELINE_MW = [checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission('VIEW_CANDIDATES'), jobOnHoldGuard];
+const PIPELINE_MW = [checkStatus('VERIFIED', 'ACTIVE'), checkCompanyPermission(['VIEW_CANDIDATES', 'VIEW_APPLICANTS']), jobOnHoldGuard];
 
 // Phase 1–2
 router.put('/candidates/:id/pipeline/shortlist',              ...PIPELINE_MW, pipelineShortlist);
@@ -471,12 +485,12 @@ router.put('/candidates/:id/pipeline/global-reject',          ...PIPELINE_MW, pi
 router.put('/candidates/:id/pipeline/client-portal-duplicate',...PIPELINE_MW, pipelineClientPortalDuplicate);
 router.put('/candidates/:id/pipeline/candidate-drop',         ...PIPELINE_MW, pipelineCandidateDrop);
 router.post('/candidates/:id/pipeline/template',              ...PIPELINE_MW, definePipelineTemplate);
-router.get('/candidates/:id/pipeline',                        checkCompanyPermission('VIEW_CANDIDATES'), getPipelinePreview);
+router.get('/candidates/:id/pipeline',                        checkCompanyPermission(['VIEW_CANDIDATES', 'VIEW_APPLICANTS']), getPipelinePreview);
 router.post('/candidates/:id/pipeline/repair-sync',            ...PIPELINE_MW, pipelineRepairSync);
 
 // Job-level Pipeline Template Routes
 router.post('/jobs/:jobId/pipeline/template',        ...PIPELINE_MW, defineJobPipelineTemplate);
-router.get('/jobs/:jobId/pipeline/template',         checkCompanyPermission('VIEW_CANDIDATES'), getJobPipelineTemplate);
+router.get('/jobs/:jobId/pipeline/template',         checkCompanyPermission(['VIEW_CANDIDATES', 'VIEW_APPLICANTS']), getJobPipelineTemplate);
 
 // Phase 3
 router.post('/candidates/:id/pipeline/assessment/link-sent', ...PIPELINE_MW, pipelineAssessmentLinkSent);
