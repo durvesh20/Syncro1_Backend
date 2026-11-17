@@ -1,8 +1,8 @@
 (function () {
   'use strict';
 
-  // Install once on /auth/register/campaign/talent-partner.
-  // A static WhatsApp URL proves landing arrival, not the recipient-specific click.
+  // Install only on the Talent Partner campaign registration landing page.
+  // A static WhatsApp URL proves landing arrival, not a recipient-specific click.
   var path = window.location.pathname || '';
   if (!/^\/auth\/register\/campaign\/talent-partner\/?$/i.test(path)) return;
 
@@ -11,9 +11,34 @@
   var recipientToken = query.get('wapi_recipient') || '';
   var attributionKey = 'syncro1_wapi_attribution_v2';
   var visitorStorageKey = 'syncro1_wapi_visitor_v1';
-  var trackingApi = String(window.SYNCRO1_WAPI_TRACKING_API ||
-    'https://devapi.syncro1.com/api/wapi-tracking').replace(/\/$/, '');
   var attribution = null;
+
+  function resolveTrackingApi() {
+    var configured = String(window.SYNCRO1_WAPI_TRACKING_API || '').trim();
+    if (configured) return configured.replace(/\/$/, '');
+
+    // Derive the API origin from the script URL. This makes the exact same
+    // script usable locally (localhost API) and in production (devapi origin).
+    var scriptUrl = '';
+    try {
+      if (document.currentScript && document.currentScript.src) {
+        scriptUrl = document.currentScript.src;
+      } else {
+        var scripts = document.getElementsByTagName('script');
+        for (var i = scripts.length - 1; i >= 0; i -= 1) {
+          if (/\/tracking\/wapi-tracking\.js(?:\?|$)/i.test(scripts[i].src || '')) {
+            scriptUrl = scripts[i].src;
+            break;
+          }
+        }
+      }
+      if (scriptUrl) return new URL(scriptUrl, window.location.href).origin + '/api/wapi-tracking';
+    } catch (_) {}
+
+    return 'https://devapi.syncro1.com/api/wapi-tracking';
+  }
+
+  var trackingApi = resolveTrackingApi();
 
   function makeId() {
     try {
@@ -77,7 +102,21 @@
     });
   }
 
-  // One stable arrival event per tab; reloads do not create duplicate leads.
+  function campaignEvent(eventType, eventId) {
+    if (!hasCampaignAttribution) return Promise.resolve();
+    return postJson('/event', {
+      campaignKey: attribution.campaignKey,
+      recipientToken: attribution.recipientToken || '',
+      visitorId: visitorId,
+      eventId: eventId,
+      eventType: eventType,
+      pagePath: path,
+      referrerHost: referrerHost()
+    });
+  }
+
+  // One stable arrival event per tab. Record the anonymous visitor regardless
+  // of campaign-token presence; campaign analytics are an additional event.
   var arrivalEventKey = 'syncro1_wapi_arrival_event_v1';
   var arrivalEventId = safeRead(window.sessionStorage, arrivalEventKey);
   if (!arrivalEventId) {
@@ -85,19 +124,8 @@
     safeWrite(window.sessionStorage, arrivalEventKey, arrivalEventId);
   }
 
-  if (hasCampaignAttribution) {
-    postJson('/event', {
-      campaignKey: attribution.campaignKey,
-      recipientToken: attribution.recipientToken || '',
-      visitorId: visitorId,
-      eventId: arrivalEventId,
-      eventType: 'PAGE_VIEW',
-      pagePath: path,
-      referrerHost: referrerHost()
-    });
-  } else {
-    visitorEvent('LANDING_PAGE_ARRIVED', arrivalEventId);
-  }
+  visitorEvent('LANDING_PAGE_ARRIVED', arrivalEventId);
+  campaignEvent('PAGE_VIEW', arrivalEventId);
 
   function isRegistrationRequest(url) {
     return /\/api\/auth\/register\/(staffing-partner|talent-partner|company)\/init(?:[?#]|$)/i.test(String(url || ''));
@@ -126,10 +154,8 @@
     var originalFetch = window.fetch;
     window.fetch = function (input, init) {
       var url = typeof input === 'string' ? input : (input && input.url);
-      if (isRegistrationRequest(url)) {
-        if (init && typeof init.body === 'string') {
-          init = Object.assign({}, init, { body: attachAttribution(init.body) });
-        }
+      if (isRegistrationRequest(url) && init && typeof init.body === 'string') {
+        init = Object.assign({}, init, { body: attachAttribution(init.body) });
       }
       return originalFetch.call(this, input, init);
     };
@@ -144,9 +170,7 @@
       return originalOpen.apply(this, arguments);
     };
     XMLHttpRequest.prototype.send = function (body) {
-      if (this.__syncro1WapiRegistration) {
-        body = attachAttribution(body);
-      }
+      if (this.__syncro1WapiRegistration) body = attachAttribution(body);
       return originalSend.call(this, body);
     };
   }
@@ -154,6 +178,7 @@
   window.syncro1WapiAttribution = {
     visitorId: visitorId,
     campaignKey: hasCampaignAttribution ? attribution.campaignKey : null,
-    recipientToken: hasCampaignAttribution ? attribution.recipientToken || null : null
+    recipientToken: hasCampaignAttribution ? attribution.recipientToken || null : null,
+    trackingApi: trackingApi
   };
 })();
