@@ -615,22 +615,29 @@ exports.getReportingManagerOptions = async (req, res) => {
 
     // Primary company admin is always a valid top-level reporting manager option
     if (primaryAdmin && (!userId || primaryAdmin._id.toString() !== userId.toString())) {
+      const adminName = [primaryAdmin.firstName, primaryAdmin.lastName].filter(Boolean).join(' ') || company.decisionMakerName || '';
       options.push({
         _id: primaryAdmin._id,
-        name: [primaryAdmin.firstName, primaryAdmin.lastName].filter(Boolean).join(' ') || company.decisionMakerName || primaryAdmin.email,
+        name: adminName || primaryAdmin.email,
+        firstName: primaryAdmin.firstName || '',
+        lastName: primaryAdmin.lastName || '',
         email: primaryAdmin.email,
-        jobTitle: 'Company Primary Administrator',
+        jobTitle: primaryAdmin.jobTitle || 'Master Admin',
+        roleLabel: 'Master Admin',
         isPrimaryAdmin: true,
       });
     }
 
     allUsers.forEach((u) => {
       if (!excludedIds.has(u._id.toString())) {
+        const userName = [u.firstName, u.lastName].filter(Boolean).join(' ');
         options.push({
           _id: u._id,
-          name: [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email,
+          name: userName || u.email,
+          firstName: u.firstName || '',
+          lastName: u.lastName || '',
           email: u.email,
-          jobTitle: u.jobTitle || (u.isUnitHead ? 'Unit Head' : 'Team Member'),
+          jobTitle: u.jobTitle || '',
           unitName: u.unit?.name || 'Unassigned',
           isUnitHead: !!u.isUnitHead,
         });
