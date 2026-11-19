@@ -40,7 +40,16 @@ const userSchema = new mongoose.Schema({
 
   role: {
     type: String,
-    enum: ['talent_partner', 'talent', 'company', 'admin', 'sub_admin', 'super_admin'],
+    enum: [
+      'talent_partner',
+      'staffing_partner',
+      'staffing',
+      'talent',
+      'company',
+      'admin',
+      'sub_admin',
+      'super_admin'
+    ],
     required: true
   },
 
@@ -51,6 +60,7 @@ const userSchema = new mongoose.Schema({
       'PENDING_MOBILE_VERIFICATION',
       'REGISTERED',
       'TEMP_PASS_SENT',
+      'DETAILS_SHARED',
       'PASS_CHANGED',
       'PASSWORD_CHANGED',
       'ONBOARDING_UNDERPROGRESS',
@@ -73,6 +83,13 @@ const userSchema = new mongoose.Schema({
 
   // Company sub-admin flag (distinguishes company sub-admins / team members from primary business accounts)
   isCompanySubAdmin: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+
+  // Talent partner sub-admin flag (distinguishes talent partner sub-admins / recruiters from primary business accounts)
+  isPartnerSubAdmin: {
     type: Boolean,
     default: false,
     index: true

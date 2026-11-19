@@ -9,6 +9,12 @@ const candidateSchema = new mongoose.Schema({
     ref: 'StaffingPartner',
     required: true
   },
+  // Specific user/sub-admin who submitted the candidate
+  submittedByUser: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
   job: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Job',

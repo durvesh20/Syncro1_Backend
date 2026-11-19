@@ -22,16 +22,18 @@ const {
     protect,
     authorize,
     authorizeAdminAccess,
-    checkPermission
+    checkPermission,
+    checkTalentPartnerPermission
 } = require('../middleware/auth');
 
-const { PERMISSIONS } = require('../utils/permissions');
+const { PERMISSIONS, TALENT_PARTNER_PERMISSIONS } = require('../utils/permissions');
 
 // ==================== PARTNER ROUTES ====================
 router.post(
     '/:jobId/interest',
     protect,
     authorize('talent_partner'),
+    checkTalentPartnerPermission(TALENT_PARTNER_PERMISSIONS.MANAGE_INTERESTED_JOBS),
     showInterest
 );
 
@@ -39,6 +41,7 @@ router.delete(
     '/:jobId/interest',
     protect,
     authorize('talent_partner'),
+    checkTalentPartnerPermission(TALENT_PARTNER_PERMISSIONS.MANAGE_INTERESTED_JOBS),
     withdrawInterest
 );
 
@@ -46,6 +49,7 @@ router.get(
     '/my-jobs',
     protect,
     authorize('talent_partner'),
+    checkTalentPartnerPermission([TALENT_PARTNER_PERMISSIONS.MANAGE_INTERESTED_JOBS, TALENT_PARTNER_PERMISSIONS.VIEW_JOBS]),
     getMyInterestedJobs
 );
 
@@ -53,6 +57,7 @@ router.get(
     '/:jobId/status',
     protect,
     authorize('talent_partner'),
+    checkTalentPartnerPermission([TALENT_PARTNER_PERMISSIONS.MANAGE_INTERESTED_JOBS, TALENT_PARTNER_PERMISSIONS.VIEW_JOBS]),
     getInterestStatus
 );
 
@@ -60,6 +65,7 @@ router.post(
     '/:jobId/request-extension',
     protect,
     authorize('talent_partner'),
+    checkTalentPartnerPermission(TALENT_PARTNER_PERMISSIONS.REQUEST_EXTENSIONS),
     requestLimitExtension
 );
 
@@ -67,6 +73,7 @@ router.get(
     '/extension-requests',
     protect,
     authorize('talent_partner'),
+    checkTalentPartnerPermission(TALENT_PARTNER_PERMISSIONS.REQUEST_EXTENSIONS),
     getMyExtensionRequests
 );
 

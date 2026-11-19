@@ -44,7 +44,14 @@ const {
   resendConsent,
   updateSubmission,
   getJobScreeningQuestionsForPartner,
-  downloadJobPositionPdf
+  downloadJobPositionPdf,
+  // Sub-admin Management
+  createSubAdmin,
+  getSubAdmins,
+  getSubAdminById,
+  updateSubAdmin,
+  updateSubAdminStatus,
+  getPermissionsMeta
 } = require('../controllers/staffingPartnerController');
 
 const {
@@ -56,7 +63,7 @@ const {
   applyFromPool
 } = require('../controllers/partnerCandidateController');
 
-const { protect, authorize, checkStatus } = require('../middleware/auth');
+const { protect, authorize, checkStatus, checkTalentPartnerPermission } = require('../middleware/auth');
 
 const {
   uploadResume: uploadResumeMiddleware,
@@ -82,14 +89,48 @@ const safeUpload = (multerFn) => (req, res, next) => {
 // ==================== AUTH MIDDLEWARE ====================
 // Applied to ALL routes below
 router.use(protect);
-router.use(authorize('talent_partner'));
+router.use(authorize('talent_partner', 'staffing', 'staffing_partner'));
+
+// Middleware to block sub-admins from managing sub-admins
+const blockSubAdmins = (req, res, next) => {
+  if (req.user && req.user.createdBy) {
+    return res.status(403).json({
+      success: false,
+      message: 'Only the main talent partner account is authorized to manage sub-admins.'
+    });
+  }
+  next();
+};
+
+// ==================== TALENT PARTNER SUB-ADMIN ROUTES ====================
+router.get('/sub-admins/permissions', blockSubAdmins, getPermissionsMeta);
+router.post('/sub-admins', blockSubAdmins, createSubAdmin);
+router.get('/sub-admins', blockSubAdmins, getSubAdmins);
+router.get('/sub-admins/:id', blockSubAdmins, getSubAdminById);
+router.put('/sub-admins/:id', blockSubAdmins, updateSubAdmin);
+router.put('/sub-admins/:id/status', blockSubAdmins, updateSubAdminStatus);
+
+// Middleware to override req.user._id for sub-admins so they act on behalf of the parent talent partner
+router.use((req, res, next) => {
+  if (req.user && (req.user.role === 'talent_partner' || req.user.role === 'staffing' || req.user.role === 'staffing_partner') && req.user.createdBy) {
+    req.subAdminUser = req.user;
+    const userObj = req.user.toObject ? req.user.toObject() : req.user;
+    req.user = {
+      ...userObj,
+      _id: req.user.createdBy,
+      permissions: req.user.permissions,
+      createdBy: req.user.createdBy
+    };
+  }
+  next();
+});
 
 // ==================== DASHBOARD ====================
-router.get('/dashboard', getDashboard);
+router.get('/dashboard', checkTalentPartnerPermission(['VIEW_DASHBOARD_SELF', 'VIEW_DASHBOARD_MASTER']), getDashboard);
 
 // ==================== PROFILE ROUTES ====================
-router.get('/profile', getProfile);
-router.get('/profile/completion', getProfileCompletion);
+router.get('/profile', checkTalentPartnerPermission(['MANAGE_PROFILE_SELF', 'MANAGE_PROFILE_MASTER', 'MANAGE_SETTINGS']), getProfile);
+router.get('/profile/completion', checkTalentPartnerPermission(['MANAGE_PROFILE_SELF', 'MANAGE_PROFILE_MASTER', 'MANAGE_SETTINGS']), getProfileCompletion);
 
 // Section 1: Basic Info
 router.put('/profile/basic-info', updateBasicInfo);
@@ -193,9 +234,9 @@ router.put(
 router.post('/profile/submit', submitProfile);
 
 // ==================== JOBS ROUTES ====================
-router.get('/jobs', getAvailableJobs);
-router.get('/jobs/:id', getJobDetails);
-router.get('/jobs/:id/download-jd', downloadJobPositionPdf);
+router.get('/jobs', checkTalentPartnerPermission('VIEW_JOBS'), getAvailableJobs);
+router.get('/jobs/:id', checkTalentPartnerPermission('VIEW_JOBS'), getJobDetails);
+router.get('/jobs/:id/download-jd', checkTalentPartnerPermission('VIEW_JOBS'), downloadJobPositionPdf);
 
 // ==================== PRE-SUBMISSION CHECKS ====================
 
@@ -294,6 +335,7 @@ router.post('/jobs/:jobId/check-fit', async (req, res) => {
 router.post(
   '/jobs/:jobId/candidates',
   jobOnHoldGuard,
+  checkTalentPartnerPermission('SUBMIT_CANDIDATE'),
   safeUpload(uploadResumeMiddleware),
   handleUploadError,
   submitCandidate
@@ -304,6 +346,7 @@ router.post(
 router.post(
   '/jobs/:jobId/candidates/from-pool',
   jobOnHoldGuard,
+  checkTalentPartnerPermission('SUBMIT_CANDIDATE'),
   applyFromPool
 );
 
@@ -314,36 +357,36 @@ router.post('/jobs/:jobId/tagged-slot/confirm', jobOnHoldGuard, confirmTaggedSlo
 router.post('/jobs/:jobId/tagged-slot/reject', jobOnHoldGuard, rejectTaggedSlotByCandidate);
 
 // ==================== SUBMISSIONS ROUTES ====================
-router.get('/submissions', getMySubmissions);
-router.get('/submissions/:id', getSubmission);
-router.get('/submissions/:id/pipeline', partnerGetPipeline);
-router.post('/submissions/:id/pipeline/reschedule', jobOnHoldGuard, partnerRequestReschedule);
-router.get('/worked-jobs', getWorkedJobs);
+router.get('/submissions', checkTalentPartnerPermission(['VIEW_SUBMISSIONS', 'VIEW_CANDIDATES']), getMySubmissions);
+router.get('/submissions/:id', checkTalentPartnerPermission(['VIEW_SUBMISSIONS', 'VIEW_CANDIDATES']), getSubmission);
+router.get('/submissions/:id/pipeline', checkTalentPartnerPermission(['VIEW_SUBMISSIONS', 'VIEW_CANDIDATES']), partnerGetPipeline);
+router.post('/submissions/:id/pipeline/reschedule', jobOnHoldGuard, checkTalentPartnerPermission(['VIEW_SUBMISSIONS', 'VIEW_CANDIDATES']), partnerRequestReschedule);
+router.get('/worked-jobs', checkTalentPartnerPermission(['VIEW_WORKED_JOBS', 'VIEW_JOBS']), getWorkedJobs);
 
 // @desc    Withdraw a submitted candidate
 // @route   PUT /api/talent-partners/submissions/:id/withdraw
-router.put('/submissions/:id/withdraw', withdrawCandidate);
+router.put('/submissions/:id/withdraw', checkTalentPartnerPermission(['VIEW_SUBMISSIONS', 'VIEW_CANDIDATES']), withdrawCandidate);
 
 // @desc    Update a submission's candidate details
 // @route   PUT /api/talent-partners/submissions/:id
-router.put('/submissions/:id', safeUpload(uploadResumeMiddleware), handleUploadError, updateSubmission);
+router.put('/submissions/:id', checkTalentPartnerPermission(['VIEW_SUBMISSIONS', 'VIEW_CANDIDATES']), safeUpload(uploadResumeMiddleware), handleUploadError, updateSubmission);
 
 // @desc    Resend WhatsApp consent to candidate (Initial Consent)
 // @route   POST /api/talent-partners/submissions/:id/resend-consent
 // @access  Only when candidate status is CONSENT_PENDING
-router.post('/submissions/:id/resend-consent', resendConsent);
+router.post('/submissions/:id/resend-consent', checkTalentPartnerPermission(['VIEW_SUBMISSIONS', 'VIEW_CANDIDATES']), resendConsent);
 
 // @desc    Resend interview consent (WhatsApp + Email) to candidate
 // @route   POST /api/talent-partners/submissions/:id/pipeline/resend-interview-consent
 // @access  Only when active round status is SLOT_DETAILS_SHARED
 const { pipelineResendInterviewConsent } = require('../controllers/pipelineResendConsent');
-router.post('/submissions/:id/pipeline/resend-interview-consent', pipelineResendInterviewConsent);
+router.post('/submissions/:id/pipeline/resend-interview-consent', checkTalentPartnerPermission(['VIEW_SUBMISSIONS', 'VIEW_CANDIDATES']), pipelineResendInterviewConsent);
 
 // ==================== EARNINGS & INVOICES ====================
-router.get('/earnings', getEarnings);
-router.get('/earnings/:id', getPayoutDetails);
-router.get('/invoices', getInvoices);
-router.get('/invoices/:id', getInvoice);
+router.get('/earnings', checkTalentPartnerPermission('VIEW_BILLING'), getEarnings);
+router.get('/earnings/:id', checkTalentPartnerPermission('VIEW_BILLING'), getPayoutDetails);
+router.get('/invoices', checkTalentPartnerPermission('VIEW_BILLING'), getInvoices);
+router.get('/invoices/:id', checkTalentPartnerPermission('VIEW_BILLING'), getInvoice);
 
 // ==================== CANDIDATE RESUME UPDATE ====================
 
@@ -400,11 +443,11 @@ const {
   enterTournament
 } = require('../controllers/partnerProgramController');
 
-router.get('/partner-program/tournaments', getAllTournaments);
-router.get('/partner-program/tournaments/:id', getTournamentById);
-router.post('/partner-program/tournaments/:id/enter', enterTournament);
-router.get('/partner-program/tournament', getCurrentTournament);
-router.get('/partner-program/leaderboard', getLeaderboard);
-router.get('/partner-program/stats', getPartnerStats);
+router.get('/partner-program/tournaments', checkTalentPartnerPermission('VIEW_PARTNER_PROGRAM'), getAllTournaments);
+router.get('/partner-program/tournaments/:id', checkTalentPartnerPermission('VIEW_PARTNER_PROGRAM'), getTournamentById);
+router.post('/partner-program/tournaments/:id/enter', checkTalentPartnerPermission('VIEW_PARTNER_PROGRAM'), enterTournament);
+router.get('/partner-program/tournament', checkTalentPartnerPermission('VIEW_PARTNER_PROGRAM'), getCurrentTournament);
+router.get('/partner-program/leaderboard', checkTalentPartnerPermission('VIEW_PARTNER_PROGRAM'), getLeaderboard);
+router.get('/partner-program/stats', checkTalentPartnerPermission('VIEW_PARTNER_PROGRAM'), getPartnerStats);
 
 module.exports = router;

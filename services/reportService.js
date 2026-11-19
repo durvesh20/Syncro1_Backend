@@ -66,15 +66,72 @@ function getReportTypesForRole(role) {
 
 // Returns a match fragment that hard-restricts data to the caller's scope,
 // or null if the caller has no scoping entity (e.g. company user w/o Company doc).
-async function resolveScope(user, def) {
+// Supports scope: 'master' (all firm/company data) vs 'self' (only jobs/candidates handled by caller).
+async function resolveScope(user, def, scope = 'master') {
   if (!def.scope) return {}; // admin reports: no scope
   if (def.scope.collection === 'companies') {
-    const doc = await Company.findOne({ user: user._id }).select('_id').lean();
-    return doc ? { [def.scope.field]: doc._id } : null;
+    const companyUserId = user.createdBy || user._id;
+    const doc = await Company.findOne({ user: companyUserId }).select('_id').lean();
+    if (!doc) return null;
+
+    if (scope === 'self') {
+      const Job = mongoose.model('Job');
+      const userJobIds = await Job.find({
+        company: doc._id,
+        $or: [
+          { createdBy: user._id },
+          { assignedTo: user._id },
+          { 'hiringTeam.user': user._id }
+        ]
+      }).distinct('_id');
+
+      if (def.base === 'jobs') {
+        return {
+          company: doc._id,
+          $or: [
+            { createdBy: user._id },
+            { assignedTo: user._id },
+            { 'hiringTeam.user': user._id }
+          ]
+        };
+      }
+
+      return {
+        $and: [
+          { [def.scope.field]: doc._id },
+          {
+            $or: [
+              { job: { $in: userJobIds } },
+              { 'statusHistory.changedBy': user._id }
+            ]
+          }
+        ]
+      };
+    }
+
+    return { [def.scope.field]: doc._id };
   }
   if (def.scope.collection === 'staffingpartners') {
-    const doc = await StaffingPartner.findOne({ user: user._id }).select('_id').lean();
-    return doc ? { [def.scope.field]: doc._id } : null;
+    const partnerUserId = user.createdBy || user._id;
+    const doc = await StaffingPartner.findOne({ user: partnerUserId }).select('_id').lean();
+    if (!doc) return null;
+
+    if (scope === 'self') {
+      return {
+        $and: [
+          { [def.scope.field]: doc._id },
+          {
+            $or: [
+              { submittedByUser: user._id },
+              { 'statusHistory.0.changedBy': user._id },
+              { 'statusHistory.changedBy': user._id }
+            ]
+          }
+        ]
+      };
+    }
+
+    return { [def.scope.field]: doc._id };
   }
   return {};
 }
@@ -449,18 +506,18 @@ function buildProjection(reportType, selectedFields, role) {
 }
 
 // Returns a Mongoose aggregation cursor for the report.
-async function buildCursor({ reportType, user, selectedFields, filters }) {
+async function buildCursor({ reportType, user, selectedFields, filters, scope = 'master' }) {
   const def = reportFieldRegistry[reportType];
   const Model = mongoose.model(BASE_MODEL[def.base]);
 
-  const scope = await resolveScope(user, def);
-  if (scope === null) {
+  const resolvedScope = await resolveScope(user, def, scope);
+  if (resolvedScope === null) {
     // Caller has no scoping entity -> no data
     return null;
   }
 
   const filterMatch = await buildFilterMatch(def, filters);
-  const match = { ...scope, ...filterMatch };
+  const match = { ...resolvedScope, ...filterMatch };
 
   // If specific candidates are selected, filter by their IDs
   const candidateIds = filters?.candidateIds || filters?.candidates;
@@ -472,13 +529,14 @@ async function buildCursor({ reportType, user, selectedFields, filters }) {
   }
 
   if (user.role === 'company' && !def.scope && def.base === 'candidates') {
-    const doc = await Company.findOne({ user: user._id }).select('_id').lean();
+    const companyUserId = user.createdBy || user._id;
+    const doc = await Company.findOne({ user: companyUserId }).select('_id').lean();
     if (doc) {
       match.company = doc._id;
     }
   }
 
-  console.log(`[reports] buildCursor: base=${def.base}, scope=`, scope, 'match=', match);
+  console.log(`[reports] buildCursor: base=${def.base}, scope=${scope}, resolvedScope=`, resolvedScope, 'match=', match);
 
   const pipeline = [
     { $match: match },
@@ -614,15 +672,15 @@ async function streamReportToResponse({ res, reportType, selectedFields, cursor,
  * Run the aggregation and return sample rows as JSON (no streaming).
  * Useful for debugging: POST /api/reports/debug
  */
-async function debugQuery({ reportType, user, selectedFields, filters }) {
+async function debugQuery({ reportType, user, selectedFields, filters, scope = 'master' }) {
   const def = reportFieldRegistry[reportType];
   if (!def) throw new Error('Unknown report type');
 
   const Model = mongoose.model(BASE_MODEL[def.base]);
-  const scope = await resolveScope(user, def);
+  const resolvedScope = await resolveScope(user, def, scope);
 
   const filterMatch = await buildFilterMatch(def, filters);
-  const match = { ...(scope || {}), ...filterMatch };
+  const match = { ...(resolvedScope || {}), ...filterMatch };
 
   const pipeline = [
     { $match: match },

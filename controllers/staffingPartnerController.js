@@ -25,8 +25,9 @@ const { transition, ACTIONS, PIPELINE_STATES } = require('../services/pipelineSt
 // @route   GET /api/talent-partners/profile
 exports.getProfile = async (req, res) => {
   try {
+    const partnerUserId = req.user.createdBy || req.user._id;
     const partner = await StaffingPartner.findOne({
-      user: req.user._id
+      user: partnerUserId
     }).populate('user', 'email mobile status emailVerified emailVerifiedAt mobileVerified');
 
     if (!partner) {
@@ -994,7 +995,8 @@ exports.submitProfile = async (req, res) => {
 // @route   GET /api/talent-partners/jobs
 exports.getAvailableJobs = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
 
     if (!partner) {
       return res.status(404).json({
@@ -1104,7 +1106,8 @@ exports.getJobDetails = async (req, res) => {
     }
 
     // Check plan eligibility
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     if (!partner) {
       return res.status(404).json({
         success: false,
@@ -1229,7 +1232,8 @@ exports.downloadJobPositionPdf = async (req, res) => {
 //   req.file.originalname = original filename
 exports.submitCandidate = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     const job = await Job.findById(req.params.jobId).populate('company', 'companyName');
 
     if (!partner) {
@@ -1605,6 +1609,7 @@ exports.submitCandidate = async (req, res) => {
     // ✅ STEP 15: Create candidate in DRAFT status with resume from Cloudinary
     const candidate = await Candidate.create({
       submittedBy: partner._id,
+      submittedByUser: req.user._id,
       job: job._id,
       company: job.company,
 
@@ -1825,7 +1830,8 @@ exports.submitCandidate = async (req, res) => {
 // GET /api/partners/jobs/:jobId/interview-slots
 exports.getAvailableSlotsForPartner = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     if (!partner) {
       return res.status(404).json({ success: false, message: 'Partner not found' });
     }
@@ -2000,7 +2006,8 @@ exports.assignCandidateToSlot = async (req, res) => {
       });
     }
 
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     if (!partner) {
       return res.status(404).json({ success: false, message: 'Partner not found' });
     }
@@ -2410,7 +2417,8 @@ exports.assignCandidateToSlot = async (req, res) => {
 // DELETE /api/partners/jobs/:jobId/interview-slots/:slotId/assign/:candidateId
 exports.removeCandidateFromSlot = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     if (!partner) {
       return res.status(404).json({ success: false, message: 'Partner not found' });
     }
@@ -2555,7 +2563,8 @@ exports.confirmTaggedSlot = async (req, res) => {
       return res.status(400).json({ success: false, message: 'candidateId is required' });
     }
 
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     if (!partner) {
       return res.status(404).json({ success: false, message: 'Partner not found' });
     }
@@ -2737,7 +2746,8 @@ exports.rejectTaggedSlotByCandidate = async (req, res) => {
       });
     }
 
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     if (!partner) {
       return res.status(404).json({ success: false, message: 'Partner not found' });
     }
@@ -2833,7 +2843,8 @@ exports.uploadResume = async (req, res) => {
       });
     }
 
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
 
     if (!partner) {
       return res.status(404).json({
@@ -3217,7 +3228,8 @@ const getTalentSubmissionCounts = async (baseQuery, existingStatusBreakdown) => 
 // @route   GET /api/talent-partners/submissions
 exports.getMySubmissions = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
 
     if (!partner) {
       return res.status(404).json({
@@ -3615,7 +3627,8 @@ exports.updateSubmission = async (req, res) => {
 // @access  Talent Partner — only when candidate status is CONSENT_PENDING
 exports.resendConsent = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
 
     if (!partner) {
       return res.status(404).json({ success: false, message: 'Partner profile not found' });
@@ -3715,7 +3728,8 @@ exports.resendConsent = async (req, res) => {
 // @route   PUT /api/talent-partners/submissions/:id/withdraw
 exports.withdrawCandidate = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     const { reason } = req.body;
 
     if (!partner) {
@@ -3823,7 +3837,8 @@ exports.withdrawCandidate = async (req, res) => {
 // @route   GET /api/talent-partners/dashboard
 exports.getDashboard = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id }).populate(
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId }).populate(
       'user',
       'emailVerified mobileVerified'
     );
@@ -3837,13 +3852,32 @@ exports.getDashboard = async (req, res) => {
 
     const PartnerCandidate = require('../models/PartnerCandidate');
 
-    const partnerIds = [partner._id, req.user._id].filter(Boolean);
-    const partnerBaseQuery = {
-      $or: [
-        { submittedBy: { $in: partnerIds } },
-        { partner: { $in: partnerIds } }
-      ]
-    };
+    const isSubAdmin = !!req.user.createdBy;
+    const permissions = isSubAdmin ? (req.user.permissions || []) : [];
+    const canViewMaster = !isSubAdmin || permissions.includes('VIEW_DASHBOARD_MASTER');
+    const canViewSelf = !isSubAdmin || permissions.includes('VIEW_DASHBOARD_SELF');
+
+    // Scope selection: 'self' or 'master'
+    let requestedScope = req.query.scope;
+    if (requestedScope !== 'self' && requestedScope !== 'master') {
+      requestedScope = canViewMaster ? 'master' : 'self';
+    }
+    const effectiveScope = (!canViewMaster) ? 'self' : requestedScope;
+
+    let partnerBaseQuery;
+    if (effectiveScope === 'self') {
+      partnerBaseQuery = {
+        submittedBy: req.user._id
+      };
+    } else {
+      const partnerIds = [partner._id, partner.user, req.user._id].filter(Boolean);
+      partnerBaseQuery = {
+        $or: [
+          { submittedBy: { $in: partnerIds } },
+          { partner: { $in: partnerIds } }
+        ]
+      };
+    }
 
     // 1. Worked Jobs Count (unique jobs partner has submitted candidate(s) to)
     const workedJobs = await Candidate.distinct('job', partnerBaseQuery);
@@ -3975,7 +4009,15 @@ exports.getDashboard = async (req, res) => {
 
     const Payout = require('../models/Payout');
 
-    const earningsSummary = {
+    const isSelfScope = effectiveScope === 'self';
+
+    const earningsSummary = isSelfScope ? {
+      totalEarnings: 0,
+      pendingPayouts: 0,
+      eligiblePayouts: 0,
+      paidOut: 0,
+      totalPlacements: counts.joined || 0
+    } : {
       totalEarnings: partner.metrics.totalEarnings || 0,
       pendingPayouts: partner.metrics.pendingPayouts || 0,
       eligiblePayouts: partner.metrics.eligiblePayouts || 0,
@@ -3986,7 +4028,7 @@ exports.getDashboard = async (req, res) => {
     const upcomingDate = new Date();
     upcomingDate.setDate(upcomingDate.getDate() + 30);
 
-    const upcomingPayouts = await Payout.find({
+    const upcomingPayouts = isSelfScope ? [] : await Payout.find({
       staffingPartner: partner._id,
       status: 'PENDING',
       'replacementGuarantee.endDate': {
@@ -3998,7 +4040,7 @@ exports.getDashboard = async (req, res) => {
       .sort({ 'replacementGuarantee.endDate': 1 })
       .limit(5);
 
-    const recentPayouts = await Payout.find({
+    const recentPayouts = isSelfScope ? [] : await Payout.find({
       staffingPartner: partner._id,
       status: { $in: ['PAID', 'ELIGIBLE', 'APPROVED'] }
     })
@@ -4009,6 +4051,9 @@ exports.getDashboard = async (req, res) => {
     res.json({
       success: true,
       data: {
+        scope: effectiveScope,
+        canViewMaster,
+        canViewSelf,
         partner: {
           name: partner.firmName || `${partner.firstName} ${partner.lastName}`,
           firmName: partner.firmName,
@@ -4237,7 +4282,8 @@ exports.getPayoutDetails = async (req, res) => {
 exports.getInvoices = async (req, res) => {
   try {
     const Invoice = require('../models/Invoice');
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
 
     if (!partner) {
       return res.status(404).json({
@@ -4293,7 +4339,8 @@ exports.getInvoices = async (req, res) => {
 exports.getInvoice = async (req, res) => {
   try {
     const Invoice = require('../models/Invoice');
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
 
     if (!partner) {
       return res.status(404).json({
@@ -4335,7 +4382,8 @@ exports.getInvoice = async (req, res) => {
 // @route   GET /api/talent-partners/worked-jobs
 exports.getWorkedJobs = async (req, res) => {
   try {
-    const partner = await StaffingPartner.findOne({ user: req.user._id });
+    const partnerUserId = req.user.createdBy || req.user._id;
+    const partner = await StaffingPartner.findOne({ user: partnerUserId });
     if (!partner) {
       return res.status(404).json({
         success: false,
@@ -4554,5 +4602,450 @@ exports.getJobScreeningQuestionsForPartner = async (req, res) => {
   } catch (error) {
     console.error('getJobScreeningQuestionsForPartner error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch screening questions', error: error.message });
+  }
+};
+
+// ============================================================
+// TALENT PARTNER SUB-ADMIN MANAGEMENT
+// ============================================================
+
+const crypto = require('crypto');
+const {
+  TALENT_PARTNER_ALL_PERMISSIONS,
+  TALENT_PARTNER_PERMISSION_GROUPS,
+  TALENT_PARTNER_SUB_ADMIN_BUNDLES
+} = require('../utils/permissions');
+
+// Generate a secure random password
+const generatePassword = () => {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghjkmnpqrstuvwxyz';
+  const digits = '23456789';
+  const special = '@#$!';
+  const all = upper + lower + digits + special;
+  const rand = (str) => str[crypto.randomInt(str.length)];
+  const base = rand(upper) + rand(lower) + rand(digits) + rand(special);
+  const rest = Array.from({ length: 8 }, () => rand(all)).join('');
+  return (base + rest).split('').sort(() => crypto.randomInt(3) - 1).join('');
+};
+
+const isValidEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
+const validateTalentPartnerPermissions = (permissions = []) => {
+  if (!Array.isArray(permissions)) return false;
+  return permissions.every((p) => TALENT_PARTNER_ALL_PERMISSIONS.includes(p));
+};
+
+// @desc    Create talent partner sub-admin
+// @route   POST /api/talent-partners/sub-admins
+// @access  Talent Partner (Main User only)
+exports.createSubAdmin = async (req, res) => {
+  try {
+    const emailService = require('../services/emailService');
+    const {
+      firstName = '',
+      lastName = '',
+      email,
+      mobile,
+      permissions = [],
+      bundle,
+      status = 'ACTIVE'
+    } = req.body;
+
+    if (!email || !mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and WhatsApp number are required'
+      });
+    }
+
+    if (!firstName.trim() || !lastName.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'First name and last name are required'
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+    if (!isValidEmail(normalizedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address.'
+      });
+    }
+
+    if (normalizedMobile.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid 10-digit WhatsApp/mobile number.'
+      });
+    }
+
+    const existingUser = await User.findOne({
+      $or: [
+        { email: normalizedEmail },
+        { mobile: normalizedMobile }
+      ]
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or WhatsApp number already exists'
+      });
+    }
+
+    let finalPermissions = permissions;
+
+    // If bundle provided and permissions not provided, use bundle
+    if ((!permissions || permissions.length === 0) && bundle) {
+      if (!TALENT_PARTNER_SUB_ADMIN_BUNDLES[bundle]) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid permission bundle'
+        });
+      }
+      finalPermissions = TALENT_PARTNER_SUB_ADMIN_BUNDLES[bundle];
+    }
+
+    if (!validateTalentPartnerPermissions(finalPermissions)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid permissions provided'
+      });
+    }
+
+    // Auto-generate a secure password
+    const autoPassword = generatePassword();
+
+    const subAdmin = await User.create({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: normalizedEmail,
+      mobile: normalizedMobile,
+      password: autoPassword,
+      role: 'talent_partner',
+      status: status || 'DETAILS_SHARED',
+      permissions: [...new Set(finalPermissions)],
+      createdBy: req.user._id,
+      isPartnerSubAdmin: true,
+      emailVerified: true,
+      mobileVerified: true,
+      emailVerifiedAt: new Date(),
+      mobileVerifiedAt: new Date(),
+      isPasswordChanged: false // Must change on first login
+    });
+
+    // Send onboarding welcome email (fire-and-forget)
+    emailService.sendSubAdminWelcome(
+      normalizedEmail,
+      firstName.trim(),
+      lastName.trim(),
+      autoPassword,
+      [...new Set(finalPermissions)],
+      'Talent Partner Team Member'
+    ).catch(e => console.error('[TALENT-PARTNER-SUB-ADMIN] Welcome email failed:', e.message));
+
+    const responseUser = await User.findById(subAdmin._id).select('-password');
+
+    res.status(201).json({
+      success: true,
+      message: `Sub-admin created! Welcome email sent to ${normalizedEmail}`,
+      data: responseUser
+    });
+  } catch (error) {
+    console.error('[TALENT-PARTNER-SUB-ADMIN] Create error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create sub-admin',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get all talent partner sub-admins
+// @route   GET /api/talent-partners/sub-admins
+// @access  Talent Partner (Main User only)
+exports.getSubAdmins = async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const { status, search } = req.query;
+
+    const query = {
+      role: { $in: ['talent_partner', 'staffing', 'staffing_partner'] },
+      createdBy: req.user._id
+    };
+
+    if (status) {
+      query.status = status;
+    }
+
+    if (search) {
+      query.$or = [
+        { firstName: new RegExp(search, 'i') },
+        { lastName: new RegExp(search, 'i') },
+        { email: new RegExp(search, 'i') },
+        { mobile: new RegExp(search, 'i') }
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [subAdmins, total] = await Promise.all([
+      User.find(query)
+        .select('-password')
+        .populate('createdBy', 'email role firstName lastName')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      User.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        subAdmins,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          limit
+        }
+      }
+    });
+  } catch (error) {
+    console.error('[TALENT-PARTNER-SUB-ADMIN] List error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch sub-admins',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get single talent partner sub-admin
+// @route   GET /api/talent-partners/sub-admins/:id
+// @access  Talent Partner (Main User only)
+exports.getSubAdminById = async (req, res) => {
+  try {
+    const subAdmin = await User.findOne({
+      _id: req.params.id,
+      role: { $in: ['talent_partner', 'staffing', 'staffing_partner'] },
+      createdBy: req.user._id
+    })
+      .select('-password')
+      .populate('createdBy', 'email role firstName lastName');
+
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Sub-admin not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: subAdmin
+    });
+  } catch (error) {
+    console.error('[TALENT-PARTNER-SUB-ADMIN] Get by id error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch sub-admin',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update talent partner sub-admin
+// @route   PUT /api/talent-partners/sub-admins/:id
+// @access  Talent Partner (Main User only)
+exports.updateSubAdmin = async (req, res) => {
+  try {
+    const {
+      firstName,
+      lastName,
+      mobile,
+      permissions,
+      bundle,
+      status
+    } = req.body;
+
+    const subAdmin = await User.findOne({
+      _id: req.params.id,
+      role: { $in: ['talent_partner', 'staffing', 'staffing_partner'] },
+      createdBy: req.user._id
+    });
+
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Sub-admin not found'
+      });
+    }
+
+    if (firstName !== undefined) subAdmin.firstName = firstName.trim();
+    if (lastName !== undefined) subAdmin.lastName = lastName.trim();
+
+    if (mobile) {
+      const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+      const existingMobileUser = await User.findOne({
+        mobile: normalizedMobile,
+        _id: { $ne: subAdmin._id }
+      });
+
+      if (existingMobileUser) {
+        return res.status(400).json({
+          success: false,
+          message: 'WhatsApp number already in use'
+        });
+      }
+
+      subAdmin.mobile = normalizedMobile;
+    }
+
+    let finalPermissions = permissions;
+
+    if ((!permissions || permissions.length === 0) && bundle) {
+      if (!TALENT_PARTNER_SUB_ADMIN_BUNDLES[bundle]) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid permission bundle'
+        });
+      }
+      finalPermissions = TALENT_PARTNER_SUB_ADMIN_BUNDLES[bundle];
+    }
+
+    if (finalPermissions !== undefined) {
+      if (!validateTalentPartnerPermissions(finalPermissions)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid permissions provided'
+        });
+      }
+
+      subAdmin.permissions = [...new Set(finalPermissions)];
+    }
+
+    if (status) {
+      subAdmin.status = status;
+
+      if (status === 'SUSPENDED') {
+        subAdmin.suspendedBy = req.user._id;
+        subAdmin.suspendedAt = new Date();
+      } else {
+        subAdmin.suspendedBy = null;
+        subAdmin.suspendedAt = null;
+      }
+    }
+
+    await subAdmin.save();
+
+    const updatedSubAdmin = await User.findById(subAdmin._id)
+      .select('-password')
+      .populate('createdBy', 'email role firstName lastName');
+
+    res.json({
+      success: true,
+      message: 'Sub-admin updated successfully',
+      data: updatedSubAdmin
+    });
+  } catch (error) {
+    console.error('[TALENT-PARTNER-SUB-ADMIN] Update error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update sub-admin',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Update talent partner sub-admin status
+// @route   PUT /api/talent-partners/sub-admins/:id/status
+// @access  Talent Partner (Main User only)
+exports.updateSubAdminStatus = async (req, res) => {
+  try {
+    const { status } = req.body;
+
+    if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Allowed: ACTIVE, SUSPENDED'
+      });
+    }
+
+    const subAdmin = await User.findOne({
+      _id: req.params.id,
+      role: { $in: ['talent_partner', 'staffing', 'staffing_partner'] },
+      createdBy: req.user._id
+    });
+
+    if (!subAdmin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Sub-admin not found'
+      });
+    }
+
+    subAdmin.status = status;
+
+    if (status === 'SUSPENDED') {
+      subAdmin.suspendedBy = req.user._id;
+      subAdmin.suspendedAt = new Date();
+    } else {
+      subAdmin.suspendedBy = null;
+      subAdmin.suspendedAt = null;
+    }
+
+    await subAdmin.save();
+
+    res.json({
+      success: true,
+      message: 'Sub-admin status updated successfully',
+      data: {
+        id: subAdmin._id,
+        email: subAdmin.email,
+        status: subAdmin.status,
+        suspendedAt: subAdmin.suspendedAt
+      }
+    });
+  } catch (error) {
+    console.error('[TALENT-PARTNER-SUB-ADMIN] Status update error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update sub-admin status',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Get talent partner available permissions and bundles
+// @route   GET /api/talent-partners/sub-admins/permissions
+// @access  Talent Partner (Main User only)
+exports.getPermissionsMeta = async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        allPermissions: TALENT_PARTNER_ALL_PERMISSIONS,
+        groups: TALENT_PARTNER_PERMISSION_GROUPS,
+        bundles: TALENT_PARTNER_SUB_ADMIN_BUNDLES,
+        totalPermissions: TALENT_PARTNER_ALL_PERMISSIONS.length
+      }
+    });
+  } catch (error) {
+    console.error('[TALENT-PARTNER-SUB-ADMIN] Get permissions meta error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch permissions metadata',
+      error: error.message
+    });
   }
 };

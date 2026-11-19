@@ -151,11 +151,11 @@ router.use((req, res, next) => {
 });
 
 // ==================== DASHBOARD ====================
-router.get('/dashboard', getDashboard);
+router.get('/dashboard', checkCompanyPermission(['VIEW_DASHBOARD_SELF', 'VIEW_DASHBOARD_MASTER']), getDashboard);
 
 // ==================== PROFILE ROUTES ====================
-router.get('/profile', getProfile);
-router.get('/profile/completion', getProfileCompletion);
+router.get('/profile', checkCompanyPermission(['MANAGE_PROFILE_SELF', 'MANAGE_PROFILE_MASTER', 'MANAGE_SETTINGS']), getProfile);
+router.get('/profile/completion', checkCompanyPermission(['MANAGE_PROFILE_SELF', 'MANAGE_PROFILE_MASTER', 'MANAGE_SETTINGS']), getProfileCompletion);
 
 // Section 1: Basic Info (Decision Maker)
 router.put('/profile/basic-info', checkCompanyPermission('MANAGE_SETTINGS'), updateBasicInfo);

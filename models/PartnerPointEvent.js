@@ -25,7 +25,7 @@ const STAGE_POINTS = {
   ROUND_2_SELECTION: 10,
   OFFERED: 20,
   JOINED: 20,
-  RETENTION_90_DAYS: 20,
+  RETENTION_90_DAYS: 0,
   MANUAL_ADJUSTMENT: 0,
 
   // Backward compatibility points
@@ -104,8 +104,20 @@ partnerPointEventSchema.index(
   { unique: true, partialFilterExpression: { stage: 'MANUAL_ADJUSTMENT' } }
 );
 
+const PartnerPointEvent = mongoose.model('PartnerPointEvent', partnerPointEventSchema);
+
+// Drop legacy index if present in MongoDB collection
+mongoose.connection.on('open', async () => {
+  try {
+    await PartnerPointEvent.collection.dropIndex('partner_1_candidate_1_stage_1');
+  } catch (_) {}
+});
+if (mongoose.connection.readyState === 1) {
+  PartnerPointEvent.collection.dropIndex('partner_1_candidate_1_stage_1').catch(() => {});
+}
+
 module.exports = {
-  PartnerPointEvent: mongoose.model('PartnerPointEvent', partnerPointEventSchema),
+  PartnerPointEvent,
   STAGES,
   STAGE_POINTS
 };

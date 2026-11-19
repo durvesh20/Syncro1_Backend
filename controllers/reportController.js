@@ -26,7 +26,43 @@ function assertAllowed(req, res, reportType) {
     res.status(403).json({ success: false, message: 'Your role cannot access this report type' });
     return null;
   }
+  if (req.user.createdBy && (req.user.role === 'talent_partner' || req.user.role === 'company')) {
+    const scope = getEffectiveReportScope(req.user);
+    if (!scope) {
+      res.status(403).json({ success: false, message: 'You do not have permission to download reports' });
+      return null;
+    }
+  }
   return def;
+}
+
+// Determines the effective scope ('self' vs 'master') for sub-admins & parent users.
+function getEffectiveReportScope(user, requestedScope) {
+  if (['admin', 'sub_admin', 'super_admin'].includes(user.role)) {
+    return 'master';
+  }
+
+  // Parent user (not a sub-admin) has full master access, can toggle to self
+  if (!user.createdBy) {
+    return requestedScope === 'self' ? 'self' : 'master';
+  }
+
+  const perms = user.permissions || [];
+  const canMaster = perms.includes('DOWNLOAD_REPORTS_MASTER');
+  const canSelf = perms.includes('DOWNLOAD_REPORTS_SELF') || perms.includes('DOWNLOAD_REPORTS');
+
+  if (!canMaster && !canSelf) {
+    return null; // Forbidden: no report download permission
+  }
+
+  if (canMaster && canSelf) {
+    return requestedScope === 'self' ? 'self' : 'master';
+  }
+
+  if (canMaster) return 'master';
+  if (canSelf) return 'self';
+
+  return null;
 }
 
 function todayStamp() {
@@ -38,6 +74,12 @@ function todayStamp() {
 // ---- GET /api/reports/types ----------------------------------------------
 exports.getReportTypes = async (req, res) => {
   try {
+    if (req.user.createdBy && (req.user.role === 'talent_partner' || req.user.role === 'company')) {
+      const scope = getEffectiveReportScope(req.user);
+      if (!scope) {
+        return res.status(403).json({ success: false, message: 'You do not have permission to download reports' });
+      }
+    }
     const types = reportService.getReportTypesForRole(req.user.role);
     res.json({ success: true, data: { reportTypes: types } });
   } catch (err) {
@@ -256,9 +298,17 @@ exports.previewReport = async (req, res) => {
 // Runs the scoped query, streams the .xlsx file, and writes an audit log.
 exports.generateReport = async (req, res) => {
   try {
-    const { reportType, selectedFields = [], filters = {}, readableFilters, format = 'excel' } = req.body || {};
+    const { reportType, selectedFields = [], filters = {}, readableFilters, format = 'excel', scope } = req.body || {};
     const def = assertAllowed(req, res, reportType);
     if (!def) return;
+
+    const effectiveScope = getEffectiveReportScope(req.user, scope || req.query?.scope);
+    if (effectiveScope === null) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to download reports'
+      });
+    }
 
     const validKeys = new Set(getValidFieldKeys(reportType, req.user.role));
     const validFields = (selectedFields || []).filter(
@@ -275,10 +325,11 @@ exports.generateReport = async (req, res) => {
       reportType,
       user: req.user,
       selectedFields: validFields,
-      filters: filters || {}
+      filters: filters || {},
+      scope: effectiveScope
     });
 
-    console.log(`[reports] generate: user=${req.user._id} role=${req.user.role} type=${reportType} fields=${validFields.length} filters=`, JSON.stringify(filters));
+    console.log(`[reports] generate: user=${req.user._id} role=${req.user.role} type=${reportType} scope=${effectiveScope} fields=${validFields.length} filters=`, JSON.stringify(filters));
 
     // No scoping entity -> empty result (still produce a valid file)
     if (cursor === null) {
@@ -319,9 +370,17 @@ exports.generateReport = async (req, res) => {
 // Diagnostic endpoint: returns sample rows as JSON (no file streaming).
 exports.debugReport = async (req, res) => {
   try {
-    const { reportType, selectedFields = [], filters = {} } = req.body || {};
+    const { reportType, selectedFields = [], filters = {}, scope } = req.body || {};
     const def = assertAllowed(req, res, reportType);
     if (!def) return;
+
+    const effectiveScope = getEffectiveReportScope(req.user, scope || req.query?.scope);
+    if (effectiveScope === null) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to download reports'
+      });
+    }
 
     const validKeys = new Set(getValidFieldKeys(reportType, req.user.role));
     const validFields = (selectedFields || []).filter(
@@ -332,7 +391,8 @@ exports.debugReport = async (req, res) => {
       reportType,
       user: req.user,
       selectedFields: validFields,
-      filters: filters || {}
+      filters: filters || {},
+      scope: effectiveScope
     });
 
     res.json({ success: true, data: result });

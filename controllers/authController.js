@@ -58,7 +58,7 @@ const syncUserStatusAfterVerification = (user) => {
  */
 const getPostLoginNextStep = async (user) => {
   // If user has not changed their temporary password, password change is mandatory first
-  if (user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT') {
+  if (user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT' || user.status === 'DETAILS_SHARED') {
     return {
       profile: null,
       profileMeta: {
@@ -83,10 +83,22 @@ const getPostLoginNextStep = async (user) => {
 
   let profile = null;
 
-  if (user.role === 'talent_partner') {
-    profile = await StaffingPartner.findOne({ user: user._id });
+  if (user.role === 'talent_partner' || user.role === 'staffing' || user.role === 'staffing_partner') {
+    profile = await StaffingPartner.findOne({ user: user.createdBy || user._id });
   } else if (user.role === 'company') {
-    profile = await Company.findOne({ user: user._id });
+    profile = await Company.findOne({ user: user.createdBy || user._id });
+  }
+
+  // Sub-admins of talent partner or company go straight to dashboard
+  if (user.createdBy || user.isPartnerSubAdmin || user.isCompanySubAdmin) {
+    return {
+      profile,
+      profileMeta: {
+        completionPercentage: 100,
+        verificationStatus: profile?.verificationStatus || 'APPROVED'
+      },
+      nextStep: 'GO_TO_DASHBOARD'
+    };
   }
 
   if (!profile) {
@@ -890,7 +902,7 @@ exports.login = async (req, res) => {
     }
 
     const isInitialFlow = user.isPasswordChanged === false ||
-      ['TEMP_PASS_SENT', 'PASS_CHANGED', 'ONBOARDING_UNDERPROGRESS'].includes(user.status);
+      ['TEMP_PASS_SENT', 'DETAILS_SHARED', 'PASS_CHANGED', 'ONBOARDING_UNDERPROGRESS'].includes(user.status);
 
     if (!user.emailVerified && !isInitialFlow) {
       return res.status(403).json({
@@ -929,12 +941,14 @@ exports.login = async (req, res) => {
     user.lastLogin = new Date();
     await user.save();
 
-    const isTempPassword = user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT';
+    const isTempPassword = user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT' || user.status === 'DETAILS_SHARED';
     const { profile, profileMeta, nextStep } = await getPostLoginNextStep(user);
 
+    const isSubAdmin = !!(user.createdBy || user.isPartnerSubAdmin || user.isCompanySubAdmin);
+
     // Self-healing: if in pre-onboarding / Step 1 and email was never legitimately verified via token, keep emailVerified false
-    // Self-heal: If user is talent_partner or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
-    if (['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE') {
+    // Self-heal: If primary user is talent_partner or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
+    if (!isSubAdmin && ['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE') {
       const isApproved = profile && ['APPROVED', 'VERIFIED'].includes(profile.verificationStatus);
       if (!isApproved) {
         user.status = 'ONBOARDING_UNDERPROGRESS';
@@ -942,8 +956,8 @@ exports.login = async (req, res) => {
       }
     }
 
-    const isPreOnboarding = ['REGISTERED', 'TEMP_PASS_SENT', 'PASS_CHANGED'].includes(user.status) ||
-      (!profile?.profileCompletion?.basicInfo && user.status === 'ONBOARDING_UNDERPROGRESS');
+    const isPreOnboarding = !isSubAdmin && (['REGISTERED', 'TEMP_PASS_SENT', 'DETAILS_SHARED', 'PASS_CHANGED'].includes(user.status) ||
+      (!profile?.profileCompletion?.basicInfo && user.status === 'ONBOARDING_UNDERPROGRESS'));
 
     if (isPreOnboarding && !user.emailVerifiedAt && user.emailVerified) {
       user.emailVerified = false;
@@ -998,7 +1012,7 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    const isFirstTimeTempPassword = user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT';
+    const isFirstTimeTempPassword = user.isPasswordChanged === false || user.status === 'TEMP_PASS_SENT' || user.status === 'DETAILS_SHARED';
 
     if (!newPassword || !confirmPassword || (!currentPassword && !isFirstTimeTempPassword)) {
       return res.status(400).json({
@@ -1045,10 +1059,18 @@ exports.changePassword = async (req, res) => {
     user.password = await bcrypt.hash(newPassword, salt);
     user.isPasswordChanged = true;
     user.passwordChangedAt = new Date();
-    user.status = 'PASS_CHANGED';
+
+    const isSubAdmin = !!(user.createdBy || user.isPartnerSubAdmin || user.isCompanySubAdmin);
+
+    // Sub-admins/users transition directly to ACTIVE upon password change
+    if (isSubAdmin) {
+      user.status = 'ACTIVE';
+    } else {
+      user.status = 'PASS_CHANGED';
+    }
 
     // On password change during onboarding, ensure email is not auto-marked as verified unless verified via token
-    if (isFirstTimeTempPassword && !user.emailVerifiedAt) {
+    if (isFirstTimeTempPassword && !user.emailVerifiedAt && !isSubAdmin) {
       user.emailVerified = false;
     }
 
@@ -1061,8 +1083,10 @@ exports.changePassword = async (req, res) => {
       action: 'PASSWORD_CHANGED',
       entityType: 'User',
       entityId: user._id,
-      description: `User successfully changed password, status transitioned to PASS_CHANGED`,
-      after: { status: 'PASS_CHANGED', isPasswordChanged: true },
+      description: isSubAdmin
+        ? `Sub-admin / user successfully changed password, status transitioned to ACTIVE`
+        : `User successfully changed password, status transitioned to PASS_CHANGED`,
+      after: { status: user.status, isPasswordChanged: true },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent']
     });
@@ -1351,17 +1375,17 @@ exports.getMe = async (req, res) => {
     }
 
     let profile = null;
-    if (user.role === 'talent_partner') {
-      profile = await StaffingPartner.findOne({ user: user._id });
+    if (user.role === 'talent_partner' || user.role === 'staffing' || user.role === 'staffing_partner') {
+      profile = await StaffingPartner.findOne({ user: user.createdBy || user._id });
     } else if (user.role === 'company') {
-      profile = await Company.findOne({ user: user._id });
+      profile = await Company.findOne({ user: user.createdBy || user._id });
     }
 
     const { profileMeta, nextStep } = await getPostLoginNextStep(user);
 
     // Self-healing: if in pre-onboarding / Step 1 and email was never legitimately verified via token, ensure emailVerified is false
     // Self-heal: If user is talent_partner or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
-    if (['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE') {
+    if (['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE' && !user.createdBy) {
       const isApproved = profile && ['APPROVED', 'VERIFIED'].includes(profile.verificationStatus);
       if (!isApproved) {
         user.status = 'ONBOARDING_UNDERPROGRESS';
@@ -1564,7 +1588,7 @@ exports.registerLead = async (req, res, next) => {
     if (workEmail && !email) req.body.email = workEmail;
     if (phoneNumber && !mobile) req.body.mobile = phoneNumber;
 
-    if (type === 'talent-partner' || type === 'talent_partner') {
+    if (type === 'talent-partner' || type === 'talent_partner' || type === 'freelancer') {
       return exports.initTalentPartnerRegistration(req, res, next);
     }
     return exports.initCompanyRegistration(req, res, next);

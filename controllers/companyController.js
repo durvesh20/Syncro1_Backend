@@ -990,20 +990,36 @@ exports.getDashboard = async (req, res) => {
     // NOTE: Deadline-based auto ON_HOLD removed intentionally.
     // Status is changed only via explicit action.
 
+    const isSubAdmin = !!req.user.createdBy;
+    const permissions = isSubAdmin ? (req.user.permissions || []) : [];
+    const canViewMaster = !isSubAdmin || permissions.includes('VIEW_DASHBOARD_MASTER');
+    const canViewSelf = !isSubAdmin || permissions.includes('VIEW_DASHBOARD_SELF');
+
+    let requestedScope = req.query.scope;
+    if (requestedScope !== 'self' && requestedScope !== 'master') {
+      requestedScope = canViewMaster ? 'master' : 'self';
+    }
+    const effectiveScope = (!canViewMaster) ? 'self' : requestedScope;
+
+    const jobMatch = { company: company._id };
+    if (effectiveScope === 'self') {
+      jobMatch.createdBy = req.user._id;
+    }
+
     const jobStats = await Job.aggregate([
-      { $match: { company: company._id } },
+      { $match: jobMatch },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
 
     // ✅ NEW: Approval status breakdown
     const approvalStats = await Job.aggregate([
-      { $match: { company: company._id } },
+      { $match: jobMatch },
       { $group: { _id: "$status", count: { $sum: 1 } } }
     ]);
 
     // ✅ NEW: Get rejected jobs for alerts
     const rejectedJobs = await Job.find({
-      company: company._id,
+      ...jobMatch,
       status: 'REJECTED'
     })
       .select('title rejectionReason rejectedAt')
@@ -1012,7 +1028,7 @@ exports.getDashboard = async (req, res) => {
 
     // ✅ NEW: Get pending approval jobs
     const pendingApprovalJobs = await Job.find({
-      company: company._id,
+      ...jobMatch,
       status: 'PENDING_APPROVAL'
     })
       .select('title createdAt')
@@ -1021,20 +1037,23 @@ exports.getDashboard = async (req, res) => {
 
     const HIDDEN_STATUSES = ['DRAFT', 'CONSENT_PENDING', 'CONSENT_CONFIRMED', 'CONSENT_DENIED', 'S1_REVIEW', 'S1_SCREEN_SELECT', 'S1_SCREEN_REJECT', 'S1_REJECTED'];
 
-    const recentCandidates = await Candidate.find({
+    let candidateMatch = {
       company: company._id,
       status: { $nin: HIDDEN_STATUSES }
-    })
+    };
+    if (effectiveScope === 'self') {
+      const myJobIds = await Job.find({ company: company._id, createdBy: req.user._id }).distinct('_id');
+      candidateMatch.job = { $in: myJobIds };
+    }
+
+    const recentCandidates = await Candidate.find(candidateMatch)
       .populate("job", "title")
       .sort({ createdAt: -1 })
       .limit(10);
 
     const hiringFunnel = await Candidate.aggregate([
       {
-        $match: {
-          company: company._id,
-          status: { $nin: HIDDEN_STATUSES }
-        }
+        $match: candidateMatch
       },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]);
@@ -1059,6 +1078,9 @@ exports.getDashboard = async (req, res) => {
     res.json({
       success: true,
       data: {
+        scope: effectiveScope,
+        canViewMaster,
+        canViewSelf,
         company: {
           name: company.companyName,
           verificationStatus: company.verificationStatus,
@@ -1259,7 +1281,8 @@ exports.createJob = async (req, res) => {
 // @route   GET /api/companies/jobs
 exports.getJobs = async (req, res) => {
   try {
-    const company = await Company.findOne({ user: req.user._id });
+    const companyUserId = req.user.createdBy || req.user._id;
+    const company = await Company.findOne({ user: companyUserId });
 
     if (!company) {
       return res.status(404).json({
@@ -4298,12 +4321,14 @@ exports.createSubAdmin = async (req, res) => {
       mobile: normalizedMobile,
       password: autoPassword,
       role: 'company',
-      status: status || 'ACTIVE',
+      status: status || 'DETAILS_SHARED',
       permissions: [...new Set(finalPermissions)],
       createdBy: req.user._id,
       isCompanySubAdmin: true,
       emailVerified: true,
       mobileVerified: true,
+      emailVerifiedAt: new Date(),
+      mobileVerifiedAt: new Date(),
       isPasswordChanged: false // Must change on first login
     });
 

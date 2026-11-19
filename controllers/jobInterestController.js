@@ -10,12 +10,13 @@ const jobAccessService = require('../services/jobAccessService');
 // PARTNER ROUTES
 // ================================================================
 
-// @desc    Partner shows interest in a job
+// @desc    Partner shortlists a job
 // @route   POST /api/job-interests/:jobId/interest
 // @access  Talent Partner
 exports.showInterest = async (req, res) => {
     try {
-        const partner = await StaffingPartner.findOne({ user: req.user._id });
+        const partnerUserId = req.user.createdBy || req.user._id;
+        const partner = await StaffingPartner.findOne({ user: partnerUserId });
 
         if (!partner) {
             return res.status(404).json({
@@ -48,7 +49,7 @@ exports.showInterest = async (req, res) => {
         if (job.status === 'PAUSED') {
             return res.status(400).json({
                 success: false,
-                message: 'This job is currently paused. You cannot show interest until it is active.'
+                message: 'This job is currently paused. You cannot shortlist it until it is active.'
             });
         }
 
@@ -59,7 +60,7 @@ exports.showInterest = async (req, res) => {
             });
         }
 
-        // Check if already interested
+        // Check if already shortlisted
         const existing = await JobInterest.findOne({
             partner: partner._id,
             job: job._id
@@ -69,7 +70,7 @@ exports.showInterest = async (req, res) => {
             if (existing.status === 'ACTIVE') {
                 return res.status(400).json({
                     success: false,
-                    message: 'You have already shown interest in this job',
+                    message: 'You have already shortlisted this job',
                     data: existing
                 });
             }
@@ -80,7 +81,7 @@ exports.showInterest = async (req, res) => {
 
             return res.json({
                 success: true,
-                message: 'Interest reactivated for this job',
+                message: 'Job shortlisted again successfully',
                 data: existing
             });
         }
@@ -88,7 +89,7 @@ exports.showInterest = async (req, res) => {
         // ✅ Dynamic slots: 5 per vacancy
         const submissionLimit = (job.vacancies || 1) * 5;
 
-        // Create new interest
+        // Create new interest (shortlist)
         const interest = await JobInterest.create({
             partner: partner._id,
             job: job._id,
@@ -108,10 +109,10 @@ exports.showInterest = async (req, res) => {
             $inc: { 'metrics.totalJobsInterested': 1 }
         });
 
-        console.log(`[INTEREST] ✅ ${partner.firmName} interested in: ${job.title}`);
+        console.log(`[SHORTLIST] ✅ ${partner.firmName} shortlisted: ${job.title}`);
         res.status(201).json({
             success: true,
-            message: `Interest registered. You can submit up to ${submissionLimit} candidates (${job.vacancies} position${job.vacancies > 1 ? 's' : ''} × 5 slots).`,
+            message: `Job shortlisted successfully. You can submit up to ${submissionLimit} candidates (${job.vacancies} position${job.vacancies > 1 ? 's' : ''} × 5 slots).`,
             data: {
                 interestId: interest._id,
                 jobId: job._id,
@@ -127,24 +128,32 @@ exports.showInterest = async (req, res) => {
         if (error.code === 11000) {
             return res.status(400).json({
                 success: false,
-                message: 'You have already shown interest in this job'
+                message: 'You have already shortlisted this job'
             });
         }
-        console.error('[INTEREST] Show interest error:', error);
+        console.error('[SHORTLIST] Shortlist error:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to register interest',
+            message: 'Failed to shortlist job',
             error: error.message
         });
     }
 };
 
-// @desc    Partner withdraws interest from a job
+// @desc    Partner removes job from shortlist
 // @route   DELETE /api/job-interests/:jobId/interest
 // @access  Talent Partner
 exports.withdrawInterest = async (req, res) => {
     try {
-        const partner = await StaffingPartner.findOne({ user: req.user._id });
+        const partnerUserId = req.user.createdBy || req.user._id;
+        const partner = await StaffingPartner.findOne({ user: partnerUserId });
+
+        if (!partner) {
+            return res.status(404).json({
+                success: false,
+                message: 'Partner profile not found'
+            });
+        }
 
         const interest = await JobInterest.findOne({
             partner: partner._id,
@@ -155,14 +164,14 @@ exports.withdrawInterest = async (req, res) => {
         if (!interest) {
             return res.status(404).json({
                 success: false,
-                message: 'No active interest found for this job'
+                message: 'No active shortlist found for this job'
             });
         }
 
         if (interest.submissionCount > 0) {
             return res.status(400).json({
                 success: false,
-                message: 'Cannot withdraw interest after submitting candidates'
+                message: 'Cannot remove job from shortlist after submitting candidates'
             });
         }
 
@@ -175,24 +184,25 @@ exports.withdrawInterest = async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Interest withdrawn successfully'
+            message: 'Job removed from shortlist successfully'
         });
     } catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to withdraw interest',
+            message: 'Failed to remove job from shortlist',
             error: error.message
         });
     }
 };
 
-// @desc    Get partner's interested jobs
+// @desc    Get partner's shortlisted jobs
 // @route   GET /api/job-interests/my-jobs
 // @access  Talent Partner
 exports.getMyInterestedJobs = async (req, res) => {
     try {
         const mongoose = require('mongoose');
-        const partner = await StaffingPartner.findOne({ user: req.user._id });
+        const partnerUserId = req.user.createdBy || req.user._id;
+        const partner = await StaffingPartner.findOne({ user: partnerUserId });
         if (!partner) {
             return res.status(404).json({
                 success: false,
@@ -363,18 +373,26 @@ exports.getMyInterestedJobs = async (req, res) => {
     } catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch interested jobs',
+            message: 'Failed to fetch shortlisted jobs',
             error: error.message
         });
     }
 };
 
-// @desc    Get interest status for a specific job
+// @desc    Get shortlist status for a specific job
 // @route   GET /api/job-interests/:jobId/status
 // @access  Talent Partner
 exports.getInterestStatus = async (req, res) => {
     try {
-        const partner = await StaffingPartner.findOne({ user: req.user._id });
+        const partnerUserId = req.user.createdBy || req.user._id;
+        const partner = await StaffingPartner.findOne({ user: partnerUserId });
+
+        if (!partner) {
+            return res.status(404).json({
+                success: false,
+                message: 'Partner profile not found'
+            });
+        }
 
         const interest = await JobInterest.findOne({
             partner: partner._id,
@@ -442,7 +460,7 @@ exports.getInterestStatus = async (req, res) => {
     } catch (error) {
         res.status(500).json({
             success: false,
-            message: 'Failed to fetch interest status',
+            message: 'Failed to fetch shortlist status',
             error: error.message
         });
     }
@@ -463,7 +481,15 @@ exports.requestLimitExtension = async (req, res) => {
             });
         }
 
-        const partner = await StaffingPartner.findOne({ user: req.user._id });
+        const partnerUserId = req.user.createdBy || req.user._id;
+        const partner = await StaffingPartner.findOne({ user: partnerUserId });
+
+        if (!partner) {
+            return res.status(404).json({
+                success: false,
+                message: 'Partner profile not found'
+            });
+        }
 
         const interest = await JobInterest.findOne({
             partner: partner._id,
@@ -474,7 +500,7 @@ exports.requestLimitExtension = async (req, res) => {
         if (!interest) {
             return res.status(404).json({
                 success: false,
-                message: 'You have not shown interest in this job. Please show interest first.'
+                message: 'You have not shortlisted this job. Please shortlist this job first.'
             });
         }
 
@@ -574,7 +600,8 @@ exports.requestLimitExtension = async (req, res) => {
 // @access  Talent Partner
 exports.getMyExtensionRequests = async (req, res) => {
     try {
-        const partner = await StaffingPartner.findOne({ user: req.user._id });
+        const partnerUserId = req.user.createdBy || req.user._id;
+        const partner = await StaffingPartner.findOne({ user: partnerUserId });
         if (!partner) {
             return res.status(404).json({
                 success: false,
@@ -976,7 +1003,14 @@ exports.getInterestedPartners = async (req, res) => {
 // @access  Talent Partner
 exports.getMyPerformance = async (req, res) => {
     try {
-        const partner = await StaffingPartner.findOne({ user: req.user._id });
+        const partnerUserId = req.user.createdBy || req.user._id;
+        const partner = await StaffingPartner.findOne({ user: partnerUserId });
+        if (!partner) {
+            return res.status(404).json({
+                success: false,
+                message: 'Partner profile not found'
+            });
+        }
         const Candidate = require('../models/Candidate');
 
         // Overall status breakdown

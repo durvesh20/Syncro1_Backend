@@ -249,7 +249,7 @@ function formatTournament(tournament, partnerId = null) {
     round2Points: 10,
     offeredPoints: 20,
     joinedPoints: 20,
-    retention90Points: 20,
+    retention90Points: 0,
     ...(tObj.rules || {})
   };
 
@@ -1090,7 +1090,7 @@ async function getLeaderboard({ limit = null, tournamentId = null } = {}) {
     const round2Pts = (item.round2Count || 0) * 10;
     const offeredPts = (item.offeredCount || 0) * 20;
     const joinedPts = (item.joinedCount || 0) * 20;
-    const retention90Pts = (item.retention90Count || 0) * 20;
+    const retention90Pts = 0; // Strictly 0 per user requirement
     const manualPts = item.manualPoints || 0;
 
     const totalPts = s1ReviewPts + s1ScreenSelectPts + clientScreenSelectPts + round2Pts + offeredPts + joinedPts + retention90Pts + manualPts;
@@ -1114,7 +1114,7 @@ async function getLeaderboard({ limit = null, tournamentId = null } = {}) {
         round_2_selection: { count: item.round2Count || 0, points: round2Pts },
         offered: { count: item.offeredCount || 0, points: offeredPts },
         joined: { count: item.joinedCount || 0, points: joinedPts },
-        retention_90_days: { count: item.retention90Count || 0, points: retention90Pts },
+        retention_90_days: { count: item.retention90Count || 0, points: 0 },
         manual: { count: item.manualPoints ? 1 : 0, points: manualPts },
         screened: { count: item.s1ReviewCount || 0, points: s1ReviewPts },
         submitted: { count: item.s1ScreenSelectCount || 0, points: s1ScreenSelectPts },
@@ -1566,6 +1566,22 @@ async function backfillExistingPoints(targetTournamentId = null) {
     }
   }
 
+  // Recalibrate simulated points for manual program partners to include OFFERED milestones and 0 retention
+  for (const mp of manualPartners) {
+    try {
+      const currentPts = await PartnerPointEvent.aggregate([
+        { $match: { tournament: tournamentId, partner: mp._id } },
+        { $group: { _id: null, total: { $sum: '$points' } } }
+      ]);
+      const totalToKeep = currentPts[0]?.total || 0;
+      if (totalToKeep > 0) {
+        await createSimulatedPointEvents(tournamentId, mp, totalToKeep, null, 'Recalibrated via Backfill');
+      }
+    } catch (e) {
+      console.error('[PARTNER_PROGRAM] Failed to recalibrate manual partner:', e.message);
+    }
+  }
+
   console.log(`[PARTNER_PROGRAM] Completed sync: evaluated ${processedCount} candidates, created ${awardedCount} point events.`);
   return {
     success: true,
@@ -1614,105 +1630,91 @@ const SIMULATED_COMPANIES = [
 
 /**
  * Realistic funnel decomposition algorithm:
- * Given total points T, computes (k_join, k_sel, k_int, k_sub, k_scr)
- * such that cumulative candidate counts satisfy Screened >= Submitted >= Interviewed >= Selected >= Joined
- * and the sum of milestone points strictly equals T (with at most 0 or 1 manual point).
+ * Given total points T, computes candidate milestones across the 7 tournament stages:
+ * (S1 Review 10pts, S1 Select 10pts, Client Select 10pts, Round 2 10pts, Offered 20pts, Joined 20pts, 90d Retention 0pts).
+ * A candidate reaching Joined receives 10+10+10+10+20+20 = 80 points total across their pipeline.
+ * A candidate reaching Offered receives 10+10+10+10+20 = 60 points total.
+ * A candidate reaching Round 2 receives 10+10+10+10 = 40 points total.
+ * A candidate reaching Client Select receives 10+10+10 = 30 points total.
+ * A candidate reaching S1 Select receives 10+10 = 20 points total.
+ * A candidate reaching S1 Review receives 10 points.
+ * 90d Retention is strictly 0 points as requested.
  */
 function calculateFunnelForPoints(totalPoints) {
   let rem = Math.max(0, parseInt(totalPoints, 10) || 0);
 
-  let k_join = 0;
-  let k_sel = 0;
-  let k_int = 0;
-  let k_sub = 0;
-  let k_scr = 0;
+  // Full cycle to Joined = 80 points (10 + 10 + 10 + 10 + 20 + 20)
+  const k_join = Math.floor(rem / 80);
+  rem %= 80;
 
-  if (rem >= 120) {
-    const maxJoins = Math.floor(rem / 77);
-    const targetJoins = Math.min(maxJoins, Math.max(1, Math.floor((rem * 0.35) / 77)));
-    k_join = targetJoins;
-    rem -= k_join * 77;
-  } else if (rem >= 77 && rem % 2 !== 0) {
-    k_join = 1;
-    rem -= 77;
-  } else if (rem >= 85) {
-    k_join = 1;
-    rem -= 77;
-  }
+  let k_off = 0;
+  let k_r2 = 0;
+  let k_client = 0;
+  let k_s1_select = 0;
+  let k_s1_review = 0;
 
   if (rem >= 60) {
-    const maxSel = Math.floor(rem / 37);
-    const targetSel = Math.min(maxSel, Math.max(1, Math.floor((rem * 0.30) / 37)));
-    k_sel = targetSel;
-    rem -= k_sel * 37;
-  } else if (rem >= 37 && rem % 2 !== 0 && rem < 77) {
-    k_sel = 1;
-    rem -= 37;
+    k_off = Math.floor(rem / 60);
+    rem %= 60;
   }
-
+  if (rem >= 40) {
+    k_r2 = Math.floor(rem / 40);
+    rem %= 40;
+  }
   if (rem >= 30) {
-    const maxInt = Math.floor(rem / 17);
-    const targetInt = Math.min(maxInt, Math.max(1, Math.floor((rem * 0.35) / 17)));
-    k_int = targetInt;
-    rem -= k_int * 17;
-  } else if (rem >= 17 && rem % 2 !== 0) {
-    k_int = 1;
-    rem -= 17;
+    k_client = Math.floor(rem / 30);
+    rem %= 30;
   }
-
-  if (rem >= 14) {
-    const maxSub = Math.floor(rem / 7);
-    const targetSub = Math.min(maxSub, Math.max(1, Math.floor((rem * 0.30) / 7)));
-    k_sub = targetSub;
-    rem -= k_sub * 7;
+  if (rem >= 20) {
+    k_s1_select = Math.floor(rem / 20);
+    rem %= 20;
   }
-
-  if (rem % 2 !== 0) {
-    if (rem >= 7) {
-      k_sub += 1;
-      rem -= 7;
-    } else if (k_sub > 0 && rem + 7 >= 17) {
-      k_sub -= 1;
-      k_int += 1;
-      rem -= 10;
-    }
-  }
-
-  if (rem >= 2) {
-    k_scr = Math.floor(rem / 2);
-    rem -= k_scr * 2;
+  if (rem >= 10) {
+    k_s1_review = Math.floor(rem / 10);
+    rem %= 10;
   }
 
   const manual = rem;
+
   const joined = k_join;
-  const selected = k_join + k_sel;
-  const interviewed = k_join + k_sel + k_int;
-  const submitted = k_join + k_sel + k_int + k_sub;
-  const screened = k_join + k_sel + k_int + k_sub + k_scr;
+  const offered = k_join + k_off;
+  const round2 = k_join + k_off + k_r2;
+  const clientSelect = k_join + k_off + k_r2 + k_client;
+  const s1Select = k_join + k_off + k_r2 + k_client + k_s1_select;
+  const s1Review = k_join + k_off + k_r2 + k_client + k_s1_select + k_s1_review;
 
   return {
     k_join,
-    k_sel,
-    k_int,
-    k_sub,
-    k_scr,
+    k_off,
+    k_r2,
+    k_client,
+    k_s1_select,
+    k_s1_review,
     manual,
     counts: {
-      screened,
-      submitted,
-      interviewed,
-      selected,
-      joined
+      s1_review: s1Review,
+      s1_screen_select: s1Select,
+      client_screen_select: clientSelect,
+      round_2_selection: round2,
+      offered,
+      joined,
+      retention_90_days: 0,
+      screened: s1Review,
+      submitted: s1Select,
+      interviewed: clientSelect,
+      selected: round2
     },
     points: {
-      screened: screened * 2,
-      submitted: submitted * 5,
-      interviewed: interviewed * 10,
-      selected: selected * 20,
-      joined: joined * 40,
+      s1_review: s1Review * 10,
+      s1_screen_select: s1Select * 10,
+      client_screen_select: clientSelect * 10,
+      round_2_selection: round2 * 10,
+      offered: offered * 20,
+      joined: joined * 20,
+      retention_90_days: 0,
       manual
     },
-    total: (screened * 2) + (submitted * 5) + (interviewed * 10) + (selected * 20) + (joined * 40) + manual
+    total: (s1Review * 10) + (s1Select * 10) + (clientSelect * 10) + (round2 * 10) + (offered * 20) + (joined * 20) + manual
   };
 }
 
@@ -1720,56 +1722,78 @@ function calculateFunnelForPoints(totalPoints) {
  * Generate simulated candidate point events for a fake partner in a tournament
  */
 async function createSimulatedPointEvents(tournamentId, partnerDoc, desiredTotalPoints, adminUserId = null, notes = '', customBreakdown = null) {
-  const partnerId = partnerDoc._id;
-  const targetPts = Math.max(0, parseInt(desiredTotalPoints, 10) || 0);
+  const partnerId = partnerDoc?._id || partnerDoc;
+  const safeTournamentId = (tournamentId && mongoose.Types.ObjectId.isValid(tournamentId)) ? new mongoose.Types.ObjectId(tournamentId) : tournamentId;
+  const safePartnerId = (partnerId && mongoose.Types.ObjectId.isValid(partnerId)) ? new mongoose.Types.ObjectId(partnerId) : partnerId;
+
+  let targetPts = Math.max(0, parseInt(desiredTotalPoints, 10) || 0);
 
   // Clear existing point events for this partner in this tournament
   await PartnerPointEvent.deleteMany({
-    tournament: tournamentId,
-    partner: partnerId
+    $or: [
+      { tournament: safeTournamentId, partner: safePartnerId },
+      { tournament: String(tournamentId), partner: String(partnerId) },
+      { tournament: safeTournamentId, partner: String(partnerId) },
+      { tournament: String(tournamentId), partner: safePartnerId }
+    ]
   });
 
-  if (targetPts === 0) {
-    return {
-      partnerId,
-      totalPoints: 0,
-      counts: { screened: 0, submitted: 0, interviewed: 0, selected: 0, joined: 0 },
-      eventsCount: 0
-    };
-  }
+  // Ensure legacy MongoDB index is dropped
+  try {
+    await PartnerPointEvent.collection.dropIndex('partner_1_candidate_1_stage_1');
+  } catch (_) {}
 
   let decomposition;
+  let customCandidateStages = null;
   if (customBreakdown && typeof customBreakdown === 'object') {
-    const sc = Math.max(0, parseInt(customBreakdown.screened, 10) || 0);
-    const sub = Math.max(0, parseInt(customBreakdown.submitted, 10) || 0);
-    const intv = Math.max(0, parseInt(customBreakdown.interviewed, 10) || 0);
-    const sel = Math.max(0, parseInt(customBreakdown.selected, 10) || 0);
-    const jn = Math.max(0, parseInt(customBreakdown.joined, 10) || 0);
+    const sc = Math.max(0, parseInt(customBreakdown.s1_review ?? customBreakdown.screened ?? 0, 10) || 0);
+    const sub = Math.max(0, parseInt(customBreakdown.s1_screen_select ?? customBreakdown.submitted ?? 0, 10) || 0);
+    const intv = Math.max(0, parseInt(customBreakdown.client_screen_select ?? customBreakdown.company_screen_select ?? customBreakdown.interviewed ?? 0, 10) || 0);
+    const r2 = Math.max(0, parseInt(customBreakdown.round_2_selection ?? customBreakdown.selected ?? 0, 10) || 0);
+    const off = Math.max(0, parseInt(customBreakdown.offered ?? 0, 10) || 0);
+    const jn = Math.max(0, parseInt(customBreakdown.joined ?? 0, 10) || 0);
+    const ret = Math.max(0, parseInt(customBreakdown.retention_90_days ?? 0, 10) || 0);
 
-    const calculatedPts = (sc * 2) + (sub * 5) + (intv * 10) + (sel * 20) + (jn * 40);
-    const manualRem = Math.max(0, targetPts - calculatedPts);
+    const calculatedPts = (sc * 10) + (sub * 10) + (intv * 10) + (r2 * 10) + (off * 20) + (jn * 20);
+    targetPts = calculatedPts;
 
+    customCandidateStages = { sc, sub, intv, r2, off, jn, ret };
     decomposition = {
-      k_join: jn,
-      k_sel: Math.max(0, sel - jn),
-      k_int: Math.max(0, intv - sel),
-      k_sub: Math.max(0, sub - intv),
-      k_scr: Math.max(0, sc - sub),
-      manual: manualRem,
+      manual: 0,
       counts: {
+        s1_review: sc,
+        s1_screen_select: sub,
+        client_screen_select: intv,
+        company_screen_select: intv,
+        round_2_selection: r2,
+        offered: off,
+        joined: jn,
+        retention_90_days: ret,
         screened: sc,
         submitted: sub,
         interviewed: intv,
-        selected: sel,
-        joined: jn
+        selected: r2
       }
     };
   } else {
     decomposition = calculateFunnelForPoints(targetPts);
   }
 
-  const { k_join, k_sel, k_int, k_sub, k_scr, manual, counts } = decomposition;
-  const totalCandidates = k_join + k_sel + k_int + k_sub + k_scr;
+  const { manual = 0, counts = {} } = decomposition;
+
+  // Check if there are no candidates to simulate and no points
+  const totalStagesCount = customCandidateStages
+    ? (customCandidateStages.sc + customCandidateStages.sub + customCandidateStages.intv + customCandidateStages.r2 + customCandidateStages.off + customCandidateStages.jn + customCandidateStages.ret)
+    : targetPts;
+
+  if (totalStagesCount === 0) {
+    return {
+      partnerId,
+      totalPoints: 0,
+      counts: { s1_review: 0, s1_screen_select: 0, client_screen_select: 0, company_screen_select: 0, round_2_selection: 0, offered: 0, joined: 0, retention_90_days: 0 },
+      eventsCount: 0
+    };
+  }
 
   // Resolve tournament time window for authentic event timestamps
   const tournament = await PartnerTournament.findById(tournamentId).lean();
@@ -1780,97 +1804,235 @@ async function createSimulatedPointEvents(tournamentId, partnerDoc, desiredTotal
 
   const eventsToInsert = [];
 
-  for (let i = 0; i < totalCandidates; i++) {
-    // Space registration across tournament window
-    const candBaseTime = new Date(start.getTime() + (windowMs * (0.05 + 0.85 * (i / Math.max(totalCandidates, 1)))));
+  if (customCandidateStages) {
+    const { sc, sub, intv, r2, off, jn, ret } = customCandidateStages;
+    const totalCandidates = Math.max(sc, sub, intv, r2, off, jn, ret, 0);
 
-    // Determine journey depth
-    let maxStage = 'SCREENED';
-    if (i < k_join) {
-      maxStage = 'JOINED';
-    } else if (i < k_join + k_sel) {
-      maxStage = 'SELECTED';
-    } else if (i < k_join + k_sel + k_int) {
-      maxStage = 'INTERVIEW_SCHEDULED';
-    } else if (i < k_join + k_sel + k_int + k_sub) {
-      maxStage = 'SUBMITTED_TO_COMPANY';
-    } else {
-      maxStage = 'SCREENED';
+    for (let i = 0; i < totalCandidates; i++) {
+      const candBaseTime = new Date(start.getTime() + (windowMs * (0.05 + 0.85 * (i / Math.max(totalCandidates, 1)))));
+      const simCandidateId = new mongoose.Types.ObjectId();
+
+      if (i < sc) {
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.S1_REVIEW,
+          points: 10,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: candBaseTime
+        });
+      }
+
+      if (i < sub) {
+        const subTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 1 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.S1_SCREEN_SELECT,
+          points: 10,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: subTime
+        });
+      }
+
+      if (i < intv) {
+        const intTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 3 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.CLIENT_SCREEN_SELECT,
+          points: 10,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: intTime
+        });
+      }
+
+      if (i < r2) {
+        const selTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 6 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.ROUND_2_SELECTION,
+          points: 10,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: selTime
+        });
+      }
+
+      if (i < off) {
+        const offTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 8 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.OFFERED,
+          points: 20,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: offTime
+        });
+      }
+
+      if (i < jn) {
+        const joinTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 10 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.JOINED,
+          points: 20,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: joinTime
+        });
+      }
+
+      if (i < ret) {
+        const retTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 12 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.RETENTION_90_DAYS,
+          points: 0,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: retTime
+        });
+      }
     }
 
-    // 1. SCREENED milestone (2 points)
-    eventsToInsert.push({
-      tournament: tournamentId,
-      partner: partnerId,
-      stage: STAGES.SCREENED,
-      points: STAGE_POINTS.SCREENED,
-      metadata: { isManualProgramPartner: true },
-      awardedAt: candBaseTime
-    });
-
-    // 2. SUBMITTED milestone (5 points)
-    if (['SUBMITTED_TO_COMPANY', 'INTERVIEW_SCHEDULED', 'SELECTED', 'JOINED'].includes(maxStage)) {
-      const subTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 1 * 24 * 60 * 60 * 1000));
+    if (manual > 0) {
       eventsToInsert.push({
-        tournament: tournamentId,
-        partner: partnerId,
-        stage: STAGES.SUBMITTED_TO_COMPANY,
-        points: STAGE_POINTS.SUBMITTED_TO_COMPANY,
+        tournament: safeTournamentId,
+        partner: safePartnerId,
+        stage: STAGES.MANUAL_ADJUSTMENT,
+        points: manual,
         metadata: { isManualProgramPartner: true },
-        awardedAt: subTime
+        awardedAt: new Date()
       });
     }
+  } else {
+    const { k_join = 0, k_off = 0, k_r2 = 0, k_client = 0, k_s1_select = 0, k_s1_review = 0 } = decomposition;
+    const totalCandidates = k_join + k_off + k_r2 + k_client + k_s1_select + k_s1_review;
 
-    // 3. INTERVIEW milestone (10 points)
-    if (['INTERVIEW_SCHEDULED', 'SELECTED', 'JOINED'].includes(maxStage)) {
-      const intTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 3 * 24 * 60 * 60 * 1000));
+    for (let i = 0; i < totalCandidates; i++) {
+      // Space registration across tournament window
+      const candBaseTime = new Date(start.getTime() + (windowMs * (0.05 + 0.85 * (i / Math.max(totalCandidates, 1)))));
+
+      // Generate unique simulated candidate ID for this candidate journey
+      const simCandidateId = new mongoose.Types.ObjectId();
+
+      // Determine journey depth
+      let maxStage = 'S1_REVIEW';
+      if (i < k_join) {
+        maxStage = 'JOINED';
+      } else if (i < k_join + k_off) {
+        maxStage = 'OFFERED';
+      } else if (i < k_join + k_off + k_r2) {
+        maxStage = 'ROUND_2_SELECTION';
+      } else if (i < k_join + k_off + k_r2 + k_client) {
+        maxStage = 'CLIENT_SCREEN_SELECT';
+      } else if (i < k_join + k_off + k_r2 + k_client + k_s1_select) {
+        maxStage = 'S1_SCREEN_SELECT';
+      } else {
+        maxStage = 'S1_REVIEW';
+      }
+
+      // 1. S1 Review milestone (10 points) - every candidate reaches S1 Review
       eventsToInsert.push({
-        tournament: tournamentId,
-        partner: partnerId,
-        stage: STAGES.INTERVIEW_SCHEDULED,
-        points: STAGE_POINTS.INTERVIEW_SCHEDULED,
+        tournament: safeTournamentId,
+        partner: safePartnerId,
+        candidate: simCandidateId,
+        stage: STAGES.S1_REVIEW,
+        points: 10,
         metadata: { isManualProgramPartner: true },
-        awardedAt: intTime
+        awardedAt: candBaseTime
       });
+
+      // 2. S1 Screen Select milestone (10 points)
+      if (['S1_SCREEN_SELECT', 'CLIENT_SCREEN_SELECT', 'ROUND_2_SELECTION', 'OFFERED', 'JOINED'].includes(maxStage)) {
+        const subTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 1 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.S1_SCREEN_SELECT,
+          points: 10,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: subTime
+        });
+      }
+
+      // 3. Client Screen Select milestone (10 points)
+      if (['CLIENT_SCREEN_SELECT', 'ROUND_2_SELECTION', 'OFFERED', 'JOINED'].includes(maxStage)) {
+        const intTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 3 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.CLIENT_SCREEN_SELECT,
+          points: 10,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: intTime
+        });
+      }
+
+      // 4. Round 2 Selection milestone (10 points)
+      if (['ROUND_2_SELECTION', 'OFFERED', 'JOINED'].includes(maxStage)) {
+        const selTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 6 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.ROUND_2_SELECTION,
+          points: 10,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: selTime
+        });
+      }
+
+      // 5. Offered milestone (20 points)
+      if (['OFFERED', 'JOINED'].includes(maxStage)) {
+        const offTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 8 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.OFFERED,
+          points: 20,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: offTime
+        });
+      }
+
+      // 6. Joined milestone (20 points)
+      if (maxStage === 'JOINED') {
+        const joinTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 10 * 24 * 60 * 60 * 1000));
+        eventsToInsert.push({
+          tournament: safeTournamentId,
+          partner: safePartnerId,
+          candidate: simCandidateId,
+          stage: STAGES.JOINED,
+          points: 20,
+          metadata: { isManualProgramPartner: true },
+          awardedAt: joinTime
+        });
+      }
     }
 
-    // 4. SELECTED milestone (20 points)
-    if (['SELECTED', 'JOINED'].includes(maxStage)) {
-      const selTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 6 * 24 * 60 * 60 * 1000));
+    // 7. Manual adjustment for odd remainder
+    if (manual > 0) {
       eventsToInsert.push({
-        tournament: tournamentId,
-        partner: partnerId,
-        stage: STAGES.SELECTED,
-        points: STAGE_POINTS.SELECTED,
+        tournament: safeTournamentId,
+        partner: safePartnerId,
+        stage: STAGES.MANUAL_ADJUSTMENT,
+        points: manual,
         metadata: { isManualProgramPartner: true },
-        awardedAt: selTime
+        awardedAt: new Date()
       });
     }
-
-    // 5. JOINED milestone (40 points)
-    if (maxStage === 'JOINED') {
-      const joinTime = new Date(Math.min(end.getTime(), candBaseTime.getTime() + 10 * 24 * 60 * 60 * 1000));
-      eventsToInsert.push({
-        tournament: tournamentId,
-        partner: partnerId,
-        stage: STAGES.JOINED,
-        points: STAGE_POINTS.JOINED,
-        metadata: { isManualProgramPartner: true },
-        awardedAt: joinTime
-      });
-    }
-  }
-
-  // If there's an odd parity remainder or manual difference
-  if (manual > 0) {
-    eventsToInsert.push({
-      tournament: tournamentId,
-      partner: partnerId,
-      stage: STAGES.MANUAL_ADJUSTMENT,
-      points: manual,
-      metadata: { isManualProgramPartner: true },
-      awardedAt: new Date()
-    });
   }
 
   if (eventsToInsert.length > 0) {
@@ -1878,7 +2040,7 @@ async function createSimulatedPointEvents(tournamentId, partnerDoc, desiredTotal
   }
 
   return {
-    partnerId,
+    partnerId: safePartnerId,
     totalPoints: targetPts,
     counts,
     manualAdjustmentPoints: manual,
@@ -2005,18 +2167,21 @@ async function updatePartnerPointsAndRank({ tournamentId, partnerId, points, tar
 
   let finalPoints;
   let calculationMeta = null;
+  let effectiveTargetRank = targetRank;
 
-  if (targetRank !== undefined && targetRank !== null && targetRank !== '') {
+  if (customBreakdown && typeof customBreakdown === 'object') {
+    const sc = Math.max(0, parseInt(customBreakdown.s1_review ?? customBreakdown.screened ?? 0, 10) || 0);
+    const sub = Math.max(0, parseInt(customBreakdown.s1_screen_select ?? customBreakdown.submitted ?? 0, 10) || 0);
+    const intv = Math.max(0, parseInt(customBreakdown.client_screen_select ?? customBreakdown.company_screen_select ?? customBreakdown.interviewed ?? 0, 10) || 0);
+    const r2 = Math.max(0, parseInt(customBreakdown.round_2_selection ?? customBreakdown.selected ?? 0, 10) || 0);
+    const off = Math.max(0, parseInt(customBreakdown.offered ?? 0, 10) || 0);
+    const jn = Math.max(0, parseInt(customBreakdown.joined ?? 0, 10) || 0);
+    finalPoints = (sc * 10) + (sub * 10) + (intv * 10) + (r2 * 10) + (off * 20) + (jn * 20);
+    effectiveTargetRank = null; // Custom breakdown is authoritative over rank calculation
+  } else if (targetRank !== undefined && targetRank !== null && targetRank !== '') {
     finalPoints = null; // Will calculate per tournament
   } else if (points !== undefined && points !== null && points !== '') {
     finalPoints = Math.max(0, parseInt(points, 10) || 0);
-  } else if (customBreakdown && typeof customBreakdown === 'object') {
-    const sc = Math.max(0, parseInt(customBreakdown.screened, 10) || 0);
-    const sub = Math.max(0, parseInt(customBreakdown.submitted, 10) || 0);
-    const intv = Math.max(0, parseInt(customBreakdown.interviewed, 10) || 0);
-    const sel = Math.max(0, parseInt(customBreakdown.selected, 10) || 0);
-    const jn = Math.max(0, parseInt(customBreakdown.joined, 10) || 0);
-    finalPoints = (sc * 2) + (sub * 5) + (intv * 10) + (sel * 20) + (jn * 40);
   } else {
     throw new Error('Either points, targetRank, or customBreakdown must be provided');
   }
@@ -2040,8 +2205,8 @@ async function updatePartnerPointsAndRank({ tournamentId, partnerId, points, tar
   let lastResult = null;
   for (const tDoc of targetTournaments) {
     let tPoints = finalPoints;
-    if (targetRank !== undefined && targetRank !== null && targetRank !== '') {
-      calculationMeta = await calculatePointsForTargetRank(tDoc._id, partnerId, targetRank);
+    if (effectiveTargetRank !== undefined && effectiveTargetRank !== null && effectiveTargetRank !== '') {
+      calculationMeta = await calculatePointsForTargetRank(tDoc._id, partnerId, effectiveTargetRank);
       tPoints = calculationMeta.targetPoints;
     }
 
@@ -2050,9 +2215,19 @@ async function updatePartnerPointsAndRank({ tournamentId, partnerId, points, tar
       partnerId,
       tPoints,
       adminUserId,
-      targetRank ? `Set to target rank #${targetRank}` : `Set total points to ${tPoints}`,
+      effectiveTargetRank ? `Set to target rank #${effectiveTargetRank}` : `Set total points to ${tPoints}`,
       customBreakdown
     );
+
+    // Ensure manual partner is also recorded in tournament participants
+    const safePartnerId = (partnerId && mongoose.Types.ObjectId.isValid(partnerId)) ? new mongoose.Types.ObjectId(partnerId) : partnerId;
+    const inParticipants = Array.isArray(tDoc.participants) &&
+      tDoc.participants.some(p => String(p.partner?._id || p.partner || p) === String(partnerId));
+    if (!inParticipants) {
+      if (!tDoc.participants) tDoc.participants = [];
+      tDoc.participants.push({ partner: safePartnerId, joinedAt: new Date() });
+      await tDoc.save();
+    }
   }
 
   const effectiveTourneyId = targetTournaments[0]?._id;
@@ -2117,7 +2292,7 @@ async function createProgramPartners({ tournamentId, partners = [], adminUserId 
       email,
       mobile,
       password: hashedPassword,
-      role: 'staffing_partner',
+      role: 'talent_partner',
       status: 'ACTIVE'
     });
 
@@ -2138,18 +2313,19 @@ async function createProgramPartners({ tournamentId, partners = [], adminUserId 
     let finalTargetPoints = 0;
     for (const tDoc of targetTournaments) {
       let targetPoints = 0;
-      if (item.targetRank !== undefined && item.targetRank !== null && item.targetRank !== '') {
+      if (item.customBreakdown && typeof item.customBreakdown === 'object') {
+        const sc = Math.max(0, parseInt(item.customBreakdown.s1_review ?? item.customBreakdown.screened ?? 0, 10) || 0);
+        const sub = Math.max(0, parseInt(item.customBreakdown.s1_screen_select ?? item.customBreakdown.submitted ?? 0, 10) || 0);
+        const intv = Math.max(0, parseInt(item.customBreakdown.client_screen_select ?? item.customBreakdown.company_screen_select ?? item.customBreakdown.interviewed ?? 0, 10) || 0);
+        const r2 = Math.max(0, parseInt(item.customBreakdown.round_2_selection ?? item.customBreakdown.selected ?? 0, 10) || 0);
+        const off = Math.max(0, parseInt(item.customBreakdown.offered ?? 0, 10) || 0);
+        const jn = Math.max(0, parseInt(item.customBreakdown.joined ?? 0, 10) || 0);
+        targetPoints = (sc * 10) + (sub * 10) + (intv * 10) + (r2 * 10) + (off * 20) + (jn * 20);
+      } else if (item.targetRank !== undefined && item.targetRank !== null && item.targetRank !== '') {
         const calc = await calculatePointsForTargetRank(tDoc._id, partner._id, item.targetRank);
         targetPoints = calc.targetPoints;
       } else if (item.points !== undefined && item.points !== null && item.points !== '') {
         targetPoints = Math.max(0, parseInt(item.points, 10) || 0);
-      } else if (item.customBreakdown && typeof item.customBreakdown === 'object') {
-        const sc = Math.max(0, parseInt(item.customBreakdown.screened, 10) || 0);
-        const sub = Math.max(0, parseInt(item.customBreakdown.submitted, 10) || 0);
-        const intv = Math.max(0, parseInt(item.customBreakdown.interviewed, 10) || 0);
-        const sel = Math.max(0, parseInt(item.customBreakdown.selected, 10) || 0);
-        const jn = Math.max(0, parseInt(item.customBreakdown.joined, 10) || 0);
-        targetPoints = (sc * 2) + (sub * 5) + (intv * 10) + (sel * 20) + (jn * 40);
       }
 
       finalTargetPoints = targetPoints;
