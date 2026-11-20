@@ -2232,11 +2232,6 @@ exports.createJobInterviewSlots = async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const existingSlots = await InterviewSlot.find({
-      job: job._id,
-      status: { $ne: 'CANCELLED' }
-    });
-
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
     const invalidSlots = [];
@@ -2263,30 +2258,6 @@ exports.createJobInterviewSlots = async (req, res) => {
           errors.push(`Date ${slot.date} is in the past`);
         } else if (slotDate.getTime() === today.getTime() && startMin < currentMinutes + 15) {
           errors.push(`start_time ${sTime} must be at least 15 minutes in the future`);
-        }
-
-        // Check for internal collision in payload
-        const internalOverlap = slots.find((other, oIdx) => {
-          if (oIdx === index || other.date !== slot.date) return false;
-          const oStart = timeToMinutes(other.start_time || other.startTime);
-          const oEnd = timeToMinutes(other.end_time || other.endTime);
-          return startMin < oEnd && endMin > oStart;
-        });
-        if (internalOverlap) {
-          errors.push('Slot overlaps with another slot in this request');
-        }
-
-        // Check for DB collision
-        const dbOverlap = existingSlots.find(existing => {
-          const eDate = new Date(existing.date);
-          eDate.setHours(0, 0, 0, 0);
-          if (eDate.getTime() !== slotDate.getTime()) return false;
-          const eStart = timeToMinutes(existing.startTime);
-          const eEnd = timeToMinutes(existing.endTime);
-          return startMin < eEnd && endMin > eStart;
-        });
-        if (dbOverlap) {
-          errors.push(`Slot overlaps with an existing slot on ${slot.date} (${dbOverlap.startTime} - ${dbOverlap.endTime})`);
         }
       }
 

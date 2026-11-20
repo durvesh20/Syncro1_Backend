@@ -2254,12 +2254,6 @@ exports.createInterviewSlots = async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Start of today
 
-    // ── Get existing active slots for overlap check ──────────────────
-    const existingSlots = await InterviewSlot.find({
-      job: job._id,
-      status: { $ne: 'CANCELLED' }
-    });
-
     const now = new Date();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -2291,42 +2285,10 @@ exports.createInterviewSlots = async (req, res) => {
         if (slotDate < today) {
           errors.push(`Date ${slot.date} is in the past`);
         } else if (slotDate.getTime() === today.getTime()) {
-          // 2. If today, start time must be at least 30 mins in future (allow some buffer)
+          // 2. If today, start time must be at least 15 mins in future (allow some buffer)
           if (startMin < currentMinutes + 15) {
             errors.push(`Start time ${slot.startTime} is too close to current time or in the past`);
           }
-        }
-
-        // 4. Check for overlaps WITHIN the new slots array
-        const internalOverlap = slots.find((other, otherIdx) => {
-          if (otherIdx === index) return false;
-          if (other.date !== slot.date) return false;
-
-          const oStart = timeToMinutes(other.startTime);
-          const oEnd = timeToMinutes(other.endTime);
-
-          // Overlap if (StartA < EndB) AND (EndA > StartB)
-          return (startMin < oEnd) && (endMin > oStart);
-        });
-
-        if (internalOverlap) {
-          errors.push(`Slot overlaps with another slot in this request (at index ${slots.indexOf(internalOverlap)})`);
-        }
-
-        // 5. Check for overlaps with EXISTING slots in DB
-        const dbOverlap = existingSlots.find(existing => {
-          const eDate = new Date(existing.date);
-          eDate.setHours(0, 0, 0, 0);
-          if (eDate.getTime() !== slotDate.getTime()) return false;
-
-          const eStart = timeToMinutes(existing.startTime);
-          const eEnd = timeToMinutes(existing.endTime);
-
-          return (startMin < eEnd) && (endMin > eStart);
-        });
-
-        if (dbOverlap) {
-          errors.push(`Slot overlaps with an existing slot on ${slotDate.toLocaleDateString()} (${dbOverlap.startTime} - ${dbOverlap.endTime})`);
         }
       }
 
