@@ -324,14 +324,20 @@ exports.getPendingVerifications = async (req, res) => {
     let partners = [];
     let companies = [];
 
-    if (!type || type === 'partners') {
-      partners = await StaffingPartner.find(partnerQuery)
+    if (!type || type === 'partners' || type === 'freelancers') {
+      const partnerFilter = { ...partnerQuery };
+      if (type === 'partners') {
+        partnerFilter.partnerType = { $ne: 'freelancer' };
+      } else if (type === 'freelancers') {
+        partnerFilter.partnerType = 'freelancer';
+      }
+      partners = await StaffingPartner.find(partnerFilter)
         .populate('user', 'email mobile createdAt status')
         .populate('verifiedBy', 'email role')
         .populate('assignedTo', 'email role')
         .sort({ createdAt: 1 })
         .select(
-          'firstName lastName firmName designation city state ' +
+          'firstName lastName firmName designation city state partnerType ' +
           'verificationStatus verificationNotes rejectionReason ' +
           'verifiedAt verifiedBy submittedAt profileCompletion ' +
           'agreement documents uniqueId ' +
@@ -475,7 +481,7 @@ exports.verifyPartner = async (req, res) => {
       await emailService.sendVerificationApproved(
         user.email,
         `${partner.firstName} ${partner.lastName}`,
-        'talent_partner'
+        partner.partnerType === 'freelancer' ? 'freelancer' : 'talent_partner'
       );
     } else {
       if (!rejectionReason || rejectionReason.trim().length < 5) {
@@ -1907,6 +1913,8 @@ exports.getUsers = async (req, res) => {
       roleQuery = { $in: ['talent_partner', 'talent', 'staffing', 'staffing_partner'] };
     } else if (role === 'company') {
       roleQuery = { $in: ['company', 'employer', 'client'] };
+    } else if (role === 'freelancer') {
+      roleQuery = 'freelancer';
     } else if (role) {
       roleQuery = role;
     }
@@ -1934,7 +1942,7 @@ exports.getUsers = async (req, res) => {
     if (role === 'company') {
       query.isCompanySubAdmin = { $ne: true };
       query.createdBy = null;
-    } else if (role === 'talent_partner') {
+    } else if (role === 'talent_partner' || role === 'freelancer') {
       query.createdBy = null;
     } else if (!role) {
       query.isCompanySubAdmin = { $ne: true };
@@ -1957,10 +1965,11 @@ exports.getUsers = async (req, res) => {
 
     if (role === 'talent_partner') {
       const [approved, underReview, rejected, partnerSuspended, userDocApproved, userDocUnderReview, userDocRejected, userDocSuspended] = await Promise.all([
-        StaffingPartner.find({ verificationStatus: { $in: ['APPROVED', 'VERIFIED', 'approved', 'verified'] } }).select('user'),
-        StaffingPartner.find({ verificationStatus: { $in: ['UNDER_REVIEW', 'UNDER_VERIFICATION', 'under_review', 'under_verification'] } }).select('user'),
-        StaffingPartner.find({ verificationStatus: { $in: ['REJECTED', 'rejected'] } }).select('user'),
+        StaffingPartner.find({ partnerType: { $ne: 'freelancer' }, verificationStatus: { $in: ['APPROVED', 'VERIFIED', 'approved', 'verified'] } }).select('user'),
+        StaffingPartner.find({ partnerType: { $ne: 'freelancer' }, verificationStatus: { $in: ['UNDER_REVIEW', 'UNDER_VERIFICATION', 'under_review', 'under_verification'] } }).select('user'),
+        StaffingPartner.find({ partnerType: { $ne: 'freelancer' }, verificationStatus: { $in: ['REJECTED', 'rejected'] } }).select('user'),
         StaffingPartner.find({
+          partnerType: { $ne: 'freelancer' },
           $or: [
             { verificationStatus: { $in: ['SUSPENDED', 'suspended'] } },
             { status: { $in: ['SUSPENDED', 'suspended'] } },
@@ -1972,6 +1981,52 @@ exports.getUsers = async (req, res) => {
         User.find({ role: roleQuery, status: { $in: ['REJECTED', 'rejected'] } }).select('_id'),
         User.find({
           role: roleQuery,
+          $or: [
+            { status: { $in: ['SUSPENDED', 'suspended'] } },
+            { suspendedAt: { $ne: null } },
+            { isSuspended: true }
+          ]
+        }).select('_id')
+      ]);
+
+      suspendedUserIds = [...new Set([
+        ...userDocSuspended.map(u => u._id.toString()),
+        ...partnerSuspended.map(p => p.user?.toString())
+      ])].filter(Boolean);
+
+      rejectedUserIds = [...new Set([
+        ...rejected.map(p => p.user?.toString()),
+        ...userDocRejected.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id));
+
+      approvedUserIds = [...new Set([
+        ...approved.map(p => p.user?.toString()),
+        ...userDocApproved.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id) && !rejectedUserIds.includes(id));
+
+      underReviewUserIds = [...new Set([
+        ...underReview.map(p => p.user?.toString()),
+        ...userDocUnderReview.map(u => u._id.toString())
+      ])].filter(Boolean).filter(id => !suspendedUserIds.includes(id) && !rejectedUserIds.includes(id) && !approvedUserIds.includes(id));
+
+    } else if (role === 'freelancer') {
+      const [approved, underReview, rejected, partnerSuspended, userDocApproved, userDocUnderReview, userDocRejected, userDocSuspended] = await Promise.all([
+        StaffingPartner.find({ partnerType: 'freelancer', verificationStatus: { $in: ['APPROVED', 'VERIFIED', 'approved', 'verified'] } }).select('user'),
+        StaffingPartner.find({ partnerType: 'freelancer', verificationStatus: { $in: ['UNDER_REVIEW', 'UNDER_VERIFICATION', 'under_review', 'under_verification'] } }).select('user'),
+        StaffingPartner.find({ partnerType: 'freelancer', verificationStatus: { $in: ['REJECTED', 'rejected'] } }).select('user'),
+        StaffingPartner.find({
+          partnerType: 'freelancer',
+          $or: [
+            { verificationStatus: { $in: ['SUSPENDED', 'suspended'] } },
+            { status: { $in: ['SUSPENDED', 'suspended'] } },
+            { isActive: false }
+          ]
+        }).select('user'),
+        User.find({ role: 'freelancer', status: { $in: ['VERIFIED', 'APPROVED'] } }).select('_id'),
+        User.find({ role: 'freelancer', status: { $in: ['UNDER_VERIFICATION', 'PROFILE_SUBMITTED', 'UNDER_REVIEW'] } }).select('_id'),
+        User.find({ role: 'freelancer', status: { $in: ['REJECTED', 'rejected'] } }).select('_id'),
+        User.find({
+          role: 'freelancer',
           $or: [
             { status: { $in: ['SUSPENDED', 'suspended'] } },
             { suspendedAt: { $ne: null } },
@@ -2091,9 +2146,9 @@ exports.getUsers = async (req, res) => {
       if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
       if (mobileVerified !== undefined) query.mobileVerified = mobileVerified === 'true';
     } else {
-      // Default view of talent partners or companies user list (AdminUsersList)
+      // Default view of talent partners, freelancers or companies user list (AdminUsersList)
       // Exclude leads that have not reached ONBOARDING_UNDERPROGRESS yet
-      if (role === 'talent_partner' || role === 'company') {
+      if (role === 'talent_partner' || role === 'company' || role === 'freelancer') {
         query.status = { $in: allowedUserStatuses };
       }
       if (emailVerified !== undefined) query.emailVerified = emailVerified === 'true';
@@ -2134,8 +2189,15 @@ exports.getUsers = async (req, res) => {
       }
 
       if (!role || role === 'talent_partner') {
-        const matchingPartners = await StaffingPartner.find({ firmName: searchRegex }).select('user');
+        const matchingPartners = await StaffingPartner.find({ partnerType: { $ne: 'freelancer' }, firmName: searchRegex }).select('user');
         matchingPartners.forEach(p => {
+          if (p.user) matchedUserIdsFromProfiles.push(p.user);
+        });
+      }
+
+      if (role === 'freelancer') {
+        const matchingFreelancers = await StaffingPartner.find({ partnerType: 'freelancer', firmName: searchRegex }).select('user');
+        matchingFreelancers.forEach(p => {
           if (p.user) matchedUserIdsFromProfiles.push(p.user);
         });
       }
@@ -2183,7 +2245,7 @@ exports.getUsers = async (req, res) => {
       companies.forEach(c => {
         if (c.user) companyMap[c.user.toString()] = c.companyName;
       });
-    } else if (role === 'talent_partner') {
+    } else if (role === 'talent_partner' || role === 'freelancer') {
       const partners = await StaffingPartner.find({ user: { $in: userIds } }).select('user firmName verificationStatus');
       partners.forEach(p => {
         if (p.user) partnerMap[p.user.toString()] = p.firmName;
@@ -2257,7 +2319,7 @@ exports.getUsers = async (req, res) => {
         leadValidity: (u.leadValidity && u.leadValidityUpdatedAt) ? u.leadValidity : (u.leadValidity === 'INVALID' ? 'INVALID' : null),
         tempPasswordSentAt: u.tempPasswordSentAt || null,
         ...(role === 'company' ? { companyName: companyMap[uIdStr] || null } : {}),
-        ...((role === 'talent_partner') ? { firmName: partnerMap[uIdStr] || null } : {})
+        ...((role === 'talent_partner' || role === 'freelancer') ? { firmName: partnerMap[uIdStr] || null } : {})
       };
     }));
 
@@ -2267,7 +2329,7 @@ exports.getUsers = async (req, res) => {
     let stats = null;
     if (role) {
       const isCompanyRole = role === 'company';
-      const subAdminExclusion = isCompanyRole ? { createdBy: null, isCompanySubAdmin: { $ne: true } } : {};
+      const subAdminExclusion = isCompanyRole ? { createdBy: null, isCompanySubAdmin: { $ne: true } } : { createdBy: null };
 
       const activeStageQuery = {
         role: roleQuery,
@@ -6519,9 +6581,9 @@ exports.assignVerification = async (req, res) => {
 
     let model;
     let label;
-    if (type === 'partner' || type === 'partners') {
+    if (type === 'partner' || type === 'partners' || type === 'freelancer' || type === 'freelancers') {
       model = StaffingPartner;
-      label = 'Talent Partner';
+      label = (type === 'freelancer' || type === 'freelancers') ? 'Freelancer' : 'Talent Partner';
     } else if (type === 'company' || type === 'companies') {
       model = Company;
       label = 'Company';
@@ -6628,9 +6690,9 @@ exports.revokeVerificationAssignment = async (req, res) => {
 
     let model;
     let label;
-    if (type === 'partner' || type === 'partners') {
+    if (type === 'partner' || type === 'partners' || type === 'freelancer' || type === 'freelancers') {
       model = StaffingPartner;
-      label = 'Talent Partner';
+      label = (type === 'freelancer' || type === 'freelancers') ? 'Freelancer' : 'Talent Partner';
     } else if (type === 'company' || type === 'companies') {
       model = Company;
       label = 'Company';
@@ -6725,9 +6787,9 @@ exports.bulkAssignVerification = async (req, res) => {
       const { id, type } = item;
       let model;
       let label;
-      if (type === 'partner' || type === 'partners') {
+      if (type === 'partner' || type === 'partners' || type === 'freelancer' || type === 'freelancers') {
         model = StaffingPartner;
-        label = 'Talent Partner';
+        label = (type === 'freelancer' || type === 'freelancers') ? 'Freelancer' : 'Talent Partner';
       } else if (type === 'company' || type === 'companies') {
         model = Company;
         label = 'Company';
@@ -6752,9 +6814,9 @@ exports.bulkAssignVerification = async (req, res) => {
       const { id, type } = item;
       let model;
       let label;
-      if (type === 'partner' || type === 'partners') {
+      if (type === 'partner' || type === 'partners' || type === 'freelancer' || type === 'freelancers') {
         model = StaffingPartner;
-        label = 'Talent Partner';
+        label = (type === 'freelancer' || type === 'freelancers') ? 'Freelancer' : 'Talent Partner';
       } else if (type === 'company' || type === 'companies') {
         model = Company;
         label = 'Company';
@@ -6837,9 +6899,9 @@ exports.bulkRevokeVerificationAssignment = async (req, res) => {
       const { id, type } = item;
       let model;
       let label;
-      if (type === 'partner' || type === 'partners') {
+      if (type === 'partner' || type === 'partners' || type === 'freelancer' || type === 'freelancers') {
         model = StaffingPartner;
-        label = 'Talent Partner';
+        label = (type === 'freelancer' || type === 'freelancers') ? 'Freelancer' : 'Talent Partner';
       } else if (type === 'company' || type === 'companies') {
         model = Company;
         label = 'Company';

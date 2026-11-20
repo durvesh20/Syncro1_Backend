@@ -693,7 +693,7 @@ function transition({ currentState, action, role, payload = {}, context = {} }) 
   }
 
   // ── RBAC check ───────────────────────────────────────────────────────────
-  const partnerRoles = new Set(['talent_partner', 'talent']);
+  const partnerRoles = new Set(['talent_partner', 'talent', 'freelancer']);
   const isRoleAllowed = txn.allowedRoles.includes(role) ||
     (partnerRoles.has(role) && txn.allowedRoles.some(r => partnerRoles.has(r)));
 

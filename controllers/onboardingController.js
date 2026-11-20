@@ -88,8 +88,8 @@ exports.getOnboardingStatus = async (req, res) => {
                 step: 7,
                 name: 'Documents',
                 completed: partner.profileCompletion.documents,
-                fields: ['documents.panCard', 'documents.gstCertificate'],
-                completedFields: getCompletedFields(partner, ['documents.panCard', 'documents.gstCertificate']),
+                fields: partner.partnerType === 'freelancer' ? ['documents.panCard', 'documents.aadharCard'] : ['documents.panCard', 'documents.gstCertificate'],
+                completedFields: getCompletedFields(partner, partner.partnerType === 'freelancer' ? ['documents.panCard', 'documents.aadharCard'] : ['documents.panCard', 'documents.gstCertificate']),
                 required: true,
                 canSkip: false
             }
@@ -479,6 +479,20 @@ exports.validateField = async (req, res) => {
                 });
                 if (exists) {
                     return { valid: false, message: 'PAN number already registered' };
+                }
+                return { valid: true };
+            },
+
+            aadharNumber: async (val) => {
+                const cleaned = String(val || '').replace(/\s+/g, '');
+                if (!/^[2-9]\d{11}$/.test(cleaned)) {
+                    return { valid: false, message: 'Invalid Aadhaar format (must be 12 digits, cannot start with 0 or 1)' };
+                }
+                const exists = await StaffingPartner.findOne({
+                    'firmDetails.aadharNumber': cleaned
+                });
+                if (exists) {
+                    return { valid: false, message: 'Aadhaar number already registered' };
                 }
                 return { valid: true };
             },

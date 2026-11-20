@@ -89,14 +89,20 @@ const safeUpload = (multerFn) => (req, res, next) => {
 // ==================== AUTH MIDDLEWARE ====================
 // Applied to ALL routes below
 router.use(protect);
-router.use(authorize('talent_partner', 'staffing', 'staffing_partner'));
+router.use(authorize('talent_partner', 'staffing', 'staffing_partner', 'freelancer'));
 
-// Middleware to block sub-admins from managing sub-admins
+// Middleware to block sub-admins and freelancers from managing sub-admins
 const blockSubAdmins = (req, res, next) => {
   if (req.user && req.user.createdBy) {
     return res.status(403).json({
       success: false,
       message: 'Only the main talent partner account is authorized to manage sub-admins.'
+    });
+  }
+  if (req.user && req.user.role === 'freelancer') {
+    return res.status(403).json({
+      success: false,
+      message: 'Freelancers are not authorized to manage sub-users.'
     });
   }
   next();

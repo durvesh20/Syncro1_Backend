@@ -151,6 +151,9 @@ exports.updateBasicInfo = async (req, res) => {
     if (lastName) partner.lastName = lastName;
     if (firmName) partner.firmName = firmName;
     if (designation) partner.designation = designation;
+    else if (partner.partnerType === 'freelancer' && !partner.designation) {
+      partner.designation = 'Freelancer';
+    }
     if (linkedinProfile !== undefined) partner.linkedinProfile = linkedinProfile;
     if (city) partner.city = city;
     if (state) partner.state = state;
@@ -159,7 +162,7 @@ exports.updateBasicInfo = async (req, res) => {
       partner.firstName &&
       partner.lastName &&
       partner.firmName &&
-      partner.designation &&
+      (partner.partnerType === 'freelancer' || partner.designation) &&
       partner.city &&
       partner.state &&
       user.emailVerified &&
@@ -229,6 +232,7 @@ exports.updateFirmDetails = async (req, res) => {
       registeredOfficeAddress,
       operatingAddress,
       panNumber,
+      aadharNumber,
       gstNumber,
       cinNumber,
       llpinNumber,
@@ -253,6 +257,7 @@ exports.updateFirmDetails = async (req, res) => {
       registeredOfficeAddress,
       operatingAddress: finalOperatingAddress,
       panNumber,
+      aadharNumber,
       gstNumber,
       cinNumber,
       llpinNumber,
@@ -448,7 +453,7 @@ exports.updateCommercialDetails = async (req, res) => {
 
     partner.commercialDetails = {
       ...partner.commercialDetails,
-      payoutEntityName,
+      payoutEntityName: payoutEntityName || bankAccountHolderName || partner.firmName || '',
       gstRegistration,
       tdsApplicable,
       bankAccountHolderName,
@@ -859,14 +864,23 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    const requiredDocs = [
-      'panCard',
-      'gstCertificate',
-      'incorporationCertificate',
-      'authorizedSignatoryProof',
-      'cancelledCheque',
-      'addressProof'
-    ];
+    const isFreelancer = partner.partnerType === 'freelancer' || user.role === 'freelancer';
+    const requiredDocs = isFreelancer
+      ? [
+          'panCard',
+          'aadharCard',
+          'authorizedSignatoryProof',
+          'cancelledCheque',
+          'addressProof'
+        ]
+      : [
+          'panCard',
+          'gstCertificate',
+          'incorporationCertificate',
+          'authorizedSignatoryProof',
+          'cancelledCheque',
+          'addressProof'
+        ];
     const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
 
     if (missingDocs.length > 0) {

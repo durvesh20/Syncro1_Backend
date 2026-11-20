@@ -46,6 +46,7 @@ const userSchema = new mongoose.Schema({
       'staffing',
       'talent',
       'company',
+      'freelancer',
       'admin',
       'sub_admin',
       'super_admin'

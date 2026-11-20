@@ -239,10 +239,11 @@ class EmailService {
   }
 
   async sendVerificationApproved(email, name, role) {
+    const isFreelancer = role === 'freelancer';
     const isPartner = role === 'talent_partner';
-    const dashboardUrl = isPartner
-      ? `${this.productUrl}/dashboard/talent-partner`
-      : `${this.productUrl}/dashboard/company`;
+    const dashboardUrl = isFreelancer
+      ? `${this.productUrl}/dashboard/freelancer`
+      : (isPartner ? `${this.productUrl}/dashboard/talent-partner` : `${this.productUrl}/dashboard/company`);
 
     console.log('=================================================');
     console.log('✅ Verification Approved Email');

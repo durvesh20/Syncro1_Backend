@@ -14,6 +14,7 @@ const buildPartnerData = (partner, user, ip, timestamp) => {
         lastName: partner.lastName,
         designation: partner.designation,
         panNumber: partner.firmDetails?.panNumber,
+        aadharNumber: partner.firmDetails?.aadharNumber,
         gstNumber: partner.firmDetails?.gstNumber,
         cinNumber: partner.firmDetails?.cinNumber,
         city: partner.city,

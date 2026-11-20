@@ -5,6 +5,7 @@ const router = express.Router();
 const {
   initTalentPartnerRegistration,
   initStaffingPartnerRegistration,
+  initFreelancerRegistration,
   initCompanyRegistration,
   registerLead,
   verifyEmailByToken,     // Legacy GET support
@@ -27,6 +28,7 @@ const { protect } = require('../middleware/auth');
 // ==================== REGISTRATION ====================
 router.post('/register/talent-partner/init', initTalentPartnerRegistration);
 router.post('/register/staffing-partner/init', initTalentPartnerRegistration);
+router.post('/register/freelancer/init', initFreelancerRegistration);
 router.post('/register/company/init', initCompanyRegistration);
 router.post('/register-lead', registerLead);
 

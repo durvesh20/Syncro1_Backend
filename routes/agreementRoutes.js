@@ -26,28 +26,28 @@ const { PERMISSIONS } = require('../utils/permissions');
 router.get(
     '/status',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     getAgreementStatus
 );
 
 router.get(
     '/queries',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     getMyQueries
 );
 
 router.post(
     '/query',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     submitQuery
 );
 
 router.post(
     '/accept',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     acceptAgreement
 );
 

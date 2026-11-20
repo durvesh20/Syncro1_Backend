@@ -14,6 +14,12 @@ const staffingPartnerSchema = new mongoose.Schema({
     default: false,
     index: true
   },
+  partnerType: {
+    type: String,
+    enum: ['talent_partner', 'freelancer'],
+    default: 'talent_partner',
+    index: true
+  },
 
   // ✅ Added uniqueId field
   uniqueId: {
@@ -89,6 +95,7 @@ const staffingPartnerSchema = new mongoose.Schema({
       sameAsRegistered: { type: Boolean, default: false }
     },
     panNumber: String,
+    aadharNumber: String,
     gstNumber: String,
     cinNumber: String,
     llpinNumber: String,
@@ -211,6 +218,7 @@ const staffingPartnerSchema = new mongoose.Schema({
   // ==================== 7. DOCUMENTS ====================
   documents: {
     panCard: String,
+    aadharCard: String,
     gstCertificate: String,
     incorporationCertificate: String,
     cancelledCheque: String,
@@ -346,6 +354,8 @@ staffingPartnerSchema.pre('save', function (next) {
 
 const StaffingPartner = mongoose.models.StaffingPartner || mongoose.model('StaffingPartner', staffingPartnerSchema);
 const TalentPartner = mongoose.models.TalentPartner || mongoose.model('TalentPartner', staffingPartnerSchema, 'staffingpartners');
+const Freelancer = mongoose.models.Freelancer || mongoose.model('Freelancer', staffingPartnerSchema, 'staffingpartners');
 
 module.exports = StaffingPartner;
 module.exports.TalentPartner = TalentPartner;
+module.exports.Freelancer = Freelancer;

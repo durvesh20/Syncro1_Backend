@@ -196,6 +196,7 @@ app.use(sanitizeErrors);
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/talent-partners', require('./routes/talentPartnerRoutes'));
 app.use('/api/staffing-partners', require('./routes/talentPartnerRoutes'));
+app.use('/api/freelancers', require('./routes/talentPartnerRoutes'));
 app.use('/api/companies', require('./routes/companyRoutes'));
 app.use('/api/jobs', require('./routes/jobRoutes'));
 app.use('/api/candidates', require('./routes/candidateRoutes'));
