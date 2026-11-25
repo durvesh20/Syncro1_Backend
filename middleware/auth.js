@@ -68,8 +68,8 @@ exports.protect = async (req, res, next) => {
 // Generic role authorization
 exports.authorize = (...roles) => {
   return (req, res, next) => {
-    // Treat 'talent_partner' and 'talent' interchangeably
-    const partnerRoles = new Set(['talent_partner', 'talent']);
+    // Treat 'talent_partner', 'talent', and 'freelancer' interchangeably
+    const partnerRoles = new Set(['talent_partner', 'talent', 'freelancer']);
     const requestedRoles = new Set(roles);
     const hasPartnerRequested = roles.some(r => partnerRoles.has(r));
 

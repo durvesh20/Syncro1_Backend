@@ -84,6 +84,21 @@ const authLimiter = rateLimit({
   }
 });
 
+/* =========================================================
+   UIDAI AADHAAR CALLBACK (mounted early, on purpose)
+   =========================================================
+   UIDAI POSTs the SD-JWT credential here server-to-server. It is mounted
+   ahead of the global /api rate limiter and the global express.json() so that:
+     - a burst of legitimate callbacks is never throttled,
+     - the route's own express.text() parser receives the raw body instead of
+       a pre-parsed object,
+     - express-mongo-sanitize does not rewrite keys inside the credential.
+   The route is public; authenticity is established by verifying the SD-JWT
+   signature against the UIDAI public key. See routes/pehchaanRoutes.js.
+========================================================= */
+const { pehchaanRouter, aadhaarCallbackRouter } = require('./routes/pehchaanRoutes');
+app.use('/api/aadhaar', aadhaarCallbackRouter);
+
 const rateLimitEnabled = process.env.RATE_LIMIT_ENABLED !== 'false';
 
 if (rateLimitEnabled) {
@@ -196,6 +211,7 @@ app.use(sanitizeErrors);
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/talent-partners', require('./routes/talentPartnerRoutes'));
 app.use('/api/staffing-partners', require('./routes/talentPartnerRoutes'));
+app.use('/api/freelancers', require('./routes/talentPartnerRoutes'));
 app.use('/api/companies', require('./routes/companyRoutes'));
 app.use('/api/jobs', require('./routes/jobRoutes'));
 app.use('/api/candidates', require('./routes/candidateRoutes'));
@@ -214,6 +230,9 @@ app.use('/api/landing', require('./routes/landingRoutes'));
 app.use('/api/landingpage', require('./routes/landingpageRoutes'));
 app.use('/api/contact', require('./routes/contactRoutes'));
 app.use('/api/demo', require('./routes/demoRoutes'));
+// Resident-facing Aadhaar endpoints. The UIDAI callback half of this router is
+// mounted earlier (see the AADHAAR CALLBACK block above).
+app.use('/api/pehchaan', pehchaanRouter);
 
 // ── Developer Portal & ATS Integration Routes ──
 app.use('/api/developer/auth', require('./routes/developerAuthRoutes'));

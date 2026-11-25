@@ -125,6 +125,7 @@ const uploadPartnerDocuments = multer({
   limits: { fileSize: 2 * 1024 * 1024 }
 }).fields([
   { name: 'panCard', maxCount: 1 },
+  { name: 'aadharCard', maxCount: 1 },
   { name: 'gstCertificate', maxCount: 1 },
   { name: 'incorporationCertificate', maxCount: 1 },
   { name: 'authorizedSignatoryProof', maxCount: 1 },

@@ -42,8 +42,8 @@ const getVerificationState = (user) => {
  * Helper: set user status based on verification state
  */
 const syncUserStatusAfterVerification = (user) => {
-  // For talent_partner and company, keep their onboarding lifecycle status
-  if (user.role === 'talent_partner' || user.role === 'company') {
+  // For talent_partner, freelancer and company, keep their onboarding lifecycle status
+  if (user.role === 'talent_partner' || user.role === 'freelancer' || user.role === 'company') {
     return;
   }
   if (user.emailVerified) {
@@ -83,7 +83,7 @@ const getPostLoginNextStep = async (user) => {
 
   let profile = null;
 
-  if (user.role === 'talent_partner' || user.role === 'staffing' || user.role === 'staffing_partner') {
+  if (user.role === 'talent_partner' || user.role === 'staffing' || user.role === 'staffing_partner' || user.role === 'freelancer') {
     profile = await StaffingPartner.findOne({ user: user.createdBy || user._id });
   } else if (user.role === 'company') {
     profile = await Company.findOne({ user: user.createdBy || user._id });
@@ -128,7 +128,7 @@ const getPostLoginNextStep = async (user) => {
     nextStep = 'WAITING_APPROVAL';
   } else if (profile.verificationStatus === 'REJECTED') {
     nextStep = 'PROFILE_REJECTED';
-  } else if (profile.verificationStatus === 'APPROVED' || profile.verificationStatus === 'ACTIVE') {
+  } else if (['APPROVED', 'VERIFIED', 'ACTIVE', 'COMPLETED'].includes(profile.verificationStatus)) {
     nextStep = 'GO_TO_DASHBOARD';
   }
 
@@ -352,6 +352,186 @@ exports.initTalentPartnerRegistration = async (req, res) => {
 };
 
 exports.initStaffingPartnerRegistration = exports.initTalentPartnerRegistration;
+
+// @desc Register Freelancer - Step 1 (Basic Info + Send Verification)
+// @route POST /api/auth/register/freelancer/init
+exports.initFreelancerRegistration = async (req, res) => {
+  try {
+    const {
+      firstName,
+      lastName,
+      email,
+      mobile,
+      password,
+      firmName,
+      designation,
+      linkedinProfile,
+      city,
+      state,
+      termsAccepted,
+      termsAgreed
+    } = req.body;
+
+    // Check & log Terms & MSA Agreement (Date/Time & True/False status)
+    const isTermsAgreed = termsAccepted === true || termsAgreed === true || termsAccepted === 'true' || termsAgreed === 'true';
+    const agreementTimestamp = new Date().toISOString();
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+    console.log(`[Terms & MSA Agreement Log] [${agreementTimestamp}] Role: FREELANCER | Email: ${email} | Terms Agreed: ${isTermsAgreed} | IP: ${clientIp}`);
+
+    if (!isTermsAgreed) {
+      console.warn(`[Terms & MSA Agreement Log] [${agreementTimestamp}] Registration rejected: Terms not accepted (termsAgreed=false) for email: ${email}`);
+      return res.status(400).json({
+        success: false,
+        message: 'You must agree to the Terms of Service & Master Service Agreement to register.'
+      });
+    }
+
+    if (!firstName || !lastName || !email || !mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide all required fields'
+      });
+    }
+
+    if (!validateEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format'
+      });
+    }
+
+    if (!validateMobile(mobile)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid mobile number. Please provide 10-digit number'
+      });
+    }
+
+    const passwordToUse = password && password.length >= 8 ? password : crypto.randomBytes(16).toString('hex');
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+
+    const existingEmail = await User.findOne({ email: normalizedEmail });
+    if (existingEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "An account with this email address already exists. Please sign in or use a different email."
+      });
+    }
+
+    const existingMobile = await User.findOne({ mobile: normalizedMobile });
+    if (existingMobile) {
+      return res.status(400).json({
+        success: false,
+        message: "An account with this mobile number already exists. Please sign in or use a different mobile number."
+      });
+    }
+
+    const emailToken = crypto.randomBytes(32).toString('hex');
+    const effectiveFirmName = firmName && firmName.trim() ? firmName.trim() : `${firstName.trim()} ${lastName.trim()}`;
+
+    const user = await User.create({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: normalizedEmail,
+      mobile: normalizedMobile,
+      password: passwordToUse,
+      role: 'freelancer',
+      status: 'REGISTERED',
+      emailVerified: false,
+      emailVerificationToken: emailToken,
+      emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
+      mobileVerified: false,
+      isPasswordChanged: false
+    });
+
+    const partner = await StaffingPartner.create({
+      user: user._id,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      firmName: effectiveFirmName,
+      partnerType: 'freelancer',
+      designation: designation || 'Freelancer',
+      linkedinProfile: linkedinProfile || '',
+      city: city || '',
+      state: state || '',
+      profileCompletion: {
+        basicInfo: false,
+        firmDetails: false,
+        Syncro1Competency: false,
+        geographicReach: false,
+        compliance: false,
+        commercialDetails: false,
+        documents: false
+      }
+    });
+
+    // ── CRM: Freelancer Registered ─────────────────────────────
+    notifyCRM({
+      name: `${firstName} ${lastName}`,
+      email: normalizedEmail,
+      phone: normalizedMobile,
+      whatsapp: normalizedMobile,
+      company: effectiveFirmName,
+      designation: designation || 'Freelancer',
+      city: city || '',
+      state: state || '',
+      type: 'FREELANCER',
+      channel: 'PLATFORM_REGISTRATION',
+      crmStatus: 'NEW',
+      crmSubStatus: 'JUST_REGISTERED',
+      profileCompletion: {
+        basicInfo: false,
+        firmDetails: false,
+        Syncro1Competency: false,
+        geographicReach: false,
+        compliance: false,
+        commercialDetails: false,
+        documents: false
+      },
+      profilePercent: 0,
+      journeyEvent: {
+        type: 'PLATFORM_REGISTERED',
+        channel: 'PLATFORM_REGISTRATION',
+        description: `Freelancer registered: ${effectiveFirmName}`,
+        data: {
+          partnerId: partner._id.toString(),
+          userId: user._id.toString(),
+          firmName: effectiveFirmName,
+          plan: 'FREE'
+        }
+      },
+      platformRef: {
+        type: 'Freelancer',
+        entityId: partner._id.toString(),
+        userId: user._id.toString(),
+        registeredAt: new Date()
+      }
+    });
+    // ─────────────────────────────────────────────────────────
+
+    res.status(201).json({
+      success: true,
+      message: 'Thank you for reaching out to us! We’re glad to connect with you. Our team will get in touch within 24–48 hours to understand your needs and guide you through the next steps.',
+      data: {
+        userId: user._id,
+        role: user.role,
+        email: user.email,
+        mobile: user.mobile,
+        firmName: effectiveFirmName,
+        name: `${firstName} ${lastName}`
+      }
+    });
+  } catch (error) {
+    console.error('Freelancer registration error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Registration failed',
+      error: error.message
+    });
+  }
+};
 
 // @desc Register Company - Step 1
 // @route POST /api/auth/register/company/init
@@ -947,8 +1127,8 @@ exports.login = async (req, res) => {
     const isSubAdmin = !!(user.createdBy || user.isPartnerSubAdmin || user.isCompanySubAdmin);
 
     // Self-healing: if in pre-onboarding / Step 1 and email was never legitimately verified via token, keep emailVerified false
-    // Self-heal: If primary user is talent_partner or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
-    if (!isSubAdmin && ['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE') {
+    // Self-heal: If primary user is talent_partner, freelancer or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
+    if (!isSubAdmin && ['talent_partner', 'freelancer', 'company'].includes(user.role) && user.status === 'ACTIVE') {
       const isApproved = profile && ['APPROVED', 'VERIFIED'].includes(profile.verificationStatus);
       if (!isApproved) {
         user.status = 'ONBOARDING_UNDERPROGRESS';
@@ -1375,7 +1555,7 @@ exports.getMe = async (req, res) => {
     }
 
     let profile = null;
-    if (user.role === 'talent_partner' || user.role === 'staffing' || user.role === 'staffing_partner') {
+    if (user.role === 'talent_partner' || user.role === 'staffing' || user.role === 'staffing_partner' || user.role === 'freelancer') {
       profile = await StaffingPartner.findOne({ user: user.createdBy || user._id });
     } else if (user.role === 'company') {
       profile = await Company.findOne({ user: user.createdBy || user._id });
@@ -1384,8 +1564,8 @@ exports.getMe = async (req, res) => {
     const { profileMeta, nextStep } = await getPostLoginNextStep(user);
 
     // Self-healing: if in pre-onboarding / Step 1 and email was never legitimately verified via token, ensure emailVerified is false
-    // Self-heal: If user is talent_partner or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
-    if (['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE' && !user.createdBy) {
+    // Self-heal: If user is talent_partner, freelancer or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
+    if (['talent_partner', 'company', 'freelancer'].includes(user.role) && user.status === 'ACTIVE' && !user.createdBy) {
       const isApproved = profile && ['APPROVED', 'VERIFIED'].includes(profile.verificationStatus);
       if (!isApproved) {
         user.status = 'ONBOARDING_UNDERPROGRESS';
@@ -1588,7 +1768,10 @@ exports.registerLead = async (req, res, next) => {
     if (workEmail && !email) req.body.email = workEmail;
     if (phoneNumber && !mobile) req.body.mobile = phoneNumber;
 
-    if (type === 'talent-partner' || type === 'talent_partner' || type === 'freelancer') {
+    if (type === 'freelancer') {
+      return exports.initFreelancerRegistration(req, res, next);
+    }
+    if (type === 'talent-partner' || type === 'talent_partner') {
       return exports.initTalentPartnerRegistration(req, res, next);
     }
     return exports.initCompanyRegistration(req, res, next);

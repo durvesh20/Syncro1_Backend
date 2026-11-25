@@ -133,7 +133,7 @@ class CandidateLifecycleService {
       // Company changed status → notify partner (non-blocking)
       this._notifyPartner(candidate, previousStatus, newStatus, notes)
         .catch(err => console.error('[NOTIFY] Partner notification failed:', err.message));
-    } else if (userRole === 'talent_partner') {
+    } else if (userRole === 'talent_partner' || userRole === 'freelancer') {
       // Partner withdrew → notify company (non-blocking)
       this._notifyCompany(candidate, previousStatus, newStatus, notes)
         .catch(err => console.error('[NOTIFY] Company notification failed:', err.message));

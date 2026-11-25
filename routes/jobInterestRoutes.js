@@ -32,7 +32,7 @@ const { PERMISSIONS, TALENT_PARTNER_PERMISSIONS } = require('../utils/permission
 router.post(
     '/:jobId/interest',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     checkTalentPartnerPermission(TALENT_PARTNER_PERMISSIONS.MANAGE_INTERESTED_JOBS),
     showInterest
 );
@@ -40,7 +40,7 @@ router.post(
 router.delete(
     '/:jobId/interest',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     checkTalentPartnerPermission(TALENT_PARTNER_PERMISSIONS.MANAGE_INTERESTED_JOBS),
     withdrawInterest
 );
@@ -48,7 +48,7 @@ router.delete(
 router.get(
     '/my-jobs',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     checkTalentPartnerPermission([TALENT_PARTNER_PERMISSIONS.MANAGE_INTERESTED_JOBS, TALENT_PARTNER_PERMISSIONS.VIEW_JOBS]),
     getMyInterestedJobs
 );
@@ -56,7 +56,7 @@ router.get(
 router.get(
     '/:jobId/status',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     checkTalentPartnerPermission([TALENT_PARTNER_PERMISSIONS.MANAGE_INTERESTED_JOBS, TALENT_PARTNER_PERMISSIONS.VIEW_JOBS]),
     getInterestStatus
 );
@@ -64,7 +64,7 @@ router.get(
 router.post(
     '/:jobId/request-extension',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     checkTalentPartnerPermission(TALENT_PARTNER_PERMISSIONS.REQUEST_EXTENSIONS),
     requestLimitExtension
 );
@@ -72,7 +72,7 @@ router.post(
 router.get(
     '/extension-requests',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     checkTalentPartnerPermission(TALENT_PARTNER_PERMISSIONS.REQUEST_EXTENSIONS),
     getMyExtensionRequests
 );
@@ -80,7 +80,7 @@ router.get(
 router.get(
     '/my-performance',
     protect,
-    authorize('talent_partner'),
+    authorize('talent_partner', 'freelancer'),
     getMyPerformance
 );
 

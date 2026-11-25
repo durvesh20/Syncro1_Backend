@@ -14,6 +14,12 @@ const staffingPartnerSchema = new mongoose.Schema({
     default: false,
     index: true
   },
+  partnerType: {
+    type: String,
+    enum: ['talent_partner', 'freelancer'],
+    default: 'talent_partner',
+    index: true
+  },
 
   // ✅ Added uniqueId field
   uniqueId: {
@@ -89,6 +95,7 @@ const staffingPartnerSchema = new mongoose.Schema({
       sameAsRegistered: { type: Boolean, default: false }
     },
     panNumber: String,
+    aadharNumber: String,
     gstNumber: String,
     cinNumber: String,
     llpinNumber: String,
@@ -211,11 +218,44 @@ const staffingPartnerSchema = new mongoose.Schema({
   // ==================== 7. DOCUMENTS ====================
   documents: {
     panCard: String,
+    aadharCard: String,
     gstCertificate: String,
     incorporationCertificate: String,
     cancelledCheque: String,
     authorizedSignatoryProof: String,
     addressProof: String
+  },
+
+  // ==================== 7B. AADHAAR IDENTITY VERIFICATION ====================
+  // Populated by the UIDAI Pehchaan flow (services/pehchaanService.js).
+  // Freelancers complete this after the Master Agreement step.
+  // NOTE: never store the full 12-digit Aadhaar number here - maskedAadhaar only.
+  aadhaarVerification: {
+    verified: { type: Boolean, default: false },
+    verifiedAt: Date,
+    maskedAadhaar: String,          // "XXXX XXXX 1234"
+    fullName: String,               // name exactly as per Aadhaar
+    dob: String,                    // yyyy-mm-dd
+    gender: String,                 // Male | Female | Other
+    photoUrl: String,
+    address: {
+      line1: String,
+      line2: String,
+      city: String,
+      district: String,
+      state: String,
+      pincode: String,
+      full: String
+    },
+    txnId: String,                  // last successful transaction id
+    aadhaarDocId: {                 // -> AadhaarVerification collection
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AadhaarVerification'
+    },
+    provider: { type: String, default: 'uidai-pehchaan' },
+    // Set when the verified name does not match the registered profile name,
+    // so admin review can flag it rather than silently accepting.
+    nameMatch: { type: Boolean, default: null }
   },
 
   // ==================== 8. TEAM & SUB-RECRUITER ACCESS ====================
@@ -346,6 +386,8 @@ staffingPartnerSchema.pre('save', function (next) {
 
 const StaffingPartner = mongoose.models.StaffingPartner || mongoose.model('StaffingPartner', staffingPartnerSchema);
 const TalentPartner = mongoose.models.TalentPartner || mongoose.model('TalentPartner', staffingPartnerSchema, 'staffingpartners');
+const Freelancer = mongoose.models.Freelancer || mongoose.model('Freelancer', staffingPartnerSchema, 'staffingpartners');
 
 module.exports = StaffingPartner;
 module.exports.TalentPartner = TalentPartner;
+module.exports.Freelancer = Freelancer;

@@ -22,3 +22,10 @@ uploads/
 # OS files
 .DS_Store
 Thumbs.db
+
+# UIDAI Pehchaan RSA keys - NEVER commit these
+# (keys/* rather than keys/ so the README stays tracked)
+keys/*
+!keys/README.md
+*.pem
+*.key

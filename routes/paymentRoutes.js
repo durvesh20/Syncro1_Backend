@@ -16,7 +16,7 @@ router.get('/plans', getPlans);
 
 // Protected routes
 router.use(protect);
-router.use(authorize('talent_partner'));
+router.use(authorize('talent_partner', 'freelancer'));
 
 router.post('/create-order', createOrder);
 router.post('/verify', verifyPayment);

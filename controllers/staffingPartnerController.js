@@ -13,6 +13,11 @@ const JobInterest = require('../models/JobInterest');
 const InterviewSlot = require('../models/InterviewSlot');
 const candidateQueueService = require('../services/candidateQueueService');
 const whatsappService = require('../services/whatsappService');
+
+// UIDAI Pehchaan Aadhaar verification switch. Off unless explicitly enabled, so
+// a missing env var cannot block freelancer profile submission.
+const AADHAAR_VERIFICATION_ENABLED =
+  String(process.env.AADHAAR_VERIFICATION_ENABLED).toLowerCase() === 'true';
 const notifyCRM = require('../utils/notifyCRM');
 const auditService = require('../services/auditService');
 const { transition, ACTIONS, PIPELINE_STATES } = require('../services/pipelineStateMachine');
@@ -151,6 +156,9 @@ exports.updateBasicInfo = async (req, res) => {
     if (lastName) partner.lastName = lastName;
     if (firmName) partner.firmName = firmName;
     if (designation) partner.designation = designation;
+    else if (partner.partnerType === 'freelancer' && !partner.designation) {
+      partner.designation = 'Freelancer';
+    }
     if (linkedinProfile !== undefined) partner.linkedinProfile = linkedinProfile;
     if (city) partner.city = city;
     if (state) partner.state = state;
@@ -159,7 +167,7 @@ exports.updateBasicInfo = async (req, res) => {
       partner.firstName &&
       partner.lastName &&
       partner.firmName &&
-      partner.designation &&
+      (partner.partnerType === 'freelancer' || partner.designation) &&
       partner.city &&
       partner.state &&
       user.emailVerified &&
@@ -229,6 +237,7 @@ exports.updateFirmDetails = async (req, res) => {
       registeredOfficeAddress,
       operatingAddress,
       panNumber,
+      aadharNumber,
       gstNumber,
       cinNumber,
       llpinNumber,
@@ -253,6 +262,7 @@ exports.updateFirmDetails = async (req, res) => {
       registeredOfficeAddress,
       operatingAddress: finalOperatingAddress,
       panNumber,
+      aadharNumber,
       gstNumber,
       cinNumber,
       llpinNumber,
@@ -448,7 +458,7 @@ exports.updateCommercialDetails = async (req, res) => {
 
     partner.commercialDetails = {
       ...partner.commercialDetails,
-      payoutEntityName,
+      payoutEntityName: payoutEntityName || bankAccountHolderName || partner.firmName || '',
       gstRegistration,
       tdsApplicable,
       bankAccountHolderName,
@@ -859,14 +869,23 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    const requiredDocs = [
-      'panCard',
-      'gstCertificate',
-      'incorporationCertificate',
-      'authorizedSignatoryProof',
-      'cancelledCheque',
-      'addressProof'
-    ];
+    const isFreelancer = partner.partnerType === 'freelancer' || user.role === 'freelancer';
+    const requiredDocs = isFreelancer
+      ? [
+          'panCard',
+          'aadharCard',
+          'authorizedSignatoryProof',
+          'cancelledCheque',
+          'addressProof'
+        ]
+      : [
+          'panCard',
+          'gstCertificate',
+          'incorporationCertificate',
+          'authorizedSignatoryProof',
+          'cancelledCheque',
+          'addressProof'
+        ];
     const missingDocs = requiredDocs.filter(doc => !partner.documents?.[doc]);
 
     if (missingDocs.length > 0) {
@@ -878,10 +897,28 @@ exports.submitProfile = async (req, res) => {
       });
     }
 
-    if (!partner.agreement?.agreed) {
+    // Aadhaar identity verification (UIDAI Pehchaan) is mandatory for
+    // freelancers - step 9 of onboarding, after the Master Agreement.
+    // The wizard already blocks this, but enforce it server-side too so the
+    // submit endpoint cannot be called directly to bypass KYC.
+    // Sub-admins are exempt: they inherit the parent account's verification.
+    // Gated off while UIDAI registers our Intent Request signing key: until then
+    // no freelancer can complete the step, so enforcing it would block every
+    // submission. Re-enable with AADHAAR_VERIFICATION_ENABLED=true (and the
+    // matching frontend flag in src/config/featureFlags.js).
+    if (AADHAAR_VERIFICATION_ENABLED && isFreelancer && !user.createdBy && !partner.aadhaarVerification?.verified) {
       return res.status(400).json({
         success: false,
-        message: 'Please read and accept the Master Talent Partner Agreement before submitting'
+        code: 'AADHAAR_NOT_VERIFIED',
+        message: 'Please complete Aadhaar verification before submitting your profile.'
+      });
+    }
+
+    if (!partner.agreement?.agreed) {
+      const isFreelancer = partner.partnerType === 'freelancer' || user.role === 'freelancer';
+      return res.status(400).json({
+        success: false,
+        message: `Please read and accept the ${isFreelancer ? 'Master Freelancer Agreement' : 'Master Talent Partner Agreement'} before submitting`
       });
     }
 
@@ -920,6 +957,8 @@ exports.submitProfile = async (req, res) => {
     // Send agreement copy email (fire and forget)
     const sendAgreementEmail = async () => {
       try {
+        const isFreelancer = partner.partnerType === 'freelancer' || user.role === 'freelancer';
+        const agreementName = isFreelancer ? 'Master Freelancer Agreement' : 'Master Talent Partner Agreement';
         const emailService = require('../services/emailService');
         await emailService.sendEmail({
           to: user.email,
@@ -929,11 +968,11 @@ exports.submitProfile = async (req, res) => {
               <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                           color: white; padding: 30px; border-radius: 10px 10px 0 0;">
                 <h1 style="margin: 0; font-size: 22px;">Syncro1</h1>
-                <p style="margin: 5px 0 0 0; opacity: 0.9;">Master Talent Partner Agreement</p>
+                <p style="margin: 5px 0 0 0; opacity: 0.9;">${agreementName}</p>
               </div>
               <div style="padding: 30px; background: #f9fafb; border: 1px solid #e5e7eb;">
                 <p>Dear ${partner.firstName} ${partner.lastName},</p>
-                <p>Thank you for accepting the Master Talent Partner Agreement
+                <p>Thank you for accepting the ${agreementName}
                    and submitting your profile for verification.</p>
                 <div style="text-align: center; margin: 30px 0;">
                   <a href="${partner.agreement.pdfUrl}"
@@ -3851,30 +3890,38 @@ exports.getDashboard = async (req, res) => {
     }
 
     const PartnerCandidate = require('../models/PartnerCandidate');
+    const JobInterest = require('../models/JobInterest');
 
-    const isSubAdmin = !!req.user.createdBy;
+    const isFreelancer = partner.partnerType === 'freelancer' || req.user.role === 'freelancer';
+    const isSubAdmin = !isFreelancer && !!req.user.createdBy;
     const permissions = isSubAdmin ? (req.user.permissions || []) : [];
-    const canViewMaster = !isSubAdmin || permissions.includes('VIEW_DASHBOARD_MASTER');
-    const canViewSelf = !isSubAdmin || permissions.includes('VIEW_DASHBOARD_SELF');
+    const canViewMaster = isFreelancer || !isSubAdmin || permissions.includes('VIEW_DASHBOARD_MASTER');
+    const canViewSelf = isFreelancer || !isSubAdmin || permissions.includes('VIEW_DASHBOARD_SELF');
 
-    // Scope selection: 'self' or 'master'
+    // Scope selection: 'self' or 'master' (freelancers are always master scope)
     let requestedScope = req.query.scope;
-    if (requestedScope !== 'self' && requestedScope !== 'master') {
+    if (isFreelancer) {
+      requestedScope = 'master';
+    } else if (requestedScope !== 'self' && requestedScope !== 'master') {
       requestedScope = canViewMaster ? 'master' : 'self';
     }
-    const effectiveScope = (!canViewMaster) ? 'self' : requestedScope;
+    const effectiveScope = isFreelancer ? 'master' : ((!canViewMaster) ? 'self' : requestedScope);
 
     let partnerBaseQuery;
-    if (effectiveScope === 'self') {
+    const partnerIds = [partner._id, partner.user, req.user._id].filter(Boolean);
+    if (effectiveScope === 'self' && !isFreelancer) {
       partnerBaseQuery = {
-        submittedBy: req.user._id
+        $or: [
+          { submittedByUser: req.user._id },
+          { submittedBy: req.user._id }
+        ]
       };
     } else {
-      const partnerIds = [partner._id, partner.user, req.user._id].filter(Boolean);
       partnerBaseQuery = {
         $or: [
           { submittedBy: { $in: partnerIds } },
-          { partner: { $in: partnerIds } }
+          { partner: { $in: partnerIds } },
+          { submittedByUser: { $in: partnerIds } }
         ]
       };
     }
@@ -3883,12 +3930,16 @@ exports.getDashboard = async (req, res) => {
     const workedJobs = await Candidate.distinct('job', partnerBaseQuery);
     const totalWorkedJobs = workedJobs.length;
 
-    // 2. Shortlisted Jobs Count (unique jobs with shortlisted/interview/joined candidate)
-    const shortlistedJobs = await Candidate.distinct('job', {
+    // 2. Shortlisted Jobs Count (active jobs shortlisted by partner in JobInterest, matching /interested-jobs page)
+    const interestedJobsCount = await JobInterest.countDocuments({
+      partner: partner._id,
+      status: 'ACTIVE'
+    });
+    const shortlistedCandidateJobs = await Candidate.distinct('job', {
       ...partnerBaseQuery,
       status: { $in: ['SHORTLISTED', 'INTERVIEW_SCHEDULED', 'INTERVIEW_CONFIRMED', 'INTERVIEWED', 'SLOT_ASSIGNED', 'SLOT_DETAILS_SHARED', 'OFFERED', 'OFFER_ACCEPTED', 'JOINED'] }
     });
-    const totalShortlistedJobs = shortlistedJobs.length;
+    const totalShortlistedJobs = interestedJobsCount > 0 ? interestedJobsCount : shortlistedCandidateJobs.length;
 
     // 3. Total Candidates in Partner's Candidate Pool
     const totalPoolCandidates = await PartnerCandidate.countDocuments({ partner: partner._id });
@@ -3956,7 +4007,7 @@ exports.getDashboard = async (req, res) => {
     }
 
     const rawRecentSubmissions = await Candidate.find(partnerBaseQuery)
-      .populate('job', 'title')
+      .populate('job', 'title status')
       .populate('company', 'companyName')
       .sort({ createdAt: -1 })
       .limit(5)
@@ -4011,6 +4062,19 @@ exports.getDashboard = async (req, res) => {
 
     const isSelfScope = effectiveScope === 'self';
 
+    // Calculate actual earnings from completed/eligible payouts if available
+    let aggregatedEarnings = 0;
+    try {
+      const actualEarningsAgg = await Payout.aggregate([
+        { $match: { staffingPartner: partner._id, status: { $in: ['PAID', 'ELIGIBLE', 'APPROVED'] } } },
+        { $group: { _id: null, total: { $sum: '$amount.netPayable' } } }
+      ]);
+      aggregatedEarnings = actualEarningsAgg[0]?.total || 0;
+    } catch (e) {
+      console.warn('[DASHBOARD] Payout aggregation fallback:', e.message);
+    }
+    const finalEarnings = Math.max(aggregatedEarnings, partner.metrics?.totalEarnings || 0);
+
     const earningsSummary = isSelfScope ? {
       totalEarnings: 0,
       pendingPayouts: 0,
@@ -4018,11 +4082,11 @@ exports.getDashboard = async (req, res) => {
       paidOut: 0,
       totalPlacements: counts.joined || 0
     } : {
-      totalEarnings: partner.metrics.totalEarnings || 0,
-      pendingPayouts: partner.metrics.pendingPayouts || 0,
-      eligiblePayouts: partner.metrics.eligiblePayouts || 0,
-      paidOut: partner.metrics.paidOut || 0,
-      totalPlacements: counts.joined || partner.metrics.totalPlacements || 0
+      totalEarnings: finalEarnings,
+      pendingPayouts: partner.metrics?.pendingPayouts || 0,
+      eligiblePayouts: partner.metrics?.eligiblePayouts || 0,
+      paidOut: partner.metrics?.paidOut || 0,
+      totalPlacements: counts.joined || partner.metrics?.totalPlacements || 0
     };
 
     const upcomingDate = new Date();
@@ -4450,7 +4514,7 @@ exports.getWorkedJobs = async (req, res) => {
         const modeConditions = [];
         if (modes.includes('remote')) modeConditions.push({ 'jobDetails.location.isRemote': true });
         if (modes.includes('hybrid')) modeConditions.push({ 'jobDetails.location.isHybrid': true });
-        if (modes.includes('onsite')) modeConditions.push({ 'jobDetails.location.isOnSite': true });
+        if (modes.includes('onsite')) modeConditions.push({ 'jobDetails.location.isOnSite\\\\\\\\\  ': true });
         if (modeConditions.length > 0) {
           andConditions.push({ $or: modeConditions });
         }
@@ -4462,8 +4526,17 @@ exports.getWorkedJobs = async (req, res) => {
     }
 
     // Aggregate unique jobs this partner has submitted candidates to
+    const partnerIds = [partner._id, partner.user, req.user._id].filter(Boolean);
     const pipeline = [
-      { $match: { submittedBy: partner._id } },
+      {
+        $match: {
+          $or: [
+            { submittedBy: { $in: partnerIds } },
+            { partner: { $in: partnerIds } },
+            { submittedByUser: { $in: partnerIds } }
+          ]
+        }
+      },
       {
         $group: {
           _id: "$job",

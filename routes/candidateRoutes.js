@@ -731,7 +731,7 @@ function isAllowedUrl(rawUrl) {
 router.get(
   '/resume-proxy',
   protect,
-  authorize('admin', 'sub_admin', 'talent_partner', 'company'),
+  authorize('admin', 'sub_admin', 'talent_partner', 'freelancer', 'company'),
   async (req, res) => {
     try {
       let { url, filename = 'Candidate_Resume.pdf', mode = 'inline' } = req.query;

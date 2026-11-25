@@ -441,7 +441,7 @@ const reportFieldRegistry = {
   JOB_LIST_WITH_SUBMITTED_CANDIDATES: {
     label: 'Job List with Submitted Candidates',
     description: 'Jobs you have access to, and the candidates you personally submitted for each.',
-    allowedRoles: ['talent_partner'],
+    allowedRoles: ['talent_partner', 'freelancer'],
     base: 'candidates',
     scope: { collection: 'staffingpartners', userField: 'user', field: 'submittedBy' },
     lookups: CANDIDATE_LOOKUPS,
@@ -469,7 +469,7 @@ function getFieldMap(reportType, role) {
   const map = {};
 
   let sections = def.sections || [];
-  if (role === 'talent_partner' || role === 'company') {
+  if (role === 'talent_partner' || role === 'freelancer' || role === 'company') {
     sections = sections.filter((s) => s.sectionKey !== 'candidateScoring');
     sections = sections.map((s) => {
       if (s.sectionKey === 'candidateDetails') {
@@ -524,7 +524,7 @@ function getConfigForRole(reportType, role) {
 
   // Filter out AI Scoring section, linkedin, and submitted by partner fields for talent_partner and company roles
   let sections = def.sections || [];
-  if (role === 'talent_partner' || role === 'company') {
+  if (role === 'talent_partner' || role === 'freelancer' || role === 'company') {
     sections = sections.filter((s) => s.sectionKey !== 'candidateScoring');
     sections = sections.map((s) => {
       if (s.sectionKey === 'candidateDetails') {

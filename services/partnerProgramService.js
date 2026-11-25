@@ -1103,6 +1103,7 @@ async function getLeaderboard({ limit = null, tournamentId = null } = {}) {
       partnerId: item._id,
       partnerName,
       firmName: item.partnerDetails?.firmName || 'Partner Firm',
+      partnerType: item.partnerDetails?.partnerType || 'talent_partner',
       city: item.partnerDetails?.city || '',
       state: item.partnerDetails?.state || '',
       totalPoints: totalPts,
@@ -1161,6 +1162,7 @@ async function getLeaderboard({ limit = null, tournamentId = null } = {}) {
       partnerId: item.partnerId,
       partnerName: item.partnerName,
       firmName: item.firmName,
+      partnerType: item.partnerType,
       city: item.city,
       state: item.state,
       totalPoints: item.totalPoints,
@@ -1195,6 +1197,7 @@ async function getLeaderboard({ limit = null, tournamentId = null } = {}) {
         partnerId: info.partnerId,
         partnerName: pDoc ? `${pDoc.firstName || ''} ${pDoc.lastName || ''}`.trim() || 'Partner' : 'Partner',
         firmName: pDoc?.firmName || 'Partner Firm',
+        partnerType: pDoc?.partnerType || 'talent_partner',
         city: pDoc?.city || '',
         state: pDoc?.state || '',
         totalPoints: 0,
@@ -1299,6 +1302,7 @@ async function getPartnerProgramStats(partnerId, { tournamentId = null, sync = f
   return {
     partnerId,
     firmName: partnerDoc?.firmName || 'Your Firm',
+    partnerType: partnerDoc?.partnerType || 'talent_partner',
     partnerName: partnerDoc ? `${partnerDoc.firstName || ''} ${partnerDoc.lastName || ''}`.trim() : 'You',
     hasJoined,
     rank,
@@ -1376,6 +1380,7 @@ async function getAdminPartnerRankings({ search = '', page = 1, limit = 50, tour
       topPartner: topPartner ? {
         partnerName: topPartner.partnerName,
         firmName: topPartner.firmName,
+        partnerType: topPartner.partnerType,
         totalPoints: topPartner.totalPoints
       } : null
     },
