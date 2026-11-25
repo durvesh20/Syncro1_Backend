@@ -6,6 +6,8 @@ const agreementPdfService = require('../services/agreementPdfService');
 
 const buildPartnerData = (partner, user, ip, timestamp) => {
     return {
+        partnerType: partner.partnerType || user?.role,
+        role: user?.role || partner.partnerType,
         firmName: partner.firmName,
         registeredName: partner.firmDetails?.registeredName || partner.firmName,
         entityType: partner.firmDetails?.entityType,

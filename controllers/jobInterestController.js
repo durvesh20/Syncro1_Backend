@@ -112,7 +112,7 @@ exports.showInterest = async (req, res) => {
         console.log(`[SHORTLIST] ✅ ${partner.firmName} shortlisted: ${job.title}`);
         res.status(201).json({
             success: true,
-            message: `Job shortlisted successfully. You can submit up to ${submissionLimit} candidates (${job.vacancies} position${job.vacancies > 1 ? 's' : ''} × 5 slots).`,
+            message: `Job shortlisted successfully. You can submit up to ${submissionLimit} candidate${submissionLimit === 1 ? '' : 's'} for this role.`,
             data: {
                 interestId: interest._id,
                 jobId: job._id,

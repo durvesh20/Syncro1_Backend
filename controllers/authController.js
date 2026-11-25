@@ -128,7 +128,7 @@ const getPostLoginNextStep = async (user) => {
     nextStep = 'WAITING_APPROVAL';
   } else if (profile.verificationStatus === 'REJECTED') {
     nextStep = 'PROFILE_REJECTED';
-  } else if (profile.verificationStatus === 'APPROVED' || profile.verificationStatus === 'ACTIVE') {
+  } else if (['APPROVED', 'VERIFIED', 'ACTIVE', 'COMPLETED'].includes(profile.verificationStatus)) {
     nextStep = 'GO_TO_DASHBOARD';
   }
 
@@ -1555,7 +1555,7 @@ exports.getMe = async (req, res) => {
     }
 
     let profile = null;
-    if (user.role === 'talent_partner' || user.role === 'staffing' || user.role === 'staffing_partner') {
+    if (user.role === 'talent_partner' || user.role === 'staffing' || user.role === 'staffing_partner' || user.role === 'freelancer') {
       profile = await StaffingPartner.findOne({ user: user.createdBy || user._id });
     } else if (user.role === 'company') {
       profile = await Company.findOne({ user: user.createdBy || user._id });
@@ -1564,8 +1564,8 @@ exports.getMe = async (req, res) => {
     const { profileMeta, nextStep } = await getPostLoginNextStep(user);
 
     // Self-healing: if in pre-onboarding / Step 1 and email was never legitimately verified via token, ensure emailVerified is false
-    // Self-heal: If user is talent_partner or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
-    if (['talent_partner', 'company'].includes(user.role) && user.status === 'ACTIVE' && !user.createdBy) {
+    // Self-heal: If user is talent_partner, freelancer or company and status is 'ACTIVE', but profile is not approved, correct to 'ONBOARDING_UNDERPROGRESS'
+    if (['talent_partner', 'company', 'freelancer'].includes(user.role) && user.status === 'ACTIVE' && !user.createdBy) {
       const isApproved = profile && ['APPROVED', 'VERIFIED'].includes(profile.verificationStatus);
       if (!isApproved) {
         user.status = 'ONBOARDING_UNDERPROGRESS';

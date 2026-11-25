@@ -226,6 +226,38 @@ const staffingPartnerSchema = new mongoose.Schema({
     addressProof: String
   },
 
+  // ==================== 7B. AADHAAR IDENTITY VERIFICATION ====================
+  // Populated by the UIDAI Pehchaan flow (services/pehchaanService.js).
+  // Freelancers complete this after the Master Agreement step.
+  // NOTE: never store the full 12-digit Aadhaar number here - maskedAadhaar only.
+  aadhaarVerification: {
+    verified: { type: Boolean, default: false },
+    verifiedAt: Date,
+    maskedAadhaar: String,          // "XXXX XXXX 1234"
+    fullName: String,               // name exactly as per Aadhaar
+    dob: String,                    // yyyy-mm-dd
+    gender: String,                 // Male | Female | Other
+    photoUrl: String,
+    address: {
+      line1: String,
+      line2: String,
+      city: String,
+      district: String,
+      state: String,
+      pincode: String,
+      full: String
+    },
+    txnId: String,                  // last successful transaction id
+    aadhaarDocId: {                 // -> AadhaarVerification collection
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AadhaarVerification'
+    },
+    provider: { type: String, default: 'uidai-pehchaan' },
+    // Set when the verified name does not match the registered profile name,
+    // so admin review can flag it rather than silently accepting.
+    nameMatch: { type: Boolean, default: null }
+  },
+
   // ==================== 8. TEAM & SUB-RECRUITER ACCESS ====================
   teamAccess: {
     isTeamEnabled: { type: Boolean, default: false },
